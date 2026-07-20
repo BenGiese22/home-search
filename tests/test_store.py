@@ -14,6 +14,7 @@ SAMPLE = Listing(
     baths=1.0,
     sqft=900,
     lot_sqft=1000,
+    parking_spaces=1,
     year_built=2000,
     description="desc",
     amenities=["A", "B"],

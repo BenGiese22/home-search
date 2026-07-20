@@ -26,6 +26,7 @@
           "buildingYearOpened": 1979
         },
         "detailedInfo": {
+          "totalParkingSpaces": 2,
           "amenities": [
             "Attached Garage",
             "Cable Included",

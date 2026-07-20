@@ -21,6 +21,7 @@ def test_parse_listing_object_from_real_fixture():
     assert listing.baths == 3.5  # 3 full + 1 half
     assert listing.sqft == 2268
     assert listing.lot_sqft == 6726
+    assert listing.parking_spaces == 2
     assert listing.year_built == 1999
     assert "renovated" in listing.description.lower()
     assert "Renovated Kitchen" in listing.amenities
@@ -38,6 +39,7 @@ def test_parse_listing_object_missing_optional_fields_defaults_safely():
     }
     listing = parse_listing_object(obj, listing_url="https://example.com/1")
     assert listing.baths == 1.0
+    assert listing.parking_spaces == 0
     assert listing.year_built == 0
     assert listing.amenities == []
     assert listing.photo_urls == []

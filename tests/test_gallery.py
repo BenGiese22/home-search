@@ -14,6 +14,7 @@ LISTING = Listing(
     baths=2.5,
     sqft=1800,
     lot_sqft=6000,
+    parking_spaces=2,
     year_built=1995,
     description="A lovely home",
     amenities=["Renovated Kitchen", "Private Yard"],

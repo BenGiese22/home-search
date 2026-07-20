@@ -13,6 +13,7 @@ def test_listing_construction():
         baths=3.5,
         sqft=2268,
         lot_sqft=6726,
+        parking_spaces=2,
         year_built=1999,
         description="Beautifully renovated...",
         amenities=["Renovated Kitchen", "Private Yard"],
@@ -22,4 +23,5 @@ def test_listing_construction():
     assert listing.address == "2765 Canossa Drive"
     assert listing.beds == 4
     assert listing.baths == 3.5
+    assert listing.parking_spaces == 2
     assert listing.amenities == ["Renovated Kitchen", "Private Yard"]

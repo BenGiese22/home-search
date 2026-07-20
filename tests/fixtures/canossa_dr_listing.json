@@ -22,6 +22,7 @@
   },
   "description": "Beautifully renovated and move-in-ready Broomfield charmer. With four bedrooms, four bathrooms, and a rare, peaceful, large private backyard, this lovely home is priced to sell.",
   "detailedInfo": {
+    "totalParkingSpaces": 2,
     "amenities": [
       "Attached Garage",
       "Basement",

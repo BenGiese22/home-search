@@ -26,7 +26,7 @@ def render_gallery(listings: list[Listing], photos_root: Path, gallery_dir: Path
             f"""
         <section class="listing">
           <h2>{address}, {city}, {state} {zip_code}</h2>
-          <p>{price} &middot; {listing.beds} bd &middot; {listing.baths} ba &middot; {listing.sqft} sqft</p>
+          <p>{price} &middot; {listing.beds} bd &middot; {listing.baths} ba &middot; {listing.sqft} sqft &middot; {listing.lot_sqft} lot sqft &middot; {listing.parking_spaces} parking</p>
           <p>{description}</p>
           <p>Amenities: {amenities}</p>
           <p><a href="{listing_url}">View on Compass</a></p>

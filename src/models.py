@@ -13,6 +13,7 @@ class Listing:
     baths: float
     sqft: int
     lot_sqft: int
+    parking_spaces: int
     year_built: int
     description: str
     amenities: list[str]

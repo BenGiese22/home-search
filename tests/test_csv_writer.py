@@ -15,6 +15,7 @@ LISTING = Listing(
     baths=2.5,
     sqft=1800,
     lot_sqft=6000,
+    parking_spaces=2,
     year_built=1995,
     description="A lovely home",
     amenities=["Renovated Kitchen", "Private Yard"],
@@ -39,6 +40,7 @@ def test_write_csv_round_trips_fields(tmp_path: Path):
     assert row["price"] == "$500,000"
     assert row["beds"] == "3"
     assert row["baths"] == "2.5"
+    assert row["parking_spaces"] == "2"
     assert row["amenities"] == "Renovated Kitchen; Private Yard"
     assert row["listing_url"] == "https://example.com/listing/abc123"
     assert row["photo_dir"] == str(photos_root / "abc123")

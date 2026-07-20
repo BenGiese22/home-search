@@ -53,6 +53,7 @@ def test_parse_collection_response_from_real_fixture():
     assert listing.beds == 3
     assert listing.baths == 1.75  # 1 full + 0 half + 1 three-quarter*0.75
     assert listing.sqft == 1779
+    assert listing.parking_spaces == 2
     assert listing.year_built == 1979
     assert "Attached Garage" in listing.amenities
     assert listing.photo_urls == [

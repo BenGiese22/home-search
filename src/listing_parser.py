@@ -25,6 +25,7 @@ def parse_listing_object(obj: dict, listing_url: str) -> Listing:
         baths=baths,
         sqft=size.get("squareFeet", 0) or 0,
         lot_sqft=size.get("lotSizeInSquareFeet", 0) or 0,
+        parking_spaces=detailed.get("totalParkingSpaces", 0) or 0,
         year_built=building.get("buildingYearOpened", 0) or 0,
         description=obj.get("description", ""),
         amenities=list(detailed.get("amenities", [])),
