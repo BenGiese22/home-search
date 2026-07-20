@@ -1,3 +1,4 @@
+import html
 import os
 from pathlib import Path
 
@@ -12,14 +13,23 @@ def render_gallery(listings: list[Listing], photos_root: Path, gallery_dir: Path
         rel_srcs = [os.path.relpath(p, start=gallery_dir) for p in photo_files]
         photos_html = "".join(f'<img src="{src}" loading="lazy">' for src in rel_srcs)
 
+        address = html.escape(listing.address)
+        city = html.escape(listing.city)
+        state = html.escape(listing.state)
+        zip_code = html.escape(listing.zip_code)
+        price = html.escape(listing.price)
+        description = html.escape(listing.description)
+        amenities = html.escape(", ".join(listing.amenities))
+        listing_url = html.escape(listing.listing_url)
+
         sections.append(
             f"""
         <section class="listing">
-          <h2>{listing.address}, {listing.city}, {listing.state} {listing.zip_code}</h2>
-          <p>{listing.price} &middot; {listing.beds} bd &middot; {listing.baths} ba &middot; {listing.sqft} sqft</p>
-          <p>{listing.description}</p>
-          <p>Amenities: {", ".join(listing.amenities)}</p>
-          <p><a href="{listing.listing_url}">View on Compass</a></p>
+          <h2>{address}, {city}, {state} {zip_code}</h2>
+          <p>{price} &middot; {listing.beds} bd &middot; {listing.baths} ba &middot; {listing.sqft} sqft</p>
+          <p>{description}</p>
+          <p>Amenities: {amenities}</p>
+          <p><a href="{listing_url}">View on Compass</a></p>
           <div class="photos">{photos_html}</div>
         </section>"""
         )

@@ -1,4 +1,5 @@
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 
@@ -15,9 +16,10 @@ def is_scraped(store_dir: Path, listing_id: str) -> bool:
 
 def save_listing(store_dir: Path, listing: Listing) -> None:
     store_dir.mkdir(parents=True, exist_ok=True)
-    _listing_path(store_dir, listing.listing_id).write_text(
-        json.dumps(asdict(listing), indent=2)
-    )
+    final_path = _listing_path(store_dir, listing.listing_id)
+    tmp_path = final_path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(asdict(listing), indent=2))
+    os.replace(tmp_path, final_path)
 
 
 def load_all_listings(store_dir: Path) -> list[Listing]:
@@ -25,6 +27,10 @@ def load_all_listings(store_dir: Path) -> list[Listing]:
         return []
     listings = []
     for path in sorted(store_dir.glob("*.json")):
-        data = json.loads(path.read_text())
+        try:
+            data = json.loads(path.read_text())
+        except (json.JSONDecodeError, TypeError) as exc:
+            print(f"warning: skipping corrupt listing file {path}: {exc}")
+            continue
         listings.append(Listing(**data))
     return listings

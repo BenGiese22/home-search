@@ -31,12 +31,23 @@ def scrape_listing(page: Page, url: str) -> Listing:
 
 def scrape_collection(page: Page, collection_url: str) -> list[str]:
     """Scroll a Compass collection page until no new listing links load,
-    then return every unique listing detail-page URL found."""
+    then return every unique listing detail-page URL found.
+
+    KNOWN LIMITATION (confirmed via live testing): Compass's real collection
+    page is a client-rendered SPA, and this selector-based approach
+    (`a[href*="/homedetails/"]`) currently finds zero links against it. This
+    path is unverified/likely-non-functional as-is; fixing the underlying
+    SPA-scraping problem is out of scope here. Prefer `LISTING_URLS` for a
+    working path. If this function returns an empty list, a warning is
+    printed to make that failure visible instead of silent.
+    """
     page.goto(collection_url)
     page.wait_for_load_state("networkidle")
 
     previous_count = 0
-    while True:
+    unique_links: list[str] = []
+    max_scrolls = 50
+    for _ in range(max_scrolls):
         links = page.eval_on_selector_all(
             'a[href*="/homedetails/"]',
             "elements => elements.map(e => e.href)",
@@ -47,5 +58,19 @@ def scrape_collection(page: Page, collection_url: str) -> list[str]:
         previous_count = len(unique_links)
         page.mouse.wheel(0, 3000)
         page.wait_for_timeout(1000)
+    else:
+        print(
+            "warning: scrape_collection stopped after hitting the "
+            f"max-scroll safety cap ({max_scrolls}) without the link count "
+            "stabilizing"
+        )
+
+    if not unique_links:
+        print(
+            "warning: collection-mode scraping found no listing links. "
+            "This is a known unverified/likely-non-functional path "
+            "(Compass's collection page is a client-rendered SPA) — "
+            "use LISTING_URLS instead."
+        )
 
     return unique_links

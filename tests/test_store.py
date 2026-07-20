@@ -39,3 +39,12 @@ def test_load_all_listings_round_trips(tmp_path: Path):
 
 def test_load_all_listings_empty_dir_returns_empty_list(tmp_path: Path):
     assert load_all_listings(tmp_path / "does-not-exist") == []
+
+
+def test_load_all_listings_skips_corrupt_file(tmp_path: Path):
+    save_listing(tmp_path, SAMPLE)
+    (tmp_path / "corrupt.json").write_text("{not valid json")
+
+    loaded = load_all_listings(tmp_path)
+
+    assert loaded == [SAMPLE]

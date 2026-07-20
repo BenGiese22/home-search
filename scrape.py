@@ -60,7 +60,7 @@ def main() -> None:
                 save_listing(STORE_DIR, listing)
                 print(f"scraped: {listing.address}")
             except Exception as exc:
-                print(f"skip listing (failed to scrape {url}): {exc}")
+                print(f"skip listing (failed to process {url}): {exc}")
                 continue
 
         browser.close()

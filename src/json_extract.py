@@ -1,3 +1,9 @@
+import json
+import re
+
+from bs4 import BeautifulSoup
+
+
 def extract_balanced_json(text: str, open_index: int) -> str:
     """Given text and the index of an opening '{', return the substring
     from open_index through the matching closing '}', treating braces
@@ -26,15 +32,10 @@ def extract_balanced_json(text: str, open_index: int) -> str:
     raise ValueError("No matching closing brace found")
 
 
-import json
-import re
-
-from bs4 import BeautifulSoup
-
 _ASSIGNMENT_RE = re.compile(r"=\s*(\{)")
 
 
-def find_json_blobs(html: str) -> list[dict]:
+def find_json_blobs(html: str) -> list:
     """Find every <script> tag in html and return every top-level JSON
     object literal it contains, whether that's a JSON-typed script body
     or a `someVar = {...};` assignment."""
