@@ -1234,9 +1234,11 @@ git commit -m "feat(gallery): write local HTML photo gallery"
 - Create: `src/auth.py`
 
 **Interfaces:**
-- Produces: `ensure_logged_in(context: BrowserContext, page: Page, url: str, email: str, password: str, storage_state_path: Path) -> None`, raising `RuntimeError` with a clear message if the login form is still present after submit (spec: "Login failure → fail fast with a clear message"). Used by Task 12's entry point. Not unit tested — requires a live browser and real Compass credentials (spec: "No automated tests against the live Compass site"); verified in Task 12's manual smoke test.
+- Produces: `ensure_logged_in(context: BrowserContext, page: Page, url: str, email: str, password: str, storage_state_path: Path) -> None`, raising `RuntimeError` with a clear message if the password field is still present after submit (spec: "Login failure → fail fast with a clear message"). Used by Task 12's entry point. Not unit tested — requires a live browser and real Compass credentials (spec: "No automated tests against the live Compass site"); the flow below was verified live against the real Compass login form during plan execution (see Task 12's manual smoke test for the remaining end-to-end check).
 
 - [ ] **Step 1: Implement ensure_logged_in**
+
+Compass's real login form (verified live, not a guess) is a **two-step email-then-password flow**: `url` shows only an email field and a "Continue" button; submitting it swaps in a password field (with a short client-side delay, so it must be waited for explicitly) and a "Sign In" button that has no `type="submit"` attribute — it must be matched by its text.
 
 `src/auth.py`:
 ```python
@@ -1254,27 +1256,26 @@ def ensure_logged_in(
     storage_state_path: Path,
 ) -> None:
     """Navigate to url. If a login form appears (no valid session in the
-    context's storage state), fill it in and submit. Always persist the
-    resulting session to storage_state_path so future runs can skip login.
-
-    NOTE: the exact selectors below are a best-effort guess at Compass's
-    login form and MUST be verified against the real form during the
-    manual smoke test in Task 12 — adjust them there if the site's actual
-    markup differs.
+    context's storage state), complete Compass's two-step email-then-password
+    login and submit. Always persist the resulting session to
+    storage_state_path so future runs can skip login.
     """
     page.goto(url)
-    email_input = page.locator('input[type="email"], input[name="email"]')
+    email_input = page.locator('input[type="email"]')
     if email_input.count() > 0:
         email_input.first.fill(email)
-        page.locator('input[type="password"], input[name="password"]').first.fill(password)
         page.locator('button[type="submit"]').first.click()
+        page.wait_for_selector('input[type="password"]', timeout=10000)
+
+        page.locator('input[type="password"]').first.fill(password)
+        page.locator('button:has-text("Sign In")').first.click()
         page.wait_for_load_state("networkidle")
 
-        if page.locator('input[type="email"], input[name="email"]').count() > 0:
+        if page.locator('input[type="password"]').count() > 0:
             raise RuntimeError(
-                "Compass login failed: the login form is still showing after "
-                "submit. Check COMPASS_EMAIL/COMPASS_PASSWORD in .env, and "
-                "verify the selectors in ensure_logged_in still match "
+                "Compass login failed: the password field is still showing "
+                "after Sign In. Check COMPASS_EMAIL/COMPASS_PASSWORD in .env, "
+                "and verify the selectors in ensure_logged_in still match "
                 "Compass's real login form."
             )
 
@@ -1437,7 +1438,7 @@ STORE_DIR = DATA_DIR / "listings"
 AUTH_STATE_PATH = DATA_DIR / ".auth" / "compass_state.json"
 CSV_PATH = DATA_DIR / "listings.csv"
 GALLERY_PATH = DATA_DIR / "gallery.html"
-LOGIN_URL = "https://www.compass.com"
+LOGIN_URL = "https://www.compass.com/login/"
 
 
 def fetch_bytes(url: str) -> bytes:
@@ -1450,7 +1451,7 @@ def main() -> None:
     config = load_config(dotenv_values(".env"))
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=True)
         storage_state = str(AUTH_STATE_PATH) if AUTH_STATE_PATH.exists() else None
         context = browser.new_context(storage_state=storage_state)
         page = context.new_page()
@@ -1506,36 +1507,37 @@ git commit -m "feat(scrape): wire up entry point"
 Run: `playwright install chromium`
 Expected: Chromium downloads successfully.
 
-- [ ] **Step 5: Fill in real credentials**
+- [ ] **Step 5: Verify credentials are in place**
+
+`.env` was already created and populated with real `COMPASS_EMAIL`/`COMPASS_PASSWORD`/`LISTING_URLS` during plan execution (before this task was dispatched), while verifying the login flow live. **Do not run `cp .env.example .env`** — that would overwrite it and destroy the real credentials. Just confirm the file exists and has all three values set:
 
 ```bash
-cp .env.example .env
+test -f .env && grep -c '=.\+' .env
 ```
 
-Edit `.env` and set `COMPASS_EMAIL`, `COMPASS_PASSWORD`, and `LISTING_URLS` to the two known individual listing links:
-```
-LISTING_URLS=https://www.compass.com/listing/2130651237632606465/view,https://www.compass.com/listing/2120506603298373729/view
-```
+Expected: `.env` exists and the count is at least 3 (email, password, listing URLs all non-empty). If it's missing or incomplete, stop and report NEEDS_CONTEXT rather than creating a fresh one from the template.
 
 - [ ] **Step 6: Manual smoke test — run against the two known listings**
 
 Run: `python scrape.py`
 
-Expected: a visible (non-headless) Chromium window logs into Compass, navigates to each listing URL, prints `scraped: <address>` for each, and finishes with `Wrote 2 listings to data/listings.csv and data/gallery.html`.
+Expected (both listing URLs were already exercised live during plan execution, so this is a known, not hypothetical, outcome): a headless Chromium instance logs into Compass (`headless=True` because this environment has no display, and it's the more portable default for a script that may run unattended). Individual listing pages don't require login at all (verified public); only collection-mode scraping needs an authenticated session — `ensure_logged_in` handles both by only attempting login when a login form is actually present.
 
-If login fails: inspect the actual Compass login form's HTML and adjust the selectors in `src/auth.py::ensure_logged_in` accordingly (the current selectors are a best-effort guess — see the NOTE in Task 10).
+- The first listing URL (`.../listing/2130651237632606465/view`, 4552 W 111th Ave, Westminster) scrapes successfully and prints `scraped: 4552 W 111th Ave`.
+- The second listing URL (`.../listing/2120506603298373729/view`, 8221 93rd Way, Broomfield) has hidden/unavailable price and sqft (a private/limited listing) — its embedded JSON legitimately does not match `find_listing_dicts_in_html`'s shape check, so `scrape_listing` raises `ValueError`, which the per-listing `try/except` logs as `skip listing (failed to scrape ...)` and continues. **This is expected, verified behavior, not a bug to investigate or fix.**
+- The run finishes with `Wrote 1 listings to data/listings.csv and data/gallery.html`.
 
-If `scrape_listing` raises `ValueError: No listing data found`: the listing detail page embeds its data differently than `find_listing_dicts_in_html` expects — inspect the live page's HTML (`page.content()`) to find the actual embedded JSON shape and adjust `find_json_blobs`/`_looks_like_listing` in `src/json_extract.py`.
+If the *first* URL fails, or login fails for a reason unrelated to the above: inspect `page.content()` at the failure point — Compass's markup may have changed since verification.
 
 - [ ] **Step 7: Verify outputs**
 
-Open `data/listings.csv` — confirm two rows with correct addresses/prices.
-Open `data/gallery.html` in a browser — confirm two sections with photos rendering.
+Open `data/listings.csv` — confirm one row (4552 W 111th Ave) with correct address/price, and that its `listing_url` column is a working Compass link.
+Open `data/gallery.html` in a browser — confirm one section with photos rendering and a working "View on Compass" link.
 
 - [ ] **Step 8: Verify resumability**
 
 Run: `python scrape.py` again.
-Expected: both listings print `skip (already scraped): ...` and no new photos are downloaded (check `data/photos/<id>/` file timestamps are unchanged).
+Expected: the first listing (already successfully scraped) prints `skip (already scraped): ...` and no new photos are downloaded for it (check `data/photos/<id>/` file timestamps are unchanged). The second listing (the one with hidden price) was never saved to the store, so it is retried and fails again with the same `skip listing (failed to scrape ...)` message — that's expected, not a resumability bug: only successful scrapes are persisted, so there is nothing to resume for a listing that never completed.
 
 - [ ] **Step 9: Commit any fixes made during the smoke test**
 
