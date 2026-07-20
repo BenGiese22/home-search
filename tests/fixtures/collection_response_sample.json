@@ -1,0 +1,46 @@
+{
+  "totalListings": 319,
+  "currentPageListings": [
+    {
+      "listingId": "2153779980783572393",
+      "listingData": {
+        "listingIdSHA": "2153779980783572393",
+        "location": {
+          "prettyAddress": "6330 West 112th Place",
+          "city": "Broomfield",
+          "state": "CO",
+          "zipCode": "80020"
+        },
+        "size": {
+          "bedrooms": 3,
+          "fullBathrooms": 1,
+          "halfBathrooms": 0,
+          "threeQuarterBathrooms": 1,
+          "squareFeet": 1779,
+          "lotSizeInSquareFeet": 9322
+        },
+        "price": {
+          "formatted": "$525,000"
+        },
+        "buildingInfo": {
+          "buildingYearOpened": 1979
+        },
+        "detailedInfo": {
+          "amenities": [
+            "Attached Garage",
+            "Cable Included",
+            "Central AC",
+            "Eat-in Kitchen",
+            "Electricity Included"
+          ]
+        },
+        "media": [
+          {
+            "originalUrl": "https://www.compass.com/m/7fffe4982e173ceee72fa477c4dc66e1d7c31f46c38be3efff335375f761cbbf/origin.jpg"
+          }
+        ],
+        "pageLink": "/homedetails/6330-W-112th-Pl-Broomfield-CO-80020/2153779980783572393_lid/"
+      }
+    }
+  ]
+}
