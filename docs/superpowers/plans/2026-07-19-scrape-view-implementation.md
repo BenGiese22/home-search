@@ -71,7 +71,7 @@ home-search/
 **Interfaces:**
 - Produces: `Config` dataclass (`compass_email: str`, `compass_password: str`, `collection_url: str | None`, `listing_urls: list[str]`) and `load_config(env: Mapping[str, str]) -> Config`, raising `ValueError` on missing/invalid config. Every later task that needs credentials or target URLs consumes this.
 
-- [ ] **Step 1: Create the directory layout and non-code scaffolding**
+- [x] **Step 1: Create the directory layout and non-code scaffolding**
 
 ```bash
 mkdir -p src tests/fixtures data
@@ -117,7 +117,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 ```
 
-- [ ] **Step 2: Write the failing test for config loading**
+- [x] **Step 2: Write the failing test for config loading**
 
 `tests/test_config.py`:
 ```python
@@ -161,12 +161,12 @@ def test_load_config_missing_urls_raises():
         load_config(env)
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `pip install -r requirements.txt && pytest tests/test_config.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'src.config'`
 
-- [ ] **Step 4: Implement config.py**
+- [x] **Step 4: Implement config.py**
 
 `src/config.py`:
 ```python
@@ -209,12 +209,12 @@ def load_config(env: Mapping[str, str]) -> Config:
     )
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `pytest tests/test_config.py -v`
 Expected: PASS (4 tests)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add requirements.txt .gitignore .env.example conftest.py src/__init__.py src/config.py tests/test_config.py
@@ -232,7 +232,7 @@ git commit -m "feat(config): add .env config loader"
 **Interfaces:**
 - Produces: `Listing` dataclass with fields `listing_id: str`, `address: str`, `city: str`, `state: str`, `zip_code: str`, `price: str`, `beds: int`, `baths: float`, `sqft: int`, `lot_sqft: int`, `year_built: int`, `description: str`, `amenities: list[str]`, `photo_urls: list[str]`, `listing_url: str`. Used by every downstream task (parser, store, csv_writer, gallery, scraper).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `tests/test_models.py`:
 ```python
@@ -263,12 +263,12 @@ def test_listing_construction():
     assert listing.amenities == ["Renovated Kitchen", "Private Yard"]
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_models.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'src.models'`
 
-- [ ] **Step 3: Implement models.py**
+- [x] **Step 3: Implement models.py**
 
 `src/models.py`:
 ```python
@@ -294,12 +294,12 @@ class Listing:
     listing_url: str
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_models.py -v`
 Expected: PASS (1 test)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/models.py tests/test_models.py
@@ -317,7 +317,7 @@ git commit -m "feat(models): add Listing dataclass"
 **Interfaces:**
 - Produces: `extract_balanced_json(text: str, open_index: int) -> str`, which returns the substring from `open_index` (the position of an opening `{`) through its matching closing `}`, treating characters inside string literals as inert. Raises `ValueError` if no matching brace is found. Used by Task 4 to pull JSON object literals out of `<script>` bodies.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_json_extract.py`:
 ```python
@@ -356,12 +356,12 @@ def test_extract_balanced_json_no_closing_brace_raises():
         extract_balanced_json(text, text.index("{"))
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_json_extract.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'src.json_extract'`
 
-- [ ] **Step 3: Implement extract_balanced_json**
+- [x] **Step 3: Implement extract_balanced_json**
 
 `src/json_extract.py`:
 ```python
@@ -393,12 +393,12 @@ def extract_balanced_json(text: str, open_index: int) -> str:
     raise ValueError("No matching closing brace found")
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_json_extract.py -v`
 Expected: PASS (5 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/json_extract.py tests/test_json_extract.py
@@ -417,7 +417,7 @@ git commit -m "feat(json_extract): add balanced-brace JSON extraction"
 - Consumes: `extract_balanced_json` from Task 3.
 - Produces: `find_listing_dicts_in_html(html: str) -> list[dict]` — parses every `<script>` tag in `html`, extracts every JSON object literal it can find (both `<script type="application/json">`/`ld+json` bodies and `= {...}` assignments like `window.uc = {...}`), recursively searches each parsed value for dicts that look like a Compass listing object (has `location.prettyAddress`, `price.formatted`, and a `media` list), and returns all matches. Used by Task 11's `scrape_listing`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_json_extract.py`:
 ```python
@@ -465,12 +465,12 @@ def test_find_listing_dicts_in_html_no_listing_returns_empty():
     assert find_listing_dicts_in_html(html) == []
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_json_extract.py -v`
 Expected: FAIL with `ImportError: cannot import name 'find_listing_dicts_in_html'`
 
-- [ ] **Step 3: Implement the blob-finding and shape-matching logic**
+- [x] **Step 3: Implement the blob-finding and shape-matching logic**
 
 Append to `src/json_extract.py`:
 ```python
@@ -546,12 +546,12 @@ def find_listing_dicts_in_html(html: str) -> list[dict]:
     return found
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_json_extract.py -v`
 Expected: PASS (9 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/json_extract.py tests/test_json_extract.py
@@ -571,7 +571,7 @@ git commit -m "feat(json_extract): find listing-shaped JSON anywhere in a page"
 - Consumes: `Listing` from Task 2.
 - Produces: `parse_listing_object(obj: dict, listing_url: str) -> Listing`. Used by Task 11's `scrape_listing`.
 
-- [ ] **Step 1: Create the real-data fixture**
+- [x] **Step 1: Create the real-data fixture**
 
 `tests/fixtures/canossa_dr_listing.json` (trimmed but real data — the home Ben confirmed as a "yes"):
 ```json
@@ -614,7 +614,7 @@ git commit -m "feat(json_extract): find listing-shaped JSON anywhere in a page"
 }
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 `tests/test_listing_parser.py`:
 ```python
@@ -663,12 +663,12 @@ def test_parse_listing_object_missing_optional_fields_defaults_safely():
     assert listing.photo_urls == []
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `pytest tests/test_listing_parser.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'src.listing_parser'`
 
-- [ ] **Step 4: Implement parse_listing_object**
+- [x] **Step 4: Implement parse_listing_object**
 
 `src/listing_parser.py`:
 ```python
@@ -707,12 +707,12 @@ def parse_listing_object(obj: dict, listing_url: str) -> Listing:
     )
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `pytest tests/test_listing_parser.py -v`
 Expected: PASS (2 tests)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/listing_parser.py tests/fixtures/canossa_dr_listing.json tests/test_listing_parser.py
@@ -730,7 +730,7 @@ git commit -m "feat(listing_parser): parse listing JSON into Listing"
 **Interfaces:**
 - Produces: `download_photos(photo_urls: list[str], dest_dir: Path, fetch_bytes: Callable[[str], bytes]) -> list[Path]`. `fetch_bytes` is injected so tests never hit the network. Skips re-downloading files that already exist (resumability). Used by Task 12's entry point.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_photos.py`:
 ```python
@@ -790,12 +790,12 @@ def test_download_photos_skips_photo_on_fetch_failure(tmp_path: Path):
     assert (dest_dir / "02.jpg").read_bytes() == b"good bytes"
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_photos.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'src.photos'`
 
-- [ ] **Step 3: Implement download_photos**
+- [x] **Step 3: Implement download_photos**
 
 `src/photos.py`:
 ```python
@@ -827,12 +827,12 @@ def download_photos(
     return saved
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_photos.py -v`
 Expected: PASS (3 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/photos.py tests/test_photos.py
@@ -851,7 +851,7 @@ git commit -m "feat(photos): add resumable photo downloader"
 - Consumes: `Listing` from Task 2.
 - Produces: `is_scraped(store_dir: Path, listing_id: str) -> bool`, `save_listing(store_dir: Path, listing: Listing) -> None`, `load_all_listings(store_dir: Path) -> list[Listing]`. Used by Task 12's entry point to skip already-scraped listings and to regenerate CSV/gallery from everything scraped so far.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_store.py`:
 ```python
@@ -898,12 +898,12 @@ def test_load_all_listings_empty_dir_returns_empty_list(tmp_path: Path):
     assert load_all_listings(tmp_path / "does-not-exist") == []
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_store.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'src.store'`
 
-- [ ] **Step 3: Implement store.py**
+- [x] **Step 3: Implement store.py**
 
 `src/store.py`:
 ```python
@@ -939,12 +939,12 @@ def load_all_listings(store_dir: Path) -> list[Listing]:
     return listings
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_store.py -v`
 Expected: PASS (4 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/store.py tests/test_store.py
@@ -963,7 +963,7 @@ git commit -m "feat(store): add per-listing JSON store for resumability"
 - Consumes: `Listing` from Task 2.
 - Produces: `write_csv(listings: list[Listing], photos_root: Path, path: Path) -> None`. Used by Task 12's entry point.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `tests/test_csv_writer.py`:
 ```python
@@ -1013,12 +1013,12 @@ def test_write_csv_round_trips_fields(tmp_path: Path):
     assert row["photo_dir"] == str(photos_root / "abc123")
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_csv_writer.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'src.csv_writer'`
 
-- [ ] **Step 3: Implement write_csv**
+- [x] **Step 3: Implement write_csv**
 
 `src/csv_writer.py`:
 ```python
@@ -1073,12 +1073,12 @@ def write_csv(listings: list[Listing], photos_root: Path, path: Path) -> None:
             )
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_csv_writer.py -v`
 Expected: PASS (1 test)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/csv_writer.py tests/test_csv_writer.py
@@ -1097,7 +1097,7 @@ git commit -m "feat(csv_writer): write listings.csv"
 - Consumes: `Listing` from Task 2.
 - Produces: `render_gallery(listings: list[Listing], photos_root: Path, gallery_dir: Path) -> str` and `write_gallery(listings: list[Listing], photos_root: Path, path: Path) -> None`. Used by Task 12's entry point.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/test_gallery.py`:
 ```python
@@ -1159,12 +1159,12 @@ def test_write_gallery_writes_file(tmp_path: Path):
     assert "1 Test St" in gallery_path.read_text()
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_gallery.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'src.gallery'`
 
-- [ ] **Step 3: Implement gallery.py**
+- [x] **Step 3: Implement gallery.py**
 
 `src/gallery.py`:
 ```python
@@ -1214,12 +1214,12 @@ def write_gallery(listings: list[Listing], photos_root: Path, path: Path) -> Non
     path.write_text(render_gallery(listings, photos_root, path.parent), encoding="utf-8")
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_gallery.py -v`
 Expected: PASS (3 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/gallery.py tests/test_gallery.py
@@ -1236,7 +1236,7 @@ git commit -m "feat(gallery): write local HTML photo gallery"
 **Interfaces:**
 - Produces: `ensure_logged_in(context: BrowserContext, page: Page, url: str, email: str, password: str, storage_state_path: Path) -> None`, raising `RuntimeError` with a clear message if the password field is still present after submit (spec: "Login failure → fail fast with a clear message"). Used by Task 12's entry point. Not unit tested — requires a live browser and real Compass credentials (spec: "No automated tests against the live Compass site"); the flow below was verified live against the real Compass login form during plan execution (see Task 12's manual smoke test for the remaining end-to-end check).
 
-- [ ] **Step 1: Implement ensure_logged_in**
+- [x] **Step 1: Implement ensure_logged_in**
 
 Compass's real login form (verified live, not a guess) is a **two-step email-then-password flow**: `url` shows only an email field and a "Continue" button; submitting it swaps in a password field (with a short client-side delay, so it must be waited for explicitly) and a "Sign In" button that has no `type="submit"` attribute — it must be matched by its text.
 
@@ -1283,7 +1283,7 @@ def ensure_logged_in(
     context.storage_state(path=str(storage_state_path))
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add src/auth.py
@@ -1302,7 +1302,7 @@ git commit -m "feat(auth): add Playwright login and session persistence"
 - Consumes: `find_listing_dicts_in_html` (Task 4), `parse_listing_object` (Task 5), `Listing` (Task 2).
 - Produces: `derive_listing_id_from_url(url: str) -> str | None` (unit tested), `scrape_listing(page: Page, url: str) -> Listing` and `scrape_collection(page: Page, collection_url: str) -> list[str]` (not unit tested — require a live browser; verified in Task 12's manual smoke test). Used by Task 12's entry point.
 
-- [ ] **Step 1: Write the failing tests for derive_listing_id_from_url**
+- [x] **Step 1: Write the failing tests for derive_listing_id_from_url**
 
 `tests/test_scraper.py`:
 ```python
@@ -1324,12 +1324,12 @@ def test_derive_listing_id_from_url_no_id_returns_none():
     assert derive_listing_id_from_url(url) is None
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_scraper.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'src.scraper'`
 
-- [ ] **Step 3: Implement scraper.py**
+- [x] **Step 3: Implement scraper.py**
 
 `src/scraper.py`:
 ```python
@@ -1386,12 +1386,12 @@ def scrape_collection(page: Page, collection_url: str) -> list[str]:
     return unique_links
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_scraper.py -v`
 Expected: PASS (3 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/scraper.py tests/test_scraper.py
@@ -1409,12 +1409,12 @@ git commit -m "feat(scraper): add Playwright listing and collection scraping"
 - Consumes: everything from Tasks 1–11.
 - Produces: the `scrape.py` CLI entry point; running it is the deliverable for this task.
 
-- [ ] **Step 1: Run the full test suite before wiring the entry point**
+- [x] **Step 1: Run the full test suite before wiring the entry point**
 
 Run: `pytest -v`
 Expected: PASS (all tests from Tasks 1–11, 30 tests total)
 
-- [ ] **Step 2: Implement scrape.py**
+- [x] **Step 2: Implement scrape.py**
 
 `scrape.py`:
 ```python
@@ -1495,19 +1495,19 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add scrape.py
 git commit -m "feat(scrape): wire up entry point"
 ```
 
-- [ ] **Step 4: Install the Playwright browser binary**
+- [x] **Step 4: Install the Playwright browser binary**
 
 Run: `playwright install chromium`
 Expected: Chromium downloads successfully.
 
-- [ ] **Step 5: Verify credentials are in place**
+- [x] **Step 5: Verify credentials are in place**
 
 `.env` was already created and populated with real `COMPASS_EMAIL`/`COMPASS_PASSWORD`/`LISTING_URLS` during plan execution (before this task was dispatched), while verifying the login flow live. **Do not run `cp .env.example .env`** — that would overwrite it and destroy the real credentials. Just confirm the file exists and has all three values set:
 
@@ -1517,29 +1517,31 @@ test -f .env && grep -c '=.\+' .env
 
 Expected: `.env` exists and the count is at least 3 (email, password, listing URLs all non-empty). If it's missing or incomplete, stop and report NEEDS_CONTEXT rather than creating a fresh one from the template.
 
-- [ ] **Step 6: Manual smoke test — run against the two known listings**
+- [x] **Step 6: Manual smoke test — run against the two known listings**
 
 Run: `python scrape.py`
 
-Expected (both listing URLs were already exercised live during plan execution, so this is a known, not hypothetical, outcome): a headless Chromium instance logs into Compass (`headless=True` because this environment has no display, and it's the more portable default for a script that may run unattended). Individual listing pages don't require login at all (verified public); only collection-mode scraping needs an authenticated session — `ensure_logged_in` handles both by only attempting login when a login form is actually present.
+Expected and actually confirmed live during plan execution: a headless Chromium instance logs into Compass (`headless=True` because this environment has no display, and it's the more portable default for a script that may run unattended). Individual listing pages don't require login at all when accessed anonymously, but `scrape.py` always authenticates first via `ensure_logged_in` regardless of mode (it's a no-op if a session is already valid), and with that authenticated session both known listings scrape cleanly:
 
-- The first listing URL (`.../listing/2130651237632606465/view`, 4552 W 111th Ave, Westminster) scrapes successfully and prints `scraped: 4552 W 111th Ave`.
-- The second listing URL (`.../listing/2120506603298373729/view`, 8221 93rd Way, Broomfield) has hidden/unavailable price and sqft (a private/limited listing) — its embedded JSON legitimately does not match `find_listing_dicts_in_html`'s shape check, so `scrape_listing` raises `ValueError`, which the per-listing `try/except` logs as `skip listing (failed to scrape ...)` and continues. **This is expected, verified behavior, not a bug to investigate or fix.**
-- The run finishes with `Wrote 1 listings to data/listings.csv and data/gallery.html`.
+- `.../listing/2130651237632606465/view` (4552 W 111th Ave, Westminster) scrapes successfully.
+- `.../listing/2120506603298373729/view` (8221 93rd Way, Broomfield) *also* scrapes successfully once authenticated — an earlier, unauthenticated discovery check had seen this listing with redacted price/sqft and expected it to fail the shape check, but the real pipeline's authenticated session sees the full listing data. (Historical note only — do not "fix" `scrape_listing`/`find_listing_dicts_in_html` to reproduce the old unauthenticated-failure expectation; both listings scraping successfully is the correct, verified outcome.)
+- The run finishes with `Wrote 2 listings to data/listings.csv and data/gallery.html`.
 
-If the *first* URL fails, or login fails for a reason unrelated to the above: inspect `page.content()` at the failure point — Compass's markup may have changed since verification.
+If either URL fails, or login fails: inspect `page.content()` at the failure point — Compass's markup may have changed since verification.
 
-- [ ] **Step 7: Verify outputs**
+**Known limitation, confirmed live and out of scope for this fix pass:** `scrape_collection`'s current approach (scan `page.content()` for `a[href*="/homedetails/"]` links) does not work against Compass's real collection UI — it's a client-rendered SPA at `/app/collection/<id>/matches...` that returns zero matching links even when authenticated, not a simple scrollable static page. Only `LISTING_URLS` mode is currently verified working end-to-end; treat `COMPASS_COLLECTION_URL` as non-functional until a follow-up investigates the SPA's real data-loading mechanism (likely network-request interception to find Compass's internal API, not a CSS-selector tweak).
 
-Open `data/listings.csv` — confirm one row (4552 W 111th Ave) with correct address/price, and that its `listing_url` column is a working Compass link.
-Open `data/gallery.html` in a browser — confirm one section with photos rendering and a working "View on Compass" link.
+- [x] **Step 7: Verify outputs**
 
-- [ ] **Step 8: Verify resumability**
+Open `data/listings.csv` — confirm two rows (4552 W 111th Ave, 8221 93rd Way) with correct addresses/prices, and that the `listing_url` column is a working Compass link for each.
+Open `data/gallery.html` in a browser — confirm two sections with photos rendering and working "View on Compass" links.
+
+- [x] **Step 8: Verify resumability**
 
 Run: `python scrape.py` again.
-Expected: the first listing (already successfully scraped) prints `skip (already scraped): ...` and no new photos are downloaded for it (check `data/photos/<id>/` file timestamps are unchanged). The second listing (the one with hidden price) was never saved to the store, so it is retried and fails again with the same `skip listing (failed to scrape ...)` message — that's expected, not a resumability bug: only successful scrapes are persisted, so there is nothing to resume for a listing that never completed.
+Expected and confirmed live: both listings print `skip (already scraped): ...` and no new photos are downloaded for either (verified via unchanged `data/photos/<id>/` file mtimes) — resumability works correctly.
 
-- [ ] **Step 9: Commit any fixes made during the smoke test**
+- [x] **Step 9: Commit any fixes made during the smoke test**
 
 ```bash
 git add -A
