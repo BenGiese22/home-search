@@ -1,0 +1,37 @@
+{
+  "listingIdSHA": "2145067054346865465",
+  "location": {
+    "prettyAddress": "2765 Canossa Drive",
+    "city": "Broomfield",
+    "state": "CO",
+    "zipCode": "80020"
+  },
+  "size": {
+    "bedrooms": 4,
+    "fullBathrooms": 3,
+    "halfBathrooms": 1,
+    "threeQuarterBathrooms": 0,
+    "squareFeet": 2268,
+    "lotSizeInSquareFeet": 6726
+  },
+  "price": {
+    "formatted": "$649,500"
+  },
+  "buildingInfo": {
+    "buildingYearOpened": 1999
+  },
+  "description": "Beautifully renovated and move-in-ready Broomfield charmer. With four bedrooms, four bathrooms, and a rare, peaceful, large private backyard, this lovely home is priced to sell.",
+  "detailedInfo": {
+    "amenities": [
+      "Attached Garage",
+      "Basement",
+      "Renovated Kitchen",
+      "Private Yard",
+      "Walk-in Closet"
+    ]
+  },
+  "media": [
+    {"originalUrl": "https://www.compass.com/m/408ddf37e2ded171addb547c9487af6f5da7231549ce355089fdcf349cdaffb8/origin.jpg"},
+    {"originalUrl": "https://www.compass.com/m/4898bd3b1d9da3ec804b32ef39dd88bed35e502f0d19370bc8102e5dff38c872/origin.jpg"}
+  ]
+}
