@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from src.db import get_connection, query_listings, upsert_listing
+from src.db import get_connection, get_price_snapshot, query_listings, upsert_listing
 from src.models import Listing
 
 SAMPLE = Listing(
@@ -135,3 +135,18 @@ def test_query_listings_returns_empty_list_when_no_matches(tmp_path: Path):
     rows = query_listings(conn, min_parking_spaces=99)
 
     assert rows == []
+
+
+def test_get_price_snapshot_returns_price_and_price_numeric_by_listing_id(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+
+    snapshot = get_price_snapshot(conn)
+
+    assert snapshot == {"abc123": ("$650,000", 650000.0)}
+
+
+def test_get_price_snapshot_empty_db_returns_empty_dict(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+
+    assert get_price_snapshot(conn) == {}

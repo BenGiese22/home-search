@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS photo_urls (
 _PRICE_RE = re.compile(r"[\d.]+")
 
 
-def _parse_price(price: str) -> float | None:
+def parse_price(price: str) -> float | None:
     """Best-effort numeric price for range queries, e.g. "$650,000" -> 650000.0.
     Returns None for anything that doesn't contain a number (e.g. "Contact agent")
     rather than raising, since price is display text, not a guaranteed number."""
@@ -79,7 +79,7 @@ def upsert_listing(conn: sqlite3.Connection, listing: Listing) -> None:
                 listing.state,
                 listing.zip_code,
                 listing.price,
-                _parse_price(listing.price),
+                parse_price(listing.price),
                 listing.beds,
                 listing.baths,
                 listing.sqft,
@@ -100,6 +100,14 @@ def upsert_listing(conn: sqlite3.Connection, listing: Listing) -> None:
             "INSERT INTO photo_urls (listing_id, position, url) VALUES (?, ?, ?)",
             [(listing.listing_id, i, url) for i, url in enumerate(listing.photo_urls)],
         )
+
+
+def get_price_snapshot(conn: sqlite3.Connection) -> dict[str, tuple[str, float | None]]:
+    """Maps listing_id -> (price, price_numeric) for every listing currently
+    in the db. Taken before upserting fresh fetch data so change-detection
+    can tell what a listing's price was before this run touched it."""
+    rows = conn.execute("SELECT listing_id, price, price_numeric FROM listings").fetchall()
+    return {row["listing_id"]: (row["price"], row["price_numeric"]) for row in rows}
 
 
 def query_listings(
