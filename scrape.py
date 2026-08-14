@@ -42,6 +42,7 @@ def _save_listing(listing: Listing, skip_photos: bool) -> None:
 def main() -> None:
     skip_photos = "--skip-photos" in sys.argv
     config = load_config(dotenv_values(".env"))
+    db_conn = get_connection(DB_PATH)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -61,6 +62,7 @@ def main() -> None:
                 continue
             try:
                 listing = scrape_listing(page, url)
+                upsert_listing(db_conn, listing)
                 if is_scraped(STORE_DIR, listing.listing_id):
                     print(f"skip (already scraped): {listing.address}")
                     continue
@@ -78,6 +80,7 @@ def main() -> None:
                 collection_listings = []
 
             for listing in collection_listings:
+                upsert_listing(db_conn, listing)
                 if is_scraped(STORE_DIR, listing.listing_id):
                     print(f"skip (already scraped): {listing.address}")
                     continue
@@ -89,14 +92,11 @@ def main() -> None:
 
         browser.close()
 
+    db_conn.close()
+
     all_listings = load_all_listings(STORE_DIR)
     write_csv(all_listings, PHOTOS_DIR, CSV_PATH)
     write_gallery(all_listings, PHOTOS_DIR, GALLERY_PATH)
-
-    db_conn = get_connection(DB_PATH)
-    for listing in all_listings:
-        upsert_listing(db_conn, listing)
-    db_conn.close()
 
     print(f"\nWrote {len(all_listings)} listings to {CSV_PATH}, {GALLERY_PATH}, and {DB_PATH}")
 
