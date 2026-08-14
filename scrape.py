@@ -3,9 +3,8 @@ from pathlib import Path
 
 import requests
 from dotenv import dotenv_values
-from playwright.sync_api import sync_playwright
 
-from src.auth import ensure_logged_in
+from src.auth import launch_authenticated_page
 from src.config import load_config
 from src.csv_writer import write_csv
 from src.db import get_connection, upsert_listing
@@ -44,17 +43,7 @@ def main() -> None:
     config = load_config(dotenv_values(".env"))
     db_conn = get_connection(DB_PATH)
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        storage_state = str(AUTH_STATE_PATH) if AUTH_STATE_PATH.exists() else None
-        context = browser.new_context(storage_state=storage_state)
-        page = context.new_page()
-
-        ensure_logged_in(
-            context, page, LOGIN_URL,
-            config.compass_email, config.compass_password, AUTH_STATE_PATH,
-        )
-
+    with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
         for url in config.listing_urls:
             precheck_id = derive_listing_id_from_url(url)
             if precheck_id and is_scraped(STORE_DIR, precheck_id):
@@ -89,8 +78,6 @@ def main() -> None:
                 except Exception as exc:
                     print(f"skip listing (failed to process {listing.address}): {exc}")
                     continue
-
-        browser.close()
 
     db_conn.close()
 

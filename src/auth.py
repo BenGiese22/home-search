@@ -1,6 +1,10 @@
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
-from playwright.sync_api import BrowserContext, Page
+from playwright.sync_api import Page, sync_playwright
+
+from src.config import Config
 
 
 def ensure_logged_in(
@@ -37,3 +41,26 @@ def ensure_logged_in(
 
     storage_state_path.parent.mkdir(parents=True, exist_ok=True)
     context.storage_state(path=str(storage_state_path))
+
+
+@contextmanager
+def launch_authenticated_page(
+    config: Config, login_url: str, storage_state_path: Path
+) -> Iterator[Page]:
+    """Launch a headless browser, restore any persisted session, and ensure
+    it's logged in. Yields a ready-to-use Page; closes the browser on exit."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        storage_state = str(storage_state_path) if storage_state_path.exists() else None
+        context = browser.new_context(storage_state=storage_state)
+        page = context.new_page()
+
+        ensure_logged_in(
+            context, page, login_url,
+            config.compass_email, config.compass_password, storage_state_path,
+        )
+
+        try:
+            yield page
+        finally:
+            browser.close()
