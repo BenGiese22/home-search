@@ -8,6 +8,7 @@ from playwright.sync_api import sync_playwright
 from src.auth import ensure_logged_in
 from src.config import load_config
 from src.csv_writer import write_csv
+from src.db import get_connection, upsert_listing
 from src.gallery import write_gallery
 from src.models import Listing
 from src.photos import download_photos
@@ -20,6 +21,7 @@ STORE_DIR = DATA_DIR / "listings"
 AUTH_STATE_PATH = DATA_DIR / ".auth" / "compass_state.json"
 CSV_PATH = DATA_DIR / "listings.csv"
 GALLERY_PATH = DATA_DIR / "gallery.html"
+DB_PATH = DATA_DIR / "listings.db"
 LOGIN_URL = "https://www.compass.com/login/"
 
 
@@ -90,7 +92,13 @@ def main() -> None:
     all_listings = load_all_listings(STORE_DIR)
     write_csv(all_listings, PHOTOS_DIR, CSV_PATH)
     write_gallery(all_listings, PHOTOS_DIR, GALLERY_PATH)
-    print(f"\nWrote {len(all_listings)} listings to {CSV_PATH} and {GALLERY_PATH}")
+
+    db_conn = get_connection(DB_PATH)
+    for listing in all_listings:
+        upsert_listing(db_conn, listing)
+    db_conn.close()
+
+    print(f"\nWrote {len(all_listings)} listings to {CSV_PATH}, {GALLERY_PATH}, and {DB_PATH}")
 
 
 if __name__ == "__main__":
