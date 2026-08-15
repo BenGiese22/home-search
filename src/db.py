@@ -1,7 +1,9 @@
 import re
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
+from src.commute import CommuteResult
 from src.models import Listing
 
 _SCHEMA = """
@@ -32,6 +34,18 @@ CREATE TABLE IF NOT EXISTS photo_urls (
     listing_id TEXT NOT NULL REFERENCES listings(listing_id),
     position INTEGER NOT NULL,
     url TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS commute (
+    listing_id TEXT PRIMARY KEY REFERENCES listings(listing_id),
+    lat REAL,
+    lon REAL,
+    denver_miles REAL,
+    denver_minutes REAL,
+    medtronic_miles REAL,
+    medtronic_minutes REAL,
+    geocode_failed INTEGER NOT NULL,
+    computed_at TEXT NOT NULL
 );
 """
 
@@ -132,3 +146,47 @@ def query_listings(
     return conn.execute(
         f"SELECT * FROM listings {where} ORDER BY price_numeric", params
     ).fetchall()
+
+
+def upsert_commute(conn: sqlite3.Connection, listing_id: str, result: CommuteResult) -> None:
+    """Insert or replace a listing's cached commute data. Safe to call
+    repeatedly — a rerun after a rubric change shouldn't need to re-geocode,
+    but re-running after a genuine address fix should overwrite cleanly."""
+    with conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO commute (
+                listing_id, lat, lon, denver_miles, denver_minutes,
+                medtronic_miles, medtronic_minutes, geocode_failed, computed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                listing_id,
+                result.lat,
+                result.lon,
+                result.denver_miles,
+                result.denver_minutes,
+                result.medtronic_miles,
+                result.medtronic_minutes,
+                int(result.geocode_failed),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def get_commute(conn: sqlite3.Connection, listing_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM commute WHERE listing_id = ?", (listing_id,)
+    ).fetchone()
+
+
+def get_listing_ids_missing_commute(conn: sqlite3.Connection) -> list[str]:
+    """Listings with no commute row yet — a rerun only pays the
+    geocode/routing cost for listings it hasn't already covered."""
+    rows = conn.execute(
+        """
+        SELECT listing_id FROM listings
+        WHERE listing_id NOT IN (SELECT listing_id FROM commute)
+        """
+    ).fetchall()
+    return [row["listing_id"] for row in rows]

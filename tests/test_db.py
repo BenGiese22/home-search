@@ -1,6 +1,15 @@
 from pathlib import Path
 
-from src.db import get_connection, get_price_snapshot, query_listings, upsert_listing
+from src.commute import CommuteResult
+from src.db import (
+    get_commute,
+    get_connection,
+    get_listing_ids_missing_commute,
+    get_price_snapshot,
+    query_listings,
+    upsert_commute,
+    upsert_listing,
+)
 from src.models import Listing
 
 SAMPLE = Listing(
@@ -150,3 +159,52 @@ def test_get_price_snapshot_empty_db_returns_empty_dict(tmp_path: Path):
     conn = get_connection(_db_path(tmp_path))
 
     assert get_price_snapshot(conn) == {}
+
+
+COMMUTE_SAMPLE = CommuteResult(
+    lat=39.85, lon=-105.05,
+    denver_miles=12.0, denver_minutes=25.0,
+    medtronic_miles=8.0, medtronic_minutes=18.0,
+    geocode_failed=False,
+)
+
+
+def test_upsert_commute_then_get_commute(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+
+    upsert_commute(conn, "abc123", COMMUTE_SAMPLE)
+
+    row = get_commute(conn, "abc123")
+    assert row["denver_minutes"] == 25.0
+    assert row["medtronic_minutes"] == 18.0
+    assert row["geocode_failed"] == 0
+
+
+def test_get_commute_returns_none_when_absent(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+
+    assert get_commute(conn, "abc123") is None
+
+
+def test_upsert_commute_is_idempotent(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    upsert_commute(conn, "abc123", COMMUTE_SAMPLE)
+
+    updated = CommuteResult(**{**COMMUTE_SAMPLE.__dict__, "denver_minutes": 30.0})
+    upsert_commute(conn, "abc123", updated)
+
+    row = get_commute(conn, "abc123")
+    assert row["denver_minutes"] == 30.0
+
+
+def test_get_listing_ids_missing_commute(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    other = SAMPLE.__class__(**{**SAMPLE.__dict__, "listing_id": "other456"})
+    upsert_listing(conn, other)
+    upsert_commute(conn, "abc123", COMMUTE_SAMPLE)
+
+    assert get_listing_ids_missing_commute(conn) == ["other456"]
