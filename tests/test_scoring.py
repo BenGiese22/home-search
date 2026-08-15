@@ -1,10 +1,38 @@
+from src.models import Listing
 from src.scoring import (
+    CollectionStats,
+    WEIGHT_COMMUTE,
+    WEIGHT_CONDITION,
+    WEIGHT_OUTDOOR,
+    WEIGHT_PARKING,
+    WEIGHT_SQFT,
+    compute_collection_stats,
     passes_filters,
     score_commute,
     score_condition,
+    score_listing,
     score_outdoor,
     score_parking,
     score_sqft,
+)
+
+LISTING = Listing(
+    listing_id="abc123",
+    address="1 Test St",
+    city="Testville",
+    state="CO",
+    zip_code="80020",
+    price="$650,000",
+    beds=4,
+    baths=2.5,
+    sqft=2000,
+    lot_sqft=6500,
+    parking_spaces=2,
+    year_built=1980,
+    description="Renovated kitchen, private yard with mature trees",
+    amenities=["Garage"],
+    photo_urls=[],
+    listing_url="https://example.com/listing/abc123",
 )
 
 
@@ -115,3 +143,43 @@ def test_passes_filters_requires_both_thresholds():
     assert passes_filters(baths=2.0, lot_sqft=6000) is True
     assert passes_filters(baths=1.5, lot_sqft=6000) is False
     assert passes_filters(baths=2.0, lot_sqft=5999) is False
+
+
+def test_compute_collection_stats_returns_min_and_max():
+    stats = compute_collection_stats([1000, 2000, 3000], [10.0, 20.0, 30.0])
+
+    assert stats == CollectionStats(
+        sqft_min=1000, sqft_max=3000, denver_minutes_min=10.0, denver_minutes_max=30.0
+    )
+
+
+def test_compute_collection_stats_handles_empty_input():
+    stats = compute_collection_stats([], [])
+
+    assert stats == CollectionStats(0, 0, 0.0, 0.0)
+
+
+def test_score_listing_combines_sub_scores_with_named_weights():
+    stats = CollectionStats(sqft_min=1000, sqft_max=3000, denver_minutes_min=10.0, denver_minutes_max=30.0)
+
+    result = score_listing(LISTING, medtronic_minutes=18.0, denver_minutes=15.0, stats=stats)
+
+    expected = (
+        WEIGHT_COMMUTE * result.commute_score
+        + WEIGHT_SQFT * result.sqft_score
+        + WEIGHT_CONDITION * result.condition_score
+        + WEIGHT_OUTDOOR * result.outdoor_score
+        + WEIGHT_PARKING * result.parking_score
+    )
+    assert result.composite == expected
+
+
+def test_score_listing_sets_passes_filters_flag():
+    stats = CollectionStats(1000, 3000, 10.0, 30.0)
+
+    passing = score_listing(LISTING, 18.0, 15.0, stats)
+    failing_listing = LISTING.__class__(**{**LISTING.__dict__, "baths": 1.0})
+    failing = score_listing(failing_listing, 18.0, 15.0, stats)
+
+    assert passing.passes_filters is True
+    assert failing.passes_filters is False

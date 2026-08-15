@@ -1,7 +1,17 @@
+from dataclasses import dataclass
+
+from src.models import Listing
+
 NEUTRAL_SCORE = 50.0
 
 MEDTRONIC_LEG_WEIGHT = 0.8
 DENVER_LEG_WEIGHT = 0.2
+
+WEIGHT_COMMUTE = 0.35
+WEIGHT_SQFT = 0.20
+WEIGHT_CONDITION = 0.20
+WEIGHT_OUTDOOR = 0.15
+WEIGHT_PARKING = 0.10
 
 YEAR_BUILT_MIN = 1955
 YEAR_BUILT_MAX = 2005
@@ -113,3 +123,64 @@ def score_parking(parking_spaces: int) -> float:
 
 def passes_filters(baths: float, lot_sqft: int) -> bool:
     return baths >= MIN_BATHS and lot_sqft >= MIN_LOT_SQFT
+
+
+@dataclass
+class CollectionStats:
+    sqft_min: int
+    sqft_max: int
+    denver_minutes_min: float
+    denver_minutes_max: float
+
+
+def compute_collection_stats(
+    sqft_values: list[int], denver_minutes_values: list[float]
+) -> CollectionStats:
+    return CollectionStats(
+        sqft_min=min(sqft_values) if sqft_values else 0,
+        sqft_max=max(sqft_values) if sqft_values else 0,
+        denver_minutes_min=min(denver_minutes_values) if denver_minutes_values else 0.0,
+        denver_minutes_max=max(denver_minutes_values) if denver_minutes_values else 0.0,
+    )
+
+
+@dataclass
+class ScoreResult:
+    commute_score: float
+    sqft_score: float
+    condition_score: float
+    outdoor_score: float
+    parking_score: float
+    composite: float
+    passes_filters: bool
+
+
+def score_listing(
+    listing: Listing,
+    medtronic_minutes: float | None,
+    denver_minutes: float | None,
+    stats: CollectionStats,
+) -> ScoreResult:
+    commute_score = score_commute(
+        medtronic_minutes, denver_minutes, stats.denver_minutes_min, stats.denver_minutes_max
+    )
+    sqft_score = score_sqft(listing.sqft, stats.sqft_min, stats.sqft_max)
+    condition_score = score_condition(listing.description, listing.amenities, listing.year_built)
+    outdoor_score = score_outdoor(listing.description, listing.amenities)
+    parking_score = score_parking(listing.parking_spaces)
+    composite = (
+        WEIGHT_COMMUTE * commute_score
+        + WEIGHT_SQFT * sqft_score
+        + WEIGHT_CONDITION * condition_score
+        + WEIGHT_OUTDOOR * outdoor_score
+        + WEIGHT_PARKING * parking_score
+    )
+    return ScoreResult(
+        commute_score=commute_score,
+        sqft_score=sqft_score,
+        condition_score=condition_score,
+        outdoor_score=outdoor_score,
+        parking_score=parking_score,
+        composite=composite,
+        passes_filters=passes_filters(listing.baths, listing.lot_sqft),
+    )
