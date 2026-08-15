@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import quote
 
@@ -38,8 +37,8 @@ def route_miles_minutes(
     if not routes:
         return None
     try:
-        meters = routes[0]["distance"]
-        seconds = routes[0]["duration"]
-    except (KeyError, TypeError):
+        meters = float(routes[0]["distance"])
+        seconds = float(routes[0]["duration"])
+        return (meters / METERS_PER_MILE, seconds / SECONDS_PER_MINUTE)
+    except (KeyError, ValueError, TypeError):
         return None
-    return (meters / METERS_PER_MILE, seconds / SECONDS_PER_MINUTE)

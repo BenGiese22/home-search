@@ -41,3 +41,15 @@ def test_route_miles_minutes_returns_none_on_malformed_response():
     result = route_miles_minutes((39.8, -105.1), (39.99, -105.09), lambda url: {"routes": [{}]})
 
     assert result is None
+
+
+def test_route_miles_minutes_returns_none_on_non_numeric_distance():
+    result = route_miles_minutes((39.8, -105.1), (39.99, -105.09), lambda url: {"routes": [{"distance": "bad", "duration": 1200.0}]})
+
+    assert result is None
+
+
+def test_route_miles_minutes_returns_none_on_non_numeric_duration():
+    result = route_miles_minutes((39.8, -105.1), (39.99, -105.09), lambda url: {"routes": [{"distance": 16093.4, "duration": "bad"}]})
+
+    assert result is None
