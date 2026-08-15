@@ -208,3 +208,65 @@ def test_get_listing_ids_missing_commute(tmp_path: Path):
     upsert_commute(conn, "abc123", COMMUTE_SAMPLE)
 
     assert get_listing_ids_missing_commute(conn) == ["other456"]
+
+
+from src.db import get_amenities, get_scores, upsert_score
+from src.scoring import ScoreResult
+
+SCORE_SAMPLE = ScoreResult(
+    commute_score=80.0, sqft_score=50.0, condition_score=90.0,
+    outdoor_score=100.0, parking_score=100.0, composite=79.5,
+    passes_filters=True,
+)
+
+
+def test_upsert_score_then_get_scores(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+
+    upsert_score(conn, "abc123", SCORE_SAMPLE)
+
+    rows = get_scores(conn)
+    assert len(rows) == 1
+    assert rows[0]["listing_id"] == "abc123"
+    assert rows[0]["composite"] == 79.5
+    assert rows[0]["passes_filters"] == 1
+
+
+def test_get_scores_orders_by_composite_descending(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    other = SAMPLE.__class__(**{**SAMPLE.__dict__, "listing_id": "other456"})
+    upsert_listing(conn, other)
+
+    upsert_score(conn, "abc123", ScoreResult(**{**SCORE_SAMPLE.__dict__, "composite": 40.0}))
+    upsert_score(conn, "other456", ScoreResult(**{**SCORE_SAMPLE.__dict__, "composite": 90.0}))
+
+    rows = get_scores(conn)
+    assert [row["listing_id"] for row in rows] == ["other456", "abc123"]
+
+
+def test_upsert_score_is_idempotent(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    upsert_score(conn, "abc123", SCORE_SAMPLE)
+
+    updated = ScoreResult(**{**SCORE_SAMPLE.__dict__, "composite": 55.0})
+    upsert_score(conn, "abc123", updated)
+
+    rows = get_scores(conn)
+    assert len(rows) == 1
+    assert rows[0]["composite"] == 55.0
+
+
+def test_get_amenities_returns_list_for_listing_id(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+
+    assert get_amenities(conn, "abc123") == ["Central AC", "Garage"]
+
+
+def test_get_amenities_empty_for_unknown_listing(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+
+    assert get_amenities(conn, "nope") == []

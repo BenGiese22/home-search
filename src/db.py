@@ -5,6 +5,7 @@ from pathlib import Path
 
 from src.commute import CommuteResult
 from src.models import Listing
+from src.scoring import ScoreResult
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS listings (
@@ -45,6 +46,18 @@ CREATE TABLE IF NOT EXISTS commute (
     medtronic_miles REAL,
     medtronic_minutes REAL,
     geocode_failed INTEGER NOT NULL,
+    computed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS scores (
+    listing_id TEXT PRIMARY KEY REFERENCES listings(listing_id),
+    commute_score REAL NOT NULL,
+    sqft_score REAL NOT NULL,
+    condition_score REAL NOT NULL,
+    outdoor_score REAL NOT NULL,
+    parking_score REAL NOT NULL,
+    composite REAL NOT NULL,
+    passes_filters INTEGER NOT NULL,
     computed_at TEXT NOT NULL
 );
 """
@@ -190,3 +203,39 @@ def get_listing_ids_missing_commute(conn: sqlite3.Connection) -> list[str]:
         """
     ).fetchall()
     return [row["listing_id"] for row in rows]
+
+
+def upsert_score(conn: sqlite3.Connection, listing_id: str, result: ScoreResult) -> None:
+    """Insert or replace a listing's score row. Cheap and rebuildable —
+    intended to run every time the scoring rubric changes, not just once."""
+    with conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO scores (
+                listing_id, commute_score, sqft_score, condition_score,
+                outdoor_score, parking_score, composite, passes_filters, computed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                listing_id,
+                result.commute_score,
+                result.sqft_score,
+                result.condition_score,
+                result.outdoor_score,
+                result.parking_score,
+                result.composite,
+                int(result.passes_filters),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def get_scores(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM scores ORDER BY composite DESC").fetchall()
+
+
+def get_amenities(conn: sqlite3.Connection, listing_id: str) -> list[str]:
+    rows = conn.execute(
+        "SELECT amenity FROM amenities WHERE listing_id = ? ORDER BY amenity", (listing_id,)
+    ).fetchall()
+    return [row["amenity"] for row in rows]
