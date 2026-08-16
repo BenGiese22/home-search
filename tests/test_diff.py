@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from src.db import get_connection, query_listings, upsert_listing
-from src.diff import apply_delisting, compute_changes, format_report
+from src.diff import apply_delisting, compute_changes, format_report, should_apply_delisting
 from src.models import Listing
 
 SAMPLE = Listing(
@@ -177,3 +177,45 @@ def test_apply_delisting_handles_empty_list(tmp_path: Path):
     conn = get_connection(tmp_path / "listings.db")
 
     apply_delisting(conn, tmp_path / "photos", tmp_path / "listings", [])  # should not raise
+
+
+def test_should_apply_delisting_false_when_fetch_failed():
+    before = {"abc123": ("$1", 1.0), "gone456": ("$1", 1.0)}
+    report = compute_changes([], before)  # would look like both are delisted
+
+    assert should_apply_delisting(False, report, before, frozenset()) is False
+
+
+def test_should_apply_delisting_true_for_a_normal_small_delist():
+    # 1 of 5 known listings dropped out -- an ordinary, plausible delisting
+    before = {f"id{i}": ("$1", 1.0) for i in range(5)}
+    fetched_ids = {f"id{i}" for i in range(4)}
+    fetched = [Listing(**{**SAMPLE.__dict__, "listing_id": lid}) for lid in fetched_ids]
+    report = compute_changes(fetched, before)
+
+    assert should_apply_delisting(True, report, before, frozenset()) is True
+
+
+def test_should_apply_delisting_false_when_almost_everything_looks_delisted():
+    # A "successful" fetch that returned nothing -- the exact shape of the
+    # bug where an empty-but-200-OK collection response would otherwise
+    # wipe every known listing.
+    before = {f"id{i}": ("$1", 1.0) for i in range(5)}
+    report = compute_changes([], before)
+
+    assert should_apply_delisting(True, report, before, frozenset()) is False
+
+
+def test_should_apply_delisting_true_when_no_listings_known_yet():
+    assert should_apply_delisting(True, compute_changes([], {}), {}, frozenset()) is True
+
+
+def test_should_apply_delisting_excludes_pinned_ids_from_the_denominator():
+    # 1 of 1 *eligible* (non-pinned) listing delisted -- at the threshold,
+    # but the pinned listing shouldn't count toward "everything known"
+    # and shouldn't itself ever appear in delisted_ids.
+    before = {"pinned1": ("$1", 1.0), "gone456": ("$1", 1.0)}
+    report = compute_changes([], before, pinned_ids=frozenset({"pinned1"}))
+
+    assert report.delisted_ids == ["gone456"]
+    assert should_apply_delisting(True, report, before, frozenset({"pinned1"})) is True

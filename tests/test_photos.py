@@ -66,4 +66,19 @@ def test_delete_photos_removes_directory_and_contents(tmp_path: Path):
 
 
 def test_delete_photos_is_safe_when_directory_missing(tmp_path: Path):
-    delete_photos(tmp_path, "nope")  # should not raise
+    delete_photos(tmp_path, "nope")  # should not raise, no warning printed
+
+
+def test_delete_photos_logs_warning_on_real_failure(tmp_path: Path, capsys, monkeypatch):
+    listing_dir = tmp_path / "abc123"
+    listing_dir.mkdir()
+    (listing_dir / "01.jpg").write_bytes(b"x")
+
+    def boom(path, *args, **kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr("shutil.rmtree", boom)
+
+    delete_photos(tmp_path, "abc123")  # should not raise
+
+    assert "abc123" in capsys.readouterr().out

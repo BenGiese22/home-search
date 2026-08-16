@@ -85,3 +85,30 @@ data numbers below are all against the live 362-listing collection.
   `get_amenities` per listing) rather than a joined batch query — an N+1
   pattern, irrelevant at 362 rows, worth revisiting only if the collection
   grows substantially.
+
+## 2026-08-16 — stale-listing removal: known limitations accepted at merge
+
+Two findings from code review on `bgiese/stale-listing-removal` were
+deliberately left unfixed rather than deferred by accident — recording the
+reasoning so it isn't re-litigated from scratch later.
+
+- **`apply_delisting()` deletes the DB row before the on-disk photos and
+  JSON file.** If the process is killed between those calls (Ctrl-C, OOM,
+  crash), the DB row is gone but the photo directory and JSON file are
+  orphaned on disk forever — nothing will ever revisit them, since the
+  listing_id can't reappear in a future `before` snapshot once its row is
+  gone. Accepted as a low-probability edge case for a personal,
+  manually-invoked tool rather than solved now. If it becomes a real
+  problem, worth either reordering (delete disk state first, so a crash
+  leaves an orphaned *DB row* instead of orphaned files — a DB row is at
+  least discoverable via a query) or a durable pending-deletion log.
+- **Each delisted listing gets its own DB transaction** (`delete_listing`'s
+  own `with conn:`) rather than the whole batch being one transaction.
+  Considered and *not* changed: a single all-or-nothing transaction across
+  every delisted listing would mean a mid-run crash loses ALL progress
+  instead of just the remainder, which is a worse resilience story than
+  what exists today — the current per-listing commits mean an interrupted
+  run has still durably cleaned up whatever it got through, consistent
+  with this codebase's existing partial-progress-preserved philosophy
+  everywhere else (scrape.py, check.py, compute_commutes.py). Performance
+  is a non-issue at this data scale either way.

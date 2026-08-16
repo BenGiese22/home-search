@@ -4,9 +4,9 @@ from dotenv import dotenv_values
 
 from src.auth import launch_authenticated_page
 from src.config import load_config
-from src.db import get_connection, get_price_snapshot, upsert_listing
-from src.diff import apply_delisting, compute_changes, format_report
-from src.scraper import derive_listing_id_from_url, fetch_collection_listings
+from src.db import get_connection, get_pinned_listing_ids, get_price_snapshot, upsert_listing
+from src.diff import apply_delisting, compute_changes, format_report, should_apply_delisting
+from src.scraper import fetch_collection_listings
 
 DATA_DIR = Path("data")
 PHOTOS_DIR = DATA_DIR / "photos"
@@ -22,13 +22,8 @@ def main() -> None:
         print("No COMPASS_COLLECTION_URL configured; nothing to check.")
         return
 
-    pinned_ids = frozenset(
-        listing_id
-        for url in config.listing_urls
-        if (listing_id := derive_listing_id_from_url(url)) is not None
-    )
-
     db_conn = get_connection(DB_PATH)
+    pinned_ids = get_pinned_listing_ids(db_conn)
     before = get_price_snapshot(db_conn)
 
     with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
@@ -41,15 +36,18 @@ def main() -> None:
             fetch_succeeded = False
 
     for listing in fetched:
-        upsert_listing(db_conn, listing)
+        # Preserve pin status: check.py never sets a pin itself (it doesn't
+        # scrape LISTING_URLS), but a collection listing that's already
+        # pinned from a prior scrape.py run must not be un-pinned here.
+        upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
 
     report = compute_changes(fetched, before, pinned_ids=pinned_ids)
-    if fetch_succeeded:
+    if should_apply_delisting(fetch_succeeded, report, before, pinned_ids):
         apply_delisting(db_conn, PHOTOS_DIR, STORE_DIR, report.delisted_ids)
     elif report.delisted_ids:
         print(
             f"skipping delisted-listing cleanup ({len(report.delisted_ids)} would be "
-            "affected) — collection fetch failed"
+            "affected) — collection fetch failed or looks anomalous"
         )
 
     db_conn.close()

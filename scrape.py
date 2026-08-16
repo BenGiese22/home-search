@@ -7,8 +7,8 @@ from dotenv import dotenv_values
 from src.auth import launch_authenticated_page
 from src.config import load_config
 from src.csv_writer import write_csv
-from src.db import get_connection, get_price_snapshot, upsert_listing
-from src.diff import apply_delisting, compute_changes
+from src.db import get_connection, get_pinned_listing_ids, get_price_snapshot, upsert_listing
+from src.diff import apply_delisting, compute_changes, should_apply_delisting
 from src.gallery import write_gallery
 from src.models import Listing
 from src.photos import download_photos
@@ -43,6 +43,13 @@ def main() -> None:
     skip_photos = "--skip-photos" in sys.argv
     config = load_config(dotenv_values(".env"))
     db_conn = get_connection(DB_PATH)
+    # Tracks true pin status across this run: seeded from the DB (pins set
+    # by past runs), then grown as the explicit-URL loop below actually
+    # scrapes listings. Never derived from URL text — derive_listing_id_from_url
+    # is a best-effort heuristic (documented to return None for address-only
+    # URLs) that's fine for its original cheap resumability-check purpose,
+    # but not reliable enough to gate a hard delete on.
+    pinned_ids: set[str] = set(get_pinned_listing_ids(db_conn))
 
     with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
         for url in config.listing_urls:
@@ -52,7 +59,8 @@ def main() -> None:
                 continue
             try:
                 listing = scrape_listing(page, url)
-                upsert_listing(db_conn, listing)
+                pinned_ids.add(listing.listing_id)
+                upsert_listing(db_conn, listing, is_pinned=True)
                 if is_scraped(STORE_DIR, listing.listing_id):
                     print(f"skip (already scraped): {listing.address}")
                     continue
@@ -62,11 +70,6 @@ def main() -> None:
                 continue
 
         if config.collection_url:
-            pinned_ids = frozenset(
-                listing_id
-                for url in config.listing_urls
-                if (listing_id := derive_listing_id_from_url(url)) is not None
-            )
             before = get_price_snapshot(db_conn)
             try:
                 collection_listings = fetch_collection_listings(page, config.collection_url)
@@ -78,7 +81,10 @@ def main() -> None:
                 fetch_succeeded = False
 
             for listing in collection_listings:
-                upsert_listing(db_conn, listing)
+                # Preserve pin status if this collection listing happens to
+                # also be individually pinned (via LISTING_URLS, this run
+                # or a prior one) -- upsert_listing fully replaces the row.
+                upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
                 if is_scraped(STORE_DIR, listing.listing_id):
                     print(f"skip (already scraped): {listing.address}")
                     continue
@@ -88,13 +94,15 @@ def main() -> None:
                     print(f"skip listing (failed to process {listing.address}): {exc}")
                     continue
 
-            report = compute_changes(collection_listings, before, pinned_ids=pinned_ids)
-            if fetch_succeeded:
+            report = compute_changes(
+                collection_listings, before, pinned_ids=frozenset(pinned_ids)
+            )
+            if should_apply_delisting(fetch_succeeded, report, before, frozenset(pinned_ids)):
                 apply_delisting(db_conn, PHOTOS_DIR, STORE_DIR, report.delisted_ids)
             elif report.delisted_ids:
                 print(
                     f"skipping delisted-listing cleanup ({len(report.delisted_ids)} would "
-                    "be affected) — collection fetch failed"
+                    "be affected) — collection fetch failed or looks anomalous"
                 )
 
     db_conn.close()

@@ -73,6 +73,38 @@ def format_report(report: ChangeReport) -> str:
     return "\n".join(lines)
 
 
+SMALL_DELIST_ALWAYS_SAFE = 3
+MAX_DELISTED_FRACTION = 0.5
+
+
+def should_apply_delisting(
+    fetch_succeeded: bool,
+    report: ChangeReport,
+    before: dict[str, tuple[str, float | None]],
+    pinned_ids: frozenset[str],
+) -> bool:
+    """Guards the delisting cascade against two ways a bad collection fetch
+    can masquerade as a real mass delisting: an exception during the fetch
+    (caller passes fetch_succeeded=False), or a fetch that "succeeds" but
+    returns empty or anomalously few results (e.g. a transient API glitch
+    responding 200 OK with zero matches). A handful of delistings is always
+    left alone -- normal collections shrink by a few listings at a time,
+    not by half all at once -- but once the delisted count grows past
+    SMALL_DELIST_ALWAYS_SAFE, more than MAX_DELISTED_FRACTION of every
+    eligible (non-pinned) listing being wiped in one run is treated as more
+    consistent with a bad fetch than a real mass delisting; refuse and let
+    a human investigate rather than deleting silently."""
+    if not fetch_succeeded:
+        return False
+    delisted_count = len(report.delisted_ids)
+    if delisted_count <= SMALL_DELIST_ALWAYS_SAFE:
+        return True
+    eligible = len(set(before.keys()) - pinned_ids)
+    if eligible == 0:
+        return True
+    return delisted_count / eligible <= MAX_DELISTED_FRACTION
+
+
 def apply_delisting(
     conn: sqlite3.Connection, photos_dir: Path, store_dir: Path, delisted_ids: list[str]
 ) -> None:

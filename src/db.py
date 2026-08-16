@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS listings (
     parking_spaces INTEGER NOT NULL,
     year_built INTEGER NOT NULL,
     description TEXT NOT NULL,
-    listing_url TEXT NOT NULL
+    listing_url TEXT NOT NULL,
+    is_pinned INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS amenities (
@@ -76,14 +77,17 @@ def parse_price(price: str) -> float | None:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
-    # CREATE TABLE IF NOT EXISTS won't add columns to a scores table that
-    # already existed before has_incomplete_data was introduced — patch it
-    # in place so pre-existing dbs (e.g. data/listings.db) pick it up too.
-    existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(scores)")}
-    if "has_incomplete_data" not in existing_columns:
+    # CREATE TABLE IF NOT EXISTS won't add columns to tables that already
+    # existed before a column was introduced — patch pre-existing dbs
+    # (e.g. data/listings.db) in place so they pick new columns up too.
+    existing_score_columns = {row[1] for row in conn.execute("PRAGMA table_info(scores)")}
+    if "has_incomplete_data" not in existing_score_columns:
         conn.execute(
             "ALTER TABLE scores ADD COLUMN has_incomplete_data INTEGER NOT NULL DEFAULT 0"
         )
+    existing_listing_columns = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
+    if "is_pinned" not in existing_listing_columns:
+        conn.execute("ALTER TABLE listings ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
     conn.commit()
 
 
@@ -95,18 +99,27 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def upsert_listing(conn: sqlite3.Connection, listing: Listing) -> None:
+def upsert_listing(conn: sqlite3.Connection, listing: Listing, is_pinned: bool = False) -> None:
     """Insert or fully replace a listing's row and its amenities/photo_urls.
     Safe to call repeatedly for the same listing_id — re-scraping a listing
-    should reflect its current state, not accumulate stale child rows."""
+    should reflect its current state, not accumulate stale child rows.
+
+    is_pinned marks a listing as individually tracked (scraped via a
+    LISTING_URLS entry rather than discovered through the collection),
+    which exempts it from delisting. Because this is a full row replace,
+    every caller must pass the listing's CURRENT pin status on every call
+    — omitting it silently un-pins a previously pinned listing the next
+    time it's upserted from a different source (e.g. the collection).
+    Look it up via get_pinned_listing_ids() first if you're not the one
+    setting the pin."""
     with conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO listings (
                 listing_id, address, city, state, zip_code,
                 price, price_numeric, beds, baths, sqft, lot_sqft,
-                parking_spaces, year_built, description, listing_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                parking_spaces, year_built, description, listing_url, is_pinned
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 listing.listing_id,
@@ -124,6 +137,7 @@ def upsert_listing(conn: sqlite3.Connection, listing: Listing) -> None:
                 listing.year_built,
                 listing.description,
                 listing.listing_url,
+                int(is_pinned),
             ),
         )
         conn.execute("DELETE FROM amenities WHERE listing_id = ?", (listing.listing_id,))
@@ -136,6 +150,15 @@ def upsert_listing(conn: sqlite3.Connection, listing: Listing) -> None:
             "INSERT INTO photo_urls (listing_id, position, url) VALUES (?, ?, ?)",
             [(listing.listing_id, i, url) for i, url in enumerate(listing.photo_urls)],
         )
+
+
+def get_pinned_listing_ids(conn: sqlite3.Connection) -> frozenset[str]:
+    """Listing_ids currently marked is_pinned — tracked individually via
+    LISTING_URLS rather than discovered through the collection, and
+    therefore exempt from delisting regardless of whether they show up in
+    a collection fetch."""
+    rows = conn.execute("SELECT listing_id FROM listings WHERE is_pinned = 1").fetchall()
+    return frozenset(row["listing_id"] for row in rows)
 
 
 def get_price_snapshot(conn: sqlite3.Connection) -> dict[str, tuple[str, float | None]]:

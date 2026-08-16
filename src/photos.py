@@ -29,5 +29,15 @@ def download_photos(
 
 def delete_photos(photos_dir: Path, listing_id: str) -> None:
     """Removes a listing's downloaded photos entirely. Safe to call even if
-    the listing never had photos downloaded."""
-    shutil.rmtree(photos_dir / listing_id, ignore_errors=True)
+    the listing never had photos downloaded. A real removal failure (e.g.
+    a locked file or a permissions issue) is logged rather than silently
+    swallowed, so a failed cleanup doesn't look identical to a no-op one —
+    but it still doesn't raise, matching this project's per-item
+    log-and-continue convention."""
+    listing_dir = photos_dir / listing_id
+    if not listing_dir.exists():
+        return
+    try:
+        shutil.rmtree(listing_dir)
+    except OSError as exc:
+        print(f"warning: failed to fully remove photos for {listing_id}: {exc}")

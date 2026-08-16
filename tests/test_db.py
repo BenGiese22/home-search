@@ -7,6 +7,7 @@ from src.db import (
     get_commute,
     get_connection,
     get_listing_ids_missing_commute,
+    get_pinned_listing_ids,
     get_price_snapshot,
     get_scores,
     query_listings,
@@ -164,6 +165,46 @@ def test_get_price_snapshot_empty_db_returns_empty_dict(tmp_path: Path):
     conn = get_connection(_db_path(tmp_path))
 
     assert get_price_snapshot(conn) == {}
+
+
+def test_upsert_listing_defaults_to_not_pinned(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+
+    assert get_pinned_listing_ids(conn) == frozenset()
+
+
+def test_upsert_listing_with_is_pinned_true(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE, is_pinned=True)
+
+    assert get_pinned_listing_ids(conn) == frozenset({"abc123"})
+
+
+def test_upsert_listing_preserves_pin_when_caller_passes_it_again(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE, is_pinned=True)
+    upsert_listing(conn, SAMPLE, is_pinned=True)
+
+    assert get_pinned_listing_ids(conn) == frozenset({"abc123"})
+
+
+def test_upsert_listing_without_is_pinned_clears_a_prior_pin(tmp_path: Path):
+    # Documents the real behavior: INSERT OR REPLACE fully replaces the
+    # row, so a caller that re-upserts a previously-pinned listing without
+    # passing is_pinned=True again will silently un-pin it. Callers must
+    # look up and preserve the current pin status themselves.
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE, is_pinned=True)
+    upsert_listing(conn, SAMPLE)
+
+    assert get_pinned_listing_ids(conn) == frozenset()
+
+
+def test_get_pinned_listing_ids_empty_db_returns_empty_frozenset(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+
+    assert get_pinned_listing_ids(conn) == frozenset()
 
 
 COMMUTE_SAMPLE = CommuteResult(
