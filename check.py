@@ -4,11 +4,9 @@ from dotenv import dotenv_values
 
 from src.auth import launch_authenticated_page
 from src.config import load_config
-from src.db import delete_listing, get_connection, get_price_snapshot, upsert_listing
-from src.diff import compute_changes, format_report
-from src.photos import delete_photos
-from src.scraper import fetch_collection_listings
-from src.store import delete_stored_listing
+from src.db import get_connection, get_price_snapshot, upsert_listing
+from src.diff import apply_delisting, compute_changes, format_report
+from src.scraper import derive_listing_id_from_url, fetch_collection_listings
 
 DATA_DIR = Path("data")
 PHOTOS_DIR = DATA_DIR / "photos"
@@ -24,25 +22,35 @@ def main() -> None:
         print("No COMPASS_COLLECTION_URL configured; nothing to check.")
         return
 
+    pinned_ids = frozenset(
+        listing_id
+        for url in config.listing_urls
+        if (listing_id := derive_listing_id_from_url(url)) is not None
+    )
+
     db_conn = get_connection(DB_PATH)
     before = get_price_snapshot(db_conn)
 
     with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
         try:
             fetched = fetch_collection_listings(page, config.collection_url)
+            fetch_succeeded = True
         except Exception as exc:
             print(f"failed to fetch collection {config.collection_url}: {exc}")
             fetched = []
+            fetch_succeeded = False
 
     for listing in fetched:
         upsert_listing(db_conn, listing)
 
-    report = compute_changes(fetched, before)
-    for listing_id in report.delisted_ids:
-        delete_listing(db_conn, listing_id)
-        delete_photos(PHOTOS_DIR, listing_id)
-        delete_stored_listing(STORE_DIR, listing_id)
-        print(f"delisted: {listing_id}")
+    report = compute_changes(fetched, before, pinned_ids=pinned_ids)
+    if fetch_succeeded:
+        apply_delisting(db_conn, PHOTOS_DIR, STORE_DIR, report.delisted_ids)
+    elif report.delisted_ids:
+        print(
+            f"skipping delisted-listing cleanup ({len(report.delisted_ids)} would be "
+            "affected) — collection fetch failed"
+        )
 
     db_conn.close()
 

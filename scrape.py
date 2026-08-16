@@ -7,13 +7,13 @@ from dotenv import dotenv_values
 from src.auth import launch_authenticated_page
 from src.config import load_config
 from src.csv_writer import write_csv
-from src.db import delete_listing, get_connection, get_price_snapshot, upsert_listing
-from src.diff import compute_changes
+from src.db import get_connection, get_price_snapshot, upsert_listing
+from src.diff import apply_delisting, compute_changes
 from src.gallery import write_gallery
 from src.models import Listing
-from src.photos import delete_photos, download_photos
+from src.photos import download_photos
 from src.scraper import derive_listing_id_from_url, fetch_collection_listings, scrape_listing
-from src.store import delete_stored_listing, is_scraped, load_all_listings, save_listing
+from src.store import is_scraped, load_all_listings, save_listing
 
 DATA_DIR = Path("data")
 PHOTOS_DIR = DATA_DIR / "photos"
@@ -62,13 +62,20 @@ def main() -> None:
                 continue
 
         if config.collection_url:
+            pinned_ids = frozenset(
+                listing_id
+                for url in config.listing_urls
+                if (listing_id := derive_listing_id_from_url(url)) is not None
+            )
             before = get_price_snapshot(db_conn)
             try:
                 collection_listings = fetch_collection_listings(page, config.collection_url)
                 print(f"collection returned {len(collection_listings)} listings")
+                fetch_succeeded = True
             except Exception as exc:
                 print(f"failed to fetch collection {config.collection_url}: {exc}")
                 collection_listings = []
+                fetch_succeeded = False
 
             for listing in collection_listings:
                 upsert_listing(db_conn, listing)
@@ -81,11 +88,14 @@ def main() -> None:
                     print(f"skip listing (failed to process {listing.address}): {exc}")
                     continue
 
-            for listing_id in compute_changes(collection_listings, before).delisted_ids:
-                delete_listing(db_conn, listing_id)
-                delete_photos(PHOTOS_DIR, listing_id)
-                delete_stored_listing(STORE_DIR, listing_id)
-                print(f"delisted: {listing_id}")
+            report = compute_changes(collection_listings, before, pinned_ids=pinned_ids)
+            if fetch_succeeded:
+                apply_delisting(db_conn, PHOTOS_DIR, STORE_DIR, report.delisted_ids)
+            elif report.delisted_ids:
+                print(
+                    f"skipping delisted-listing cleanup ({len(report.delisted_ids)} would "
+                    "be affected) — collection fetch failed"
+                )
 
     db_conn.close()
 

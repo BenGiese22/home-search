@@ -1,7 +1,11 @@
+import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 
-from src.db import parse_price
+from src.db import delete_listing, parse_price
 from src.models import Listing
+from src.photos import delete_photos
+from src.store import delete_stored_listing
 
 
 @dataclass
@@ -19,13 +23,18 @@ class ChangeReport:
 
 
 def compute_changes(
-    fetched: list[Listing], before: dict[str, tuple[str, float | None]]
+    fetched: list[Listing],
+    before: dict[str, tuple[str, float | None]],
+    pinned_ids: frozenset[str] = frozenset(),
 ) -> ChangeReport:
     """Compares freshly-fetched listings against a price snapshot taken
     before this run's upserts. A listing_id absent from `before` is new;
     one present with a different price_numeric is a price change; a
     listing_id present in `before` but absent from `fetched` has dropped
-    out of the live collection — delisted."""
+    out of the live collection — delisted. `pinned_ids` (listings tracked
+    individually via LISTING_URLS, not returned by any collection fetch)
+    are never treated as delisted — their absence from `fetched` doesn't
+    mean anything, since they were never expected to appear there."""
     new_listings = []
     price_changes = []
     seen_ids: set[str] = set()
@@ -40,7 +49,7 @@ def compute_changes(
         old_price, old_price_numeric = prior
         if parse_price(listing.price) != old_price_numeric:
             price_changes.append(PriceChange(listing, old_price, listing.price))
-    delisted_ids = sorted(set(before.keys()) - seen_ids)
+    delisted_ids = sorted(set(before.keys()) - seen_ids - pinned_ids)
     return ChangeReport(
         new_listings=new_listings, price_changes=price_changes, delisted_ids=delisted_ids
     )
@@ -62,3 +71,17 @@ def format_report(report: ChangeReport) -> str:
         lines.append(f"  DELISTED  {listing_id}")
 
     return "\n".join(lines)
+
+
+def apply_delisting(
+    conn: sqlite3.Connection, photos_dir: Path, store_dir: Path, delisted_ids: list[str]
+) -> None:
+    """Removes each delisted listing everywhere it's stored: the DB row and
+    its children, downloaded photos, and the JSON store file. Prints one
+    line per listing removed. Shared by scrape.py and check.py so the
+    cascade only lives in one place."""
+    for listing_id in delisted_ids:
+        delete_listing(conn, listing_id)
+        delete_photos(photos_dir, listing_id)
+        delete_stored_listing(store_dir, listing_id)
+        print(f"delisted: {listing_id}")

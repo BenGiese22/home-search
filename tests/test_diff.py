@@ -1,4 +1,7 @@
-from src.diff import compute_changes, format_report
+from pathlib import Path
+
+from src.db import get_connection, query_listings, upsert_listing
+from src.diff import apply_delisting, compute_changes, format_report
 from src.models import Listing
 
 SAMPLE = Listing(
@@ -130,3 +133,47 @@ def test_format_report_no_delisted_reads_clean():
     text = format_report(report)
 
     assert "0 delisted" in text
+
+
+def test_pinned_id_absent_from_fetched_is_not_delisted():
+    before = {"abc123": ("$650,000", 650000.0), "pinned789": ("$1", 1.0)}
+
+    report = compute_changes([SAMPLE], before, pinned_ids=frozenset({"pinned789"}))
+
+    assert report.delisted_ids == []
+
+
+def test_pinned_id_does_not_suppress_other_delisted_ids():
+    before = {
+        "abc123": ("$650,000", 650000.0),
+        "pinned789": ("$1", 1.0),
+        "gone456": ("$500,000", 500000.0),
+    }
+
+    report = compute_changes([SAMPLE], before, pinned_ids=frozenset({"pinned789"}))
+
+    assert report.delisted_ids == ["gone456"]
+
+
+def test_apply_delisting_removes_db_row_photos_and_json(tmp_path: Path):
+    conn = get_connection(tmp_path / "listings.db")
+    upsert_listing(conn, SAMPLE)
+    photos_dir = tmp_path / "photos"
+    listing_photo_dir = photos_dir / "abc123"
+    listing_photo_dir.mkdir(parents=True)
+    (listing_photo_dir / "01.jpg").write_bytes(b"x")
+    store_dir = tmp_path / "listings"
+    store_dir.mkdir()
+    (store_dir / "abc123.json").write_text("{}")
+
+    apply_delisting(conn, photos_dir, store_dir, ["abc123"])
+
+    assert query_listings(conn) == []
+    assert not listing_photo_dir.exists()
+    assert not (store_dir / "abc123.json").exists()
+
+
+def test_apply_delisting_handles_empty_list(tmp_path: Path):
+    conn = get_connection(tmp_path / "listings.db")
+
+    apply_delisting(conn, tmp_path / "photos", tmp_path / "listings", [])  # should not raise
