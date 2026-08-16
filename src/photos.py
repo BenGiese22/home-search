@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 from typing import Callable
 
@@ -24,3 +25,9 @@ def download_photos(
             continue
         saved.append(dest)
     return saved
+
+
+def delete_photos(photos_dir: Path, listing_id: str) -> None:
+    """Removes a listing's downloaded photos entirely. Safe to call even if
+    the listing never had photos downloaded."""
+    shutil.rmtree(photos_dir / listing_id, ignore_errors=True)

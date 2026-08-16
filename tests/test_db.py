@@ -2,6 +2,7 @@ from pathlib import Path
 
 from src.commute import CommuteResult
 from src.db import (
+    delete_listing,
     get_amenities,
     get_commute,
     get_connection,
@@ -283,3 +284,34 @@ def test_get_amenities_empty_for_unknown_listing(tmp_path: Path):
     conn = get_connection(_db_path(tmp_path))
 
     assert get_amenities(conn, "nope") == []
+
+
+def test_delete_listing_removes_row_and_all_children(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    upsert_commute(conn, "abc123", COMMUTE_SAMPLE)
+    upsert_score(conn, "abc123", SCORE_SAMPLE)
+
+    delete_listing(conn, "abc123")
+
+    assert query_listings(conn) == []
+    assert get_amenities(conn, "abc123") == []
+    assert get_commute(conn, "abc123") is None
+    assert get_scores(conn) == []
+
+
+def test_delete_listing_does_not_touch_other_listings(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    other = SAMPLE.__class__(**{**SAMPLE.__dict__, "listing_id": "other456"})
+    upsert_listing(conn, other)
+
+    delete_listing(conn, "abc123")
+
+    assert [row["listing_id"] for row in query_listings(conn)] == ["other456"]
+
+
+def test_delete_listing_is_safe_when_listing_does_not_exist(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+
+    delete_listing(conn, "nope")  # should not raise

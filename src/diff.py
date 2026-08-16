@@ -15,6 +15,7 @@ class PriceChange:
 class ChangeReport:
     new_listings: list[Listing]
     price_changes: list[PriceChange]
+    delisted_ids: list[str]
 
 
 def compute_changes(
@@ -22,7 +23,9 @@ def compute_changes(
 ) -> ChangeReport:
     """Compares freshly-fetched listings against a price snapshot taken
     before this run's upserts. A listing_id absent from `before` is new;
-    one present with a different price_numeric is a price change."""
+    one present with a different price_numeric is a price change; a
+    listing_id present in `before` but absent from `fetched` has dropped
+    out of the live collection — delisted."""
     new_listings = []
     price_changes = []
     seen_ids: set[str] = set()
@@ -37,7 +40,10 @@ def compute_changes(
         old_price, old_price_numeric = prior
         if parse_price(listing.price) != old_price_numeric:
             price_changes.append(PriceChange(listing, old_price, listing.price))
-    return ChangeReport(new_listings=new_listings, price_changes=price_changes)
+    delisted_ids = sorted(set(before.keys()) - seen_ids)
+    return ChangeReport(
+        new_listings=new_listings, price_changes=price_changes, delisted_ids=delisted_ids
+    )
 
 
 def format_report(report: ChangeReport) -> str:
@@ -50,5 +56,9 @@ def format_report(report: ChangeReport) -> str:
         lines.append(
             f"  {change.listing.address}: {change.old_price} -> {change.new_price}"
         )
+
+    lines.append(f"{len(report.delisted_ids)} delisted")
+    for listing_id in report.delisted_ids:
+        lines.append(f"  DELISTED  {listing_id}")
 
     return "\n".join(lines)

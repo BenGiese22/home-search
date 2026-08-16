@@ -22,6 +22,12 @@ def save_listing(store_dir: Path, listing: Listing) -> None:
     os.replace(tmp_path, final_path)
 
 
+def delete_stored_listing(store_dir: Path, listing_id: str) -> None:
+    """Removes a listing's JSON file from the store. Safe to call even if
+    the file doesn't exist."""
+    _listing_path(store_dir, listing_id).unlink(missing_ok=True)
+
+
 def load_all_listings(store_dir: Path) -> list[Listing]:
     if not store_dir.exists():
         return []

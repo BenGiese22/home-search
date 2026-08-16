@@ -84,3 +84,49 @@ def test_format_report_no_changes_reads_clean():
 
     assert "0 new listing" in text
     assert "0 price change" in text
+
+
+def test_listing_in_snapshot_but_not_fetched_is_delisted():
+    before = {"abc123": ("$650,000", 650000.0), "gone456": ("$500,000", 500000.0)}
+
+    report = compute_changes([SAMPLE], before)
+
+    assert report.delisted_ids == ["gone456"]
+
+
+def test_no_delisted_ids_when_all_snapshot_listings_still_fetched():
+    before = {"abc123": ("$650,000", 650000.0)}
+
+    report = compute_changes([SAMPLE], before)
+
+    assert report.delisted_ids == []
+
+
+def test_delisted_ids_sorted_for_deterministic_output():
+    before = {
+        "abc123": ("$650,000", 650000.0),
+        "zzz999": ("$1", 1.0),
+        "aaa111": ("$1", 1.0),
+    }
+
+    report = compute_changes([SAMPLE], before)
+
+    assert report.delisted_ids == ["aaa111", "zzz999"]
+
+
+def test_format_report_lists_delisted_count_and_ids():
+    before = {"abc123": ("$650,000", 650000.0), "gone456": ("$500,000", 500000.0)}
+    report = compute_changes([SAMPLE], before)
+
+    text = format_report(report)
+
+    assert "1 delisted" in text
+    assert "gone456" in text
+
+
+def test_format_report_no_delisted_reads_clean():
+    report = compute_changes([SAMPLE], before={"abc123": ("$650,000", 650000.0)})
+
+    text = format_report(report)
+
+    assert "0 delisted" in text

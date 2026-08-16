@@ -250,3 +250,17 @@ def get_amenities(conn: sqlite3.Connection, listing_id: str) -> list[str]:
         "SELECT amenity FROM amenities WHERE listing_id = ? ORDER BY amenity", (listing_id,)
     ).fetchall()
     return [row["amenity"] for row in rows]
+
+
+def delete_listing(conn: sqlite3.Connection, listing_id: str) -> None:
+    """Permanently removes a listing and every child row referencing it
+    (amenities, photo_urls, commute, scores). Used when a listing drops out
+    of the live Compass collection — delisted listings are hard-deleted,
+    not archived, since they're never expected to be referenced again.
+    Safe to call for a listing_id that doesn't exist."""
+    with conn:
+        conn.execute("DELETE FROM amenities WHERE listing_id = ?", (listing_id,))
+        conn.execute("DELETE FROM photo_urls WHERE listing_id = ?", (listing_id,))
+        conn.execute("DELETE FROM commute WHERE listing_id = ?", (listing_id,))
+        conn.execute("DELETE FROM scores WHERE listing_id = ?", (listing_id,))
+        conn.execute("DELETE FROM listings WHERE listing_id = ?", (listing_id,))

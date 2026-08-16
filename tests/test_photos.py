@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from src.photos import download_photos
+from src.photos import delete_photos, download_photos
 
 
 def test_download_photos_writes_numbered_files(tmp_path: Path):
@@ -52,3 +52,18 @@ def test_download_photos_skips_photo_on_fetch_failure(tmp_path: Path):
     assert saved == [dest_dir / "02.jpg"]
     assert not (dest_dir / "01.jpg").exists()
     assert (dest_dir / "02.jpg").read_bytes() == b"good bytes"
+
+
+def test_delete_photos_removes_directory_and_contents(tmp_path: Path):
+    listing_dir = tmp_path / "abc123"
+    listing_dir.mkdir()
+    (listing_dir / "01.jpg").write_bytes(b"x")
+    (listing_dir / "02.jpg").write_bytes(b"x")
+
+    delete_photos(tmp_path, "abc123")
+
+    assert not listing_dir.exists()
+
+
+def test_delete_photos_is_safe_when_directory_missing(tmp_path: Path):
+    delete_photos(tmp_path, "nope")  # should not raise
