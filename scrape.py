@@ -7,12 +7,13 @@ from dotenv import dotenv_values
 from src.auth import launch_authenticated_page
 from src.config import load_config
 from src.csv_writer import write_csv
-from src.db import get_connection, upsert_listing
+from src.db import delete_listing, get_connection, get_price_snapshot, upsert_listing
+from src.diff import compute_changes
 from src.gallery import write_gallery
 from src.models import Listing
-from src.photos import download_photos
+from src.photos import delete_photos, download_photos
 from src.scraper import derive_listing_id_from_url, fetch_collection_listings, scrape_listing
-from src.store import is_scraped, load_all_listings, save_listing
+from src.store import delete_stored_listing, is_scraped, load_all_listings, save_listing
 
 DATA_DIR = Path("data")
 PHOTOS_DIR = DATA_DIR / "photos"
@@ -61,6 +62,7 @@ def main() -> None:
                 continue
 
         if config.collection_url:
+            before = get_price_snapshot(db_conn)
             try:
                 collection_listings = fetch_collection_listings(page, config.collection_url)
                 print(f"collection returned {len(collection_listings)} listings")
@@ -78,6 +80,12 @@ def main() -> None:
                 except Exception as exc:
                     print(f"skip listing (failed to process {listing.address}): {exc}")
                     continue
+
+            for listing_id in compute_changes(collection_listings, before).delisted_ids:
+                delete_listing(db_conn, listing_id)
+                delete_photos(PHOTOS_DIR, listing_id)
+                delete_stored_listing(STORE_DIR, listing_id)
+                print(f"delisted: {listing_id}")
 
     db_conn.close()
 
