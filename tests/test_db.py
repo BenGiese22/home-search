@@ -2,15 +2,19 @@ from pathlib import Path
 
 from src.commute import CommuteResult
 from src.db import (
+    get_amenities,
     get_commute,
     get_connection,
     get_listing_ids_missing_commute,
     get_price_snapshot,
+    get_scores,
     query_listings,
     upsert_commute,
     upsert_listing,
+    upsert_score,
 )
 from src.models import Listing
+from src.scoring import ScoreResult
 
 SAMPLE = Listing(
     listing_id="abc123",
@@ -210,13 +214,10 @@ def test_get_listing_ids_missing_commute(tmp_path: Path):
     assert get_listing_ids_missing_commute(conn) == ["other456"]
 
 
-from src.db import get_amenities, get_scores, upsert_score
-from src.scoring import ScoreResult
-
 SCORE_SAMPLE = ScoreResult(
     commute_score=80.0, sqft_score=50.0, condition_score=90.0,
     outdoor_score=100.0, parking_score=100.0, composite=79.5,
-    passes_filters=True,
+    passes_filters=True, has_incomplete_data=False,
 )
 
 
@@ -231,6 +232,18 @@ def test_upsert_score_then_get_scores(tmp_path: Path):
     assert rows[0]["listing_id"] == "abc123"
     assert rows[0]["composite"] == 79.5
     assert rows[0]["passes_filters"] == 1
+    assert rows[0]["has_incomplete_data"] == 0
+
+
+def test_upsert_score_round_trips_has_incomplete_data_true(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+
+    incomplete = ScoreResult(**{**SCORE_SAMPLE.__dict__, "has_incomplete_data": True})
+    upsert_score(conn, "abc123", incomplete)
+
+    rows = get_scores(conn)
+    assert rows[0]["has_incomplete_data"] == 1
 
 
 def test_get_scores_orders_by_composite_descending(tmp_path: Path):

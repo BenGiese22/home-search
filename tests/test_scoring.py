@@ -183,3 +183,39 @@ def test_score_listing_sets_passes_filters_flag():
 
     assert passing.passes_filters is True
     assert failing.passes_filters is False
+
+
+def test_score_listing_flags_incomplete_data_when_commute_missing():
+    stats = CollectionStats(1000, 3000, 10.0, 30.0)
+
+    missing_medtronic = score_listing(LISTING, None, 15.0, stats)
+    missing_denver = score_listing(LISTING, 18.0, None, stats)
+
+    assert missing_medtronic.has_incomplete_data is True
+    assert missing_denver.has_incomplete_data is True
+
+
+def test_score_listing_flags_incomplete_data_when_sqft_missing():
+    stats = CollectionStats(1000, 3000, 10.0, 30.0)
+    no_sqft = LISTING.__class__(**{**LISTING.__dict__, "sqft": 0})
+
+    result = score_listing(no_sqft, 18.0, 15.0, stats)
+
+    assert result.has_incomplete_data is True
+
+
+def test_score_listing_flags_incomplete_data_when_year_built_missing():
+    stats = CollectionStats(1000, 3000, 10.0, 30.0)
+    no_year_built = LISTING.__class__(**{**LISTING.__dict__, "year_built": 0})
+
+    result = score_listing(no_year_built, 18.0, 15.0, stats)
+
+    assert result.has_incomplete_data is True
+
+
+def test_score_listing_has_incomplete_data_false_when_all_present():
+    stats = CollectionStats(1000, 3000, 10.0, 30.0)
+
+    result = score_listing(LISTING, 18.0, 15.0, stats)
+
+    assert result.has_incomplete_data is False

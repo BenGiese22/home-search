@@ -23,9 +23,7 @@ RENOVATION_KEYWORDS = [
     "updated kitchen",
     "remodeled",
     "new roof",
-    "newly renovated",
     "fully updated",
-    "gut renovated",
 ]
 
 OUTDOOR_KEYWORDS = [
@@ -153,6 +151,7 @@ class ScoreResult:
     parking_score: float
     composite: float
     passes_filters: bool
+    has_incomplete_data: bool
 
 
 def score_listing(
@@ -175,6 +174,16 @@ def score_listing(
         + WEIGHT_OUTDOOR * outdoor_score
         + WEIGHT_PARKING * parking_score
     )
+    # Same missing-data conditions that trigger a NEUTRAL_SCORE fallback
+    # inside score_commute/score_sqft/score_condition — mirrored here so a
+    # listing that leaned on a neutral fallback is visibly flagged, per the
+    # spec's "Error handling" section.
+    has_incomplete_data = (
+        medtronic_minutes is None
+        or denver_minutes is None
+        or not listing.sqft
+        or not listing.year_built
+    )
     return ScoreResult(
         commute_score=commute_score,
         sqft_score=sqft_score,
@@ -183,4 +192,5 @@ def score_listing(
         parking_score=parking_score,
         composite=composite,
         passes_filters=passes_filters(listing.baths, listing.lot_sqft),
+        has_incomplete_data=has_incomplete_data,
     )

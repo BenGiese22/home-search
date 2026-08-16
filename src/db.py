@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS scores (
     parking_score REAL NOT NULL,
     composite REAL NOT NULL,
     passes_filters INTEGER NOT NULL,
+    has_incomplete_data INTEGER NOT NULL,
     computed_at TEXT NOT NULL
 );
 """
@@ -75,6 +76,14 @@ def parse_price(price: str) -> float | None:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
+    # CREATE TABLE IF NOT EXISTS won't add columns to a scores table that
+    # already existed before has_incomplete_data was introduced — patch it
+    # in place so pre-existing dbs (e.g. data/listings.db) pick it up too.
+    existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(scores)")}
+    if "has_incomplete_data" not in existing_columns:
+        conn.execute(
+            "ALTER TABLE scores ADD COLUMN has_incomplete_data INTEGER NOT NULL DEFAULT 0"
+        )
     conn.commit()
 
 
@@ -213,8 +222,9 @@ def upsert_score(conn: sqlite3.Connection, listing_id: str, result: ScoreResult)
             """
             INSERT OR REPLACE INTO scores (
                 listing_id, commute_score, sqft_score, condition_score,
-                outdoor_score, parking_score, composite, passes_filters, computed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                outdoor_score, parking_score, composite, passes_filters,
+                has_incomplete_data, computed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 listing_id,
@@ -225,6 +235,7 @@ def upsert_score(conn: sqlite3.Connection, listing_id: str, result: ScoreResult)
                 result.parking_score,
                 result.composite,
                 int(result.passes_filters),
+                int(result.has_incomplete_data),
                 datetime.now(timezone.utc).isoformat(),
             ),
         )

@@ -57,11 +57,12 @@ def main() -> None:
     ranked.sort(key=lambda pair: pair[1].composite, reverse=True)
     for listing, result in ranked:
         flag = "PASS" if result.passes_filters else "    "
+        incomplete = " [incomplete data]" if result.has_incomplete_data else ""
         print(
             f"[{flag}] {result.composite:5.1f}  {listing.address:40s} "
             f"commute={result.commute_score:5.1f} sqft={result.sqft_score:5.1f} "
             f"condition={result.condition_score:5.1f} outdoor={result.outdoor_score:5.1f} "
-            f"parking={result.parking_score:5.1f}"
+            f"parking={result.parking_score:5.1f}{incomplete}"
         )
 
     print(f"\nScored {len(ranked)} listings into {DB_PATH}")
