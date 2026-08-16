@@ -127,6 +127,71 @@ Claude Sonnet 5 rather than Opus, since the task is straightforward visual
 judgment rather than deep reasoning. This entry will be superseded by a
 formal spec once the brainstorming session concludes.
 
+## 2026-08-15 — baseline-scoring implementation completed
+
+All 8 tasks of `docs/superpowers/plans/2026-08-14-baseline-scoring.md` landed
+on `bgiese/baseline-scoring` via subagent-driven development. Notable along
+the way: a controller ruling reverted an implementer's unauthorized 20-minute
+floor added to the Denver commute leg (the design spec explicitly says that
+leg has no threshold, unlike the Medtronic leg — the *test* the implementer
+was chasing was the actual bug, not the code). The final whole-branch review
+independently re-derived all 362 listings' composite scores directly from the
+database with zero mismatches, but caught one dropped spec requirement: the
+design spec's error-handling section calls for flagging listings with any
+imputed (neutral-50) sub-score as having "incomplete data," and that half of
+the requirement was never implemented across any of the 8 tasks (the
+neutral-score-instead-of-zero half was). Fixed in one final fix wave —
+`ScoreResult.has_incomplete_data`, a matching `scores` column, and a visible
+marker in `score.py`'s report. On the real 362-listing collection this
+affects exactly the 43 listings with failed geocodes.
+
+## 2026-08-15 — photo-scoring v2 spec and plan written
+
+Full spec at `docs/superpowers/specs/2026-08-15-photo-scoring-design.md`,
+implementation plan at `docs/superpowers/plans/2026-08-15-photo-scoring.md`.
+Superseded the "2026-08-15 — photo-based scoring: brainstorming begun" entry
+above. Key decisions: room-by-room condition scoring (kitchen, bathrooms,
+living space, basement, garage — not one blob score), weighted toward
+kitchen (35%) and bathrooms (30%) per Ben's explicit priority; garage
+applicability driven by the listing's own `parking_spaces` field rather than
+asking the vision model to guess; basement gets a genuine "not applicable"
+state for homes that don't have one; an omitted room (photographed listing,
+missing that one category) scores low and flagged, but a listing with too
+few photos overall (`< 5`) is excluded from vision scoring entirely rather
+than penalized, since that usually means the listing is still being staged.
+Implementation is queued behind finishing the photo backfill (only 61 of 362
+listings have any downloaded photos as of this entry) and behind the
+stale-listing removal work below, since both touch `src/db.py`.
+
+## 2026-08-15 — stale-listing removal: hard delete, not soft-archive
+
+Local storage (SQLite + JSON store + downloaded photos) has always been
+purely additive — nothing has ever removed a listing once Compass's live
+collection stops returning it. With 362 listings locally against ~117
+currently live on the portal, this gap became worth closing. Initial design
+was a soft-archive: a nullable `delisted_at` column on `listings`, excluded
+by default from `query_listings`/the ranked report, but keeping the row (and
+its `commute`/`scores` history) in case a listing relisted later — with only
+its photos hard-deleted to avoid disk bloat.
+
+Ben reconsidered and asked for a full hard delete instead: "they're just
+never gonna be referenced again so might be better to just hard delete
+everything." Confirmed the tradeoff explicitly before proceeding — a
+delisted listing that later relists will be treated as brand new (re-scraped,
+re-geocoded, re-scored, re-photographed from scratch) rather than resuming
+history — and Ben accepted that tradeoff.
+
+Final design: extend `diff.py`'s existing `ChangeReport`/`compute_changes()`
+(which already has a `before` snapshot of every locally-known listing_id via
+`get_price_snapshot()`) with a third field, `delisted_ids` — anything in
+`before` but absent from the fresh collection fetch. On detection, cascade
+hard-delete: `amenities`/`photo_urls`/`commute`/`scores` rows, the `listings`
+row itself, the listing's photo directory, and its JSON store file. Wired
+into both `scrape.py` and `check.py`, since both already do a full collection
+fetch — not gated behind either one specifically. Not yet implemented as of
+this entry; queued to start once `bgiese/baseline-scoring` merges, since this
+work also touches `src/db.py`.
+
 ---
 
 ## Open
@@ -136,8 +201,14 @@ formal spec once the brainstorming session concludes.
   others were "no" — but the detailed reasoning behind each verdict has
   never been captured in writing. This is exactly the calibration data the
   photo-scoring rubric (and eventually the stats rubric's weights) should
-  be checked against. Deliberately not requested until photo-scoring work
-  is the actual focus, per Ben's explicit request not to be asked
-  prematurely — that condition looks like it's now being met.
-- **Photo-scoring subsystem** — architecture not yet finalized; formal
-  spec pending completion of the current brainstorming session.
+  be checked against. Ben has said he'll write it up separately when he has
+  time, rather than dictating it in conversation.
+- **Photo backfill incomplete.** Only 61 of 362 listings have any downloaded
+  photos (2,133 photo files total). Needs to be resumed/finished before the
+  photo-scoring plan can meaningfully run — most listings would currently
+  fail the plan's 5-photo floor purely because photos were never fetched,
+  not because anything's wrong with them.
+- **Stale-listing removal** — design finalized (see entry above), not yet
+  implemented.
+- **Photo-scoring implementation** — plan written, not yet started; queued
+  behind the photo backfill and the stale-listing removal work.

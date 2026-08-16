@@ -30,3 +30,58 @@ directions for a v2 pass, undecided between them:
   because it was measurably less accurate than real routing data for a
   less-documented destination — the same caution would apply here before
   trusting an LLM's geographic knowledge over ground truth.
+
+## 2026-08-15 — baseline-scoring calibration follow-ups (from the final whole-branch review)
+
+The final review of `bgiese/baseline-scoring` found these worth doing, but
+explicitly not merge-blocking — parked rather than fixed, since the one
+required fix (the incomplete-data flag) was scoped tightly on purpose. Real
+data numbers below are all against the live 362-listing collection.
+
+- **Neutral-50 commute imputation functions as a penalty, not neutral.**
+  Spec's stated intent was "one missing field shouldn't tank a composite
+  score," but on real data the 319 successfully-routed listings score
+  62.7–99.9 (median 90.0) on the commute sub-score — nothing routed scores
+  below 50. So the 43 geocode-failed listings (now visibly flagged via
+  `has_incomplete_data`) are still silently ranked beneath every routed
+  listing on the heaviest-weighted factor (35%). Consider imputing the
+  routed-collection's median instead of a flat 50.
+- **No retry path for failed geocodes.** `get_listing_ids_missing_commute`
+  keys on row *absence*, but a failed geocode still writes a row — so the
+  43 current failures are cached permanently; the only recovery today is a
+  manual `DELETE FROM commute WHERE geocode_failed=1`. Spot-checked 3 of the
+  43 live and they're genuine Nominatim misses, not transient errors, so a
+  naive retry wouldn't help today — but there's no supported path to
+  re-attempt later as OSM coverage improves. Needs either a `--retry-failed`
+  flag on `compute_commutes.py` or excluding `geocode_failed=1` rows from
+  "already covered."
+- **`score_condition` floors a keyword-miss at 0; `score_outdoor` floors the
+  same shape of problem at 40** with an explicit "absence isn't proof of
+  absence" rationale that logically applies equally to condition. Real
+  impact is large: only 6 of 362 listings match any renovation keyword, so
+  356 of 362 condition scores are compressed into `[0, 20]` — a factor
+  nominally weighted 20% contributes at most ~4 composite points for 98% of
+  the collection. Not a weight-retuning fix; needs a deliberate decision
+  since it changes real rankings.
+- **`YEAR_BUILT_MIN`/`MAX` (1955–2005) is hardcoded** while sqft and commute
+  both normalize against real `CollectionStats` computed from the live data.
+  Real collection spans 1932–2026, so 32/362 listings saturate at the 0 or
+  100 end. Consider folding year-built range into `CollectionStats` like the
+  other two.
+- **`score_parking(0) == 0.0` contradicts this project's own stated global
+  rule** ("missing input stat → neutral 50, never 0") — though it matches
+  the design spec's own parking table, which intentionally says 0. The two
+  project documents disagree with each other; worth reconciling explicitly
+  rather than leaving the contradiction standing. Affects one real listing
+  (8177 Ames Way — likely an unreported garage, not a parking-less home).
+- **`geocode_failed` is a misleading name** — `compute_commute` also sets it
+  `True` when *routing* fails with a perfectly good geocode, so a row can
+  have valid lat/lon with `geocode_failed=1`. Didn't occur on real data (all
+  43 failures have NULL lat), but `commute_failed` would be an honest
+  rename.
+- **`get_scores()` (src/db.py) is unused** — `score.py` re-sorts in Python
+  instead of using it. Either wire it in or remove it.
+- **`score.py` does 362×2 individual queries** (`get_commute` +
+  `get_amenities` per listing) rather than a joined batch query — an N+1
+  pattern, irrelevant at 362 rows, worth revisiting only if the collection
+  grows substantially.
