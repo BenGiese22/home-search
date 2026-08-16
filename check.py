@@ -5,8 +5,8 @@ from dotenv import dotenv_values
 from src.auth import launch_authenticated_page
 from src.config import load_config
 from src.db import get_connection, get_pinned_listing_ids, get_price_snapshot, upsert_listing
-from src.diff import apply_delisting, compute_changes, format_report, should_apply_delisting
-from src.scraper import fetch_collection_listings
+from src.diff import compute_changes, format_report, run_delisting
+from src.scraper import derive_pinned_ids_from_urls, fetch_collection_listings
 
 DATA_DIR = Path("data")
 PHOTOS_DIR = DATA_DIR / "photos"
@@ -23,7 +23,13 @@ def main() -> None:
         return
 
     db_conn = get_connection(DB_PATH)
-    pinned_ids = get_pinned_listing_ids(db_conn)
+    # Union of the authoritative persisted flag and a best-effort URL
+    # match: a listing whose pin predates this feature (or that a schema
+    # migration reset) is still protected here even before scrape.py next
+    # runs to durably re-pin it.
+    pinned_ids = get_pinned_listing_ids(db_conn) | derive_pinned_ids_from_urls(
+        config.listing_urls
+    )
     before = get_price_snapshot(db_conn)
 
     with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
@@ -42,13 +48,7 @@ def main() -> None:
         upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
 
     report = compute_changes(fetched, before, pinned_ids=pinned_ids)
-    if should_apply_delisting(fetch_succeeded, report, before, pinned_ids):
-        apply_delisting(db_conn, PHOTOS_DIR, STORE_DIR, report.delisted_ids)
-    elif report.delisted_ids:
-        print(
-            f"skipping delisted-listing cleanup ({len(report.delisted_ids)} would be "
-            "affected) — collection fetch failed or looks anomalous"
-        )
+    run_delisting(db_conn, PHOTOS_DIR, STORE_DIR, fetch_succeeded, report, before, pinned_ids)
 
     db_conn.close()
 

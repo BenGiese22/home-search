@@ -5,6 +5,7 @@ import pytest
 
 from src.scraper import (
     derive_listing_id_from_url,
+    derive_pinned_ids_from_urls,
     extract_collection_id,
     parse_collection_response,
 )
@@ -25,6 +26,30 @@ def test_derive_listing_id_from_url_listing_view():
 def test_derive_listing_id_from_url_no_id_returns_none():
     url = "https://www.compass.com/homedetails/2765-Canossa-Dr-Broomfield-CO-80020/"
     assert derive_listing_id_from_url(url) is None
+
+
+def test_derive_pinned_ids_from_urls_extracts_ids():
+    urls = [
+        "https://www.compass.com/listing/2130651237632606465/view",
+        "https://www.compass.com/listing/2120506603298373729/view",
+    ]
+
+    assert derive_pinned_ids_from_urls(urls) == frozenset(
+        {"2130651237632606465", "2120506603298373729"}
+    )
+
+
+def test_derive_pinned_ids_from_urls_skips_urls_with_no_id():
+    urls = [
+        "https://www.compass.com/listing/2130651237632606465/view",
+        "https://www.compass.com/homedetails/2765-Canossa-Dr-Broomfield-CO-80020/",
+    ]
+
+    assert derive_pinned_ids_from_urls(urls) == frozenset({"2130651237632606465"})
+
+
+def test_derive_pinned_ids_from_urls_empty_list_returns_empty_frozenset():
+    assert derive_pinned_ids_from_urls([]) == frozenset()
 
 
 def test_extract_collection_id_from_app_collection_url():

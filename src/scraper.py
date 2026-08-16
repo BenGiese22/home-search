@@ -22,6 +22,20 @@ def derive_listing_id_from_url(url: str) -> str | None:
     return match.group(1) if match else None
 
 
+def derive_pinned_ids_from_urls(listing_urls: list[str]) -> frozenset[str]:
+    """Best-effort listing_ids extracted from LISTING_URLS entries. Used
+    only to opportunistically reinforce pin protection for listings that a
+    schema migration, or a not-yet-rerun scrape.py, may have left unpinned
+    in the DB — never the sole source of truth for whether something is
+    protected. See get_pinned_listing_ids() in src/db.py for the
+    authoritative, persisted flag this backstops."""
+    return frozenset(
+        listing_id
+        for url in listing_urls
+        if (listing_id := derive_listing_id_from_url(url)) is not None
+    )
+
+
 def scrape_listing(page: Page, url: str) -> Listing:
     page.goto(url)
     page.wait_for_load_state("networkidle")

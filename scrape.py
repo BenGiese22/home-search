@@ -8,11 +8,16 @@ from src.auth import launch_authenticated_page
 from src.config import load_config
 from src.csv_writer import write_csv
 from src.db import get_connection, get_pinned_listing_ids, get_price_snapshot, upsert_listing
-from src.diff import apply_delisting, compute_changes, should_apply_delisting
+from src.diff import compute_changes, run_delisting
 from src.gallery import write_gallery
 from src.models import Listing
 from src.photos import download_photos
-from src.scraper import derive_listing_id_from_url, fetch_collection_listings, scrape_listing
+from src.scraper import (
+    derive_listing_id_from_url,
+    derive_pinned_ids_from_urls,
+    fetch_collection_listings,
+    scrape_listing,
+)
 from src.store import is_scraped, load_all_listings, save_listing
 
 DATA_DIR = Path("data")
@@ -43,13 +48,20 @@ def main() -> None:
     skip_photos = "--skip-photos" in sys.argv
     config = load_config(dotenv_values(".env"))
     db_conn = get_connection(DB_PATH)
-    # Tracks true pin status across this run: seeded from the DB (pins set
-    # by past runs), then grown as the explicit-URL loop below actually
-    # scrapes listings. Never derived from URL text — derive_listing_id_from_url
-    # is a best-effort heuristic (documented to return None for address-only
-    # URLs) that's fine for its original cheap resumability-check purpose,
-    # but not reliable enough to gate a hard delete on.
-    pinned_ids: set[str] = set(get_pinned_listing_ids(db_conn))
+    # Snapshot BEFORE any upserts this run touch the DB -- including the
+    # explicit-URL loop below -- so a genuine price change on a listing
+    # that's both pinned and collection-fetched is still detected. Taking
+    # this after that loop would read back the price it just wrote.
+    before = get_price_snapshot(db_conn)
+    # Tracks pin status across this run: starts as the union of the
+    # authoritative persisted flag and a best-effort URL match (protects a
+    # pin a schema migration reset, or one that predates a re-run of this
+    # script), then grows further as the explicit-URL loop below actually
+    # confirms real listing_ids via scraping -- the authoritative source
+    # for anything not already in the DB or config.
+    pinned_ids: set[str] = set(
+        get_pinned_listing_ids(db_conn) | derive_pinned_ids_from_urls(config.listing_urls)
+    )
 
     with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
         for url in config.listing_urls:
@@ -70,7 +82,6 @@ def main() -> None:
                 continue
 
         if config.collection_url:
-            before = get_price_snapshot(db_conn)
             try:
                 collection_listings = fetch_collection_listings(page, config.collection_url)
                 print(f"collection returned {len(collection_listings)} listings")
@@ -97,13 +108,10 @@ def main() -> None:
             report = compute_changes(
                 collection_listings, before, pinned_ids=frozenset(pinned_ids)
             )
-            if should_apply_delisting(fetch_succeeded, report, before, frozenset(pinned_ids)):
-                apply_delisting(db_conn, PHOTOS_DIR, STORE_DIR, report.delisted_ids)
-            elif report.delisted_ids:
-                print(
-                    f"skipping delisted-listing cleanup ({len(report.delisted_ids)} would "
-                    "be affected) — collection fetch failed or looks anomalous"
-                )
+            run_delisting(
+                db_conn, PHOTOS_DIR, STORE_DIR, fetch_succeeded, report, before,
+                frozenset(pinned_ids),
+            )
 
     db_conn.close()
 

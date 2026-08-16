@@ -73,7 +73,6 @@ def format_report(report: ChangeReport) -> str:
     return "\n".join(lines)
 
 
-SMALL_DELIST_ALWAYS_SAFE = 3
 MAX_DELISTED_FRACTION = 0.5
 
 
@@ -87,24 +86,21 @@ def should_apply_delisting(
     can masquerade as a real mass delisting: an exception during the fetch
     (caller passes fetch_succeeded=False), or a fetch that "succeeds" but
     returns empty or anomalously few results (e.g. a transient API glitch
-    responding 200 OK with zero matches). A handful of delistings is always
-    left alone -- normal collections shrink by a few listings at a time,
-    not by half all at once -- but once the delisted count grows past
-    SMALL_DELIST_ALWAYS_SAFE, more than MAX_DELISTED_FRACTION of every
-    eligible (non-pinned) listing being wiped in one run is treated as more
-    consistent with a bad fetch than a real mass delisting; refuse and let
-    a human investigate rather than deleting silently."""
+    responding 200 OK with zero matches). If more than MAX_DELISTED_FRACTION
+    of every eligible (non-pinned) listing this project already knows about
+    would be wiped in one run, that's treated as more consistent with a bad
+    fetch than a real mass delisting -- refuse and let a human investigate
+    rather than deleting silently. Deliberately no small-count exemption:
+    100% of a tiny tracked collection is exactly as suspicious as 100% of a
+    large one, and a genuinely legitimate full delisting can always be
+    confirmed by a human who sees the "skipped" message, rather than
+    happening automatically and silently."""
     if not fetch_succeeded:
         return False
-    delisted_count = len(report.delisted_ids)
-    if delisted_count <= SMALL_DELIST_ALWAYS_SAFE:
-        return True
-    # delisted_ids is always a subset of (before.keys() - pinned_ids), and
-    # we only reach here once delisted_count > SMALL_DELIST_ALWAYS_SAFE, so
-    # eligible is provably >= delisted_count > 0 -- no zero-division guard
-    # needed.
     eligible = len(set(before.keys()) - pinned_ids)
-    return delisted_count / eligible <= MAX_DELISTED_FRACTION
+    if eligible == 0:
+        return True
+    return len(report.delisted_ids) / eligible <= MAX_DELISTED_FRACTION
 
 
 def apply_delisting(
@@ -125,3 +121,25 @@ def apply_delisting(
             print(f"skip delisting (failed to remove {listing_id}): {exc}")
             continue
         print(f"delisted: {listing_id}")
+
+
+def run_delisting(
+    conn: sqlite3.Connection,
+    photos_dir: Path,
+    store_dir: Path,
+    fetch_succeeded: bool,
+    report: ChangeReport,
+    before: dict[str, tuple[str, float | None]],
+    pinned_ids: frozenset[str],
+) -> None:
+    """Decides whether it's safe to act on report.delisted_ids and, if so,
+    removes them everywhere. Centralizes the should_apply_delisting +
+    apply_delisting + skip-message flow so scrape.py and check.py share
+    one implementation instead of duplicating it."""
+    if should_apply_delisting(fetch_succeeded, report, before, pinned_ids):
+        apply_delisting(conn, photos_dir, store_dir, report.delisted_ids)
+    elif report.delisted_ids:
+        print(
+            f"skipping delisted-listing cleanup ({len(report.delisted_ids)} would be "
+            "affected) — collection fetch failed or looks anomalous"
+        )

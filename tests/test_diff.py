@@ -1,7 +1,13 @@
 from pathlib import Path
 
 from src.db import get_connection, query_listings, upsert_listing
-from src.diff import apply_delisting, compute_changes, format_report, should_apply_delisting
+from src.diff import (
+    apply_delisting,
+    compute_changes,
+    format_report,
+    run_delisting,
+    should_apply_delisting,
+)
 from src.models import Listing
 
 SAMPLE = Listing(
@@ -237,11 +243,65 @@ def test_should_apply_delisting_true_when_no_listings_known_yet():
 
 
 def test_should_apply_delisting_excludes_pinned_ids_from_the_denominator():
-    # 1 of 1 *eligible* (non-pinned) listing delisted -- at the threshold,
-    # but the pinned listing shouldn't count toward "everything known"
-    # and shouldn't itself ever appear in delisted_ids.
-    before = {"pinned1": ("$1", 1.0), "gone456": ("$1", 1.0)}
-    report = compute_changes([], before, pinned_ids=frozenset({"pinned1"}))
+    # 1 of 2 *eligible* (non-pinned) listings delisted -- the pinned
+    # listing must not count toward "everything known" or appear in
+    # delisted_ids itself.
+    before = {
+        "pinned1": ("$1", 1.0),
+        "stays123": ("$1", 1.0),
+        "gone456": ("$1", 1.0),
+    }
+    fetched = [Listing(**{**SAMPLE.__dict__, "listing_id": "stays123"})]
+    report = compute_changes(fetched, before, pinned_ids=frozenset({"pinned1"}))
 
     assert report.delisted_ids == ["gone456"]
+    # eligible = {stays123, gone456} = 2; delisted = 1 -> 0.5, at the
+    # threshold (<=), so this is still considered safe.
     assert should_apply_delisting(True, report, before, frozenset({"pinned1"})) is True
+
+
+def test_should_apply_delisting_false_for_total_wipeout_even_with_few_listings():
+    # Regression guard: a small total collection (here, 3 tracked
+    # listings) with a "successful" but empty/anomalous fetch must not be
+    # waved through just because the absolute delisted count is small --
+    # 100% of a tiny collection is exactly as suspicious as 100% of a
+    # large one.
+    before = {"a": ("$1", 1.0), "b": ("$1", 1.0), "c": ("$1", 1.0)}
+    report = compute_changes([], before)
+
+    assert should_apply_delisting(True, report, before, frozenset()) is False
+
+
+def test_run_delisting_removes_listings_when_safe(tmp_path: Path):
+    conn = get_connection(tmp_path / "listings.db")
+    upsert_listing(conn, SAMPLE)
+    other = SAMPLE.__class__(**{**SAMPLE.__dict__, "listing_id": "other456"})
+    upsert_listing(conn, other)
+    before = {"abc123": ("$1", 1.0), "other456": ("$1", 1.0)}
+    fetched = [Listing(**{**SAMPLE.__dict__, "listing_id": "other456"})]  # abc123 delisted
+    report = compute_changes(fetched, before)
+
+    run_delisting(conn, tmp_path / "photos", tmp_path / "listings", True, report, before, frozenset())
+
+    assert [row["listing_id"] for row in query_listings(conn)] == ["other456"]
+
+
+def test_run_delisting_skips_and_prints_when_unsafe(tmp_path: Path, capsys):
+    conn = get_connection(tmp_path / "listings.db")
+    upsert_listing(conn, SAMPLE)
+    before = {"abc123": ("$1", 1.0)}
+    report = compute_changes([], before)
+
+    run_delisting(conn, tmp_path / "photos", tmp_path / "listings", False, report, before, frozenset())
+
+    assert [row["listing_id"] for row in query_listings(conn)] == ["abc123"]
+    assert "1" in capsys.readouterr().out
+
+
+def test_run_delisting_prints_nothing_when_nothing_delisted(tmp_path: Path, capsys):
+    conn = get_connection(tmp_path / "listings.db")
+    report = compute_changes([], {})
+
+    run_delisting(conn, tmp_path / "photos", tmp_path / "listings", True, report, {}, frozenset())
+
+    assert capsys.readouterr().out == ""
