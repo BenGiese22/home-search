@@ -112,3 +112,43 @@ reasoning so it isn't re-litigated from scratch later.
   with this codebase's existing partial-progress-preserved philosophy
   everywhere else (scrape.py, check.py, compute_commutes.py). Performance
   is a non-issue at this data scale either way.
+
+## 2026-08-16 — stale-listing removal: round-5 review findings, not live risks
+
+A fifth review round on `bgiese/stale-listing-removal` found three more real
+gaps, but — unlike every finding in rounds 1-4 — none of these are live
+data-loss risks against this repo's actual current state. Deliberately
+parked rather than fixed, to avoid expanding scope further and risking the
+kind of complexity-induced bug the last four rounds kept catching in each
+other's fixes.
+
+- **No un-pin mechanism.** Once `is_pinned=1` is set for a listing_id,
+  nothing ever sets it back to 0 — a listing removed from `LISTING_URLS`
+  stays permanently exempt from delisting. This is an over-protection gap
+  (something lingers that should eventually be cleaned up), not an
+  under-protection one (nothing gets wrongly deleted), so it works against
+  "match the portal count in near-real-time" but never causes data loss. A
+  real fix was sketched (compare `get_pinned_listing_ids()` at the start of
+  a `scrape.py` run against listing_ids still derivable from the *current*
+  `config.listing_urls`, un-pinning anything that dropped out) but needs
+  its own safety guard — an accidentally-empty `LISTING_URLS` must not be
+  read as "unpin everything," the same class of "empty result treated as
+  ground truth" risk the delisting circuit breaker exists to prevent.
+  Worth building carefully, as its own reviewed change, not bolted on here.
+- **`scrape.py` holds the authenticated Playwright session open through the
+  entire delisting cascade** (DB deletes, `shutil.rmtree` calls, file
+  unlinks) even though the browser page isn't used again after the
+  collection fetch — `check.py` already closes its session first, so this
+  is an unintentional asymmetry. Pure resource-efficiency nit, no
+  correctness impact; low priority.
+- **`derive_pinned_ids_from_urls()`'s regex-based backstop only covers
+  numeric-ID URLs** (`/listing/<id>/view`), not the
+  `/homedetails/<address-slug>/` format (which this project's own tests
+  already document as returning no ID). Both of this repo's actual current
+  `LISTING_URLS` entries are the numeric-ID format, so the backstop fully
+  covers today's real data — this is a real gap only for a URL format not
+  currently in use here. If an address-slug URL is ever added to
+  `LISTING_URLS`, the authoritative `is_pinned` DB flag still protects it
+  correctly after the next `scrape.py` run; only the narrow
+  post-migration/pre-rerun window would be uncovered for that specific
+  listing.

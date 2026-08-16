@@ -192,6 +192,42 @@ fetch — not gated behind either one specifically. Not yet implemented as of
 this entry; queued to start once `bgiese/baseline-scoring` merges, since this
 work also touches `src/db.py`.
 
+## 2026-08-16 — stale-listing removal implemented and hardened through five review rounds
+
+Implemented the design from the entry above on `bgiese/stale-listing-removal`:
+`is_pinned` column + migration on `listings`, `derive_pinned_ids_from_urls()`
+regex backstop, `compute_changes()`'s new `delisted_ids` field, and a shared
+`should_apply_delisting()` / `apply_delisting()` / `run_delisting()` in
+`src/diff.py` wired into both `scrape.py` and `check.py`.
+
+Five successive `/code-review` rounds each found a genuine new issue the
+previous fix missed — worth recording since the pattern itself is the
+lesson: an exception during collection fetch treated every local listing as
+delisted (fixed via a `fetch_succeeded` gate); a *successful but empty*
+fetch defeated that same gate (fixed via a fraction-based circuit breaker,
+`should_apply_delisting`, capped at 50% of eligible listings with
+deliberately no small-count exemption — a tiny bypass was tried and
+rejected because 100% of a small collection is exactly as suspicious as
+100% of a large one); `LISTING_URLS`-tracked listings looked delisted since
+they're never returned by the collection fetch (fixed via a `pinned_ids`
+parameter); a non-numeric-ID URL silently lost pin protection (fixed by
+moving to a persisted `is_pinned` DB flag as the authoritative source, with
+the URL-regex heuristic demoted to a backstop union — safe to use for
+*granting* protection, unsafe as the sole gate for a *destructive* action);
+`backfill_db.py`/`backfill_photos.py` silently stripped pins by omitting
+`is_pinned` on upsert; and the `is_pinned` migration itself resets
+pre-existing rows with no backfill, confirmed live against this repo's own
+`.env` (fixed via the regex backstop union, closing exactly this window).
+Full reasoning and code for each round lives in the branch's commit history.
+
+Round 5 found three more real but non-live-risk gaps — no un-pin mechanism,
+`scrape.py` holding its browser session open through the delisting cascade,
+and the regex backstop missing `/homedetails/` address-slug URLs — all
+parked in `docs/journal/backlog.md` rather than fixed, since none of them
+can cause data loss against this repo's actual current state, unlike every
+finding in rounds 1–4. Treating this as the natural stopping point for this
+hardening cycle before merging.
+
 ---
 
 ## Open
@@ -208,7 +244,21 @@ work also touches `src/db.py`.
   photo-scoring plan can meaningfully run — most listings would currently
   fail the plan's 5-photo floor purely because photos were never fetched,
   not because anything's wrong with them.
-- **Stale-listing removal** — design finalized (see entry above), not yet
-  implemented.
+- **Stale-listing removal** — implemented and hardened (see entry above),
+  ready to merge to `main`. Once merged, the DB and photo storage directory
+  should be reset for a fresh scrape (Ben's explicit second priority, after
+  this feature).
+- **Layout/floor-plan photos in photo-scoring** — Ben noted some listings
+  include a floor-plan/layout graphic among their photos and asked whether
+  it's worth assessing. Confirmed direction: assess it, but exclude it from
+  the composite score. Not yet folded into
+  `docs/superpowers/specs/2026-08-15-photo-scoring-design.md` or the
+  matching plan.
+- **Price-per-score as a separate metric** — Ben's idea: surface
+  "composite score per dollar" (or similar) alongside the existing ranked
+  report, e.g. to compare a $500K home scoring 8 against a $650K home
+  scoring 6.5. Confirmed as an additional sortable field in `score.py`'s
+  report, deliberately *not* blended into the composite score itself.
+  Queued for after the stale-listing-removal branch merges.
 - **Photo-scoring implementation** — plan written, not yet started; queued
   behind the photo backfill and the stale-listing removal work.
