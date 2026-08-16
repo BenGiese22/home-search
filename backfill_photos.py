@@ -6,7 +6,7 @@ from dotenv import dotenv_values
 from src.auth import launch_authenticated_page
 from src.backfill import dedupe_by_listing_id
 from src.config import load_config
-from src.db import get_connection, upsert_listing
+from src.db import get_connection, get_pinned_listing_ids, upsert_listing
 from src.photos import download_photos
 from src.scraper import fetch_collection_listings
 from src.store import is_scraped, save_listing
@@ -32,6 +32,7 @@ def main() -> None:
         return
 
     db_conn = get_connection(DB_PATH)
+    pinned_ids = get_pinned_listing_ids(db_conn)
 
     with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
         try:
@@ -44,7 +45,9 @@ def main() -> None:
     print(f"fetched {len(fetched)} listings from the collection\n")
 
     for listing in fetched:
-        upsert_listing(db_conn, listing)
+        # Preserve pin status: this script only touches collection
+        # listings, but one of them may also be individually pinned.
+        upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
         try:
             download_photos(listing.photo_urls, PHOTOS_DIR / listing.listing_id, fetch_bytes)
         except Exception as exc:

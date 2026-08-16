@@ -179,6 +179,32 @@ def test_apply_delisting_handles_empty_list(tmp_path: Path):
     apply_delisting(conn, tmp_path / "photos", tmp_path / "listings", [])  # should not raise
 
 
+def test_apply_delisting_continues_past_a_failure(tmp_path: Path, monkeypatch, capsys):
+    from src import diff as diff_module
+
+    conn = get_connection(tmp_path / "listings.db")
+    upsert_listing(conn, SAMPLE)
+    other = SAMPLE.__class__(**{**SAMPLE.__dict__, "listing_id": "other456"})
+    upsert_listing(conn, other)
+
+    real_delete_listing = diff_module.delete_listing
+    calls = []
+
+    def flaky_delete_listing(conn, listing_id):
+        calls.append(listing_id)
+        if listing_id == "abc123":
+            raise Exception("database is locked")
+        real_delete_listing(conn, listing_id)
+
+    monkeypatch.setattr(diff_module, "delete_listing", flaky_delete_listing)
+
+    apply_delisting(conn, tmp_path / "photos", tmp_path / "listings", ["abc123", "other456"])
+
+    assert calls == ["abc123", "other456"]  # both attempted, one failing doesn't stop the other
+    assert [row["listing_id"] for row in query_listings(conn)] == ["abc123"]  # other456 removed
+    assert "abc123" in capsys.readouterr().out
+
+
 def test_should_apply_delisting_false_when_fetch_failed():
     before = {"abc123": ("$1", 1.0), "gone456": ("$1", 1.0)}
     report = compute_changes([], before)  # would look like both are delisted

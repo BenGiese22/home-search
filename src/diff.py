@@ -99,9 +99,11 @@ def should_apply_delisting(
     delisted_count = len(report.delisted_ids)
     if delisted_count <= SMALL_DELIST_ALWAYS_SAFE:
         return True
+    # delisted_ids is always a subset of (before.keys() - pinned_ids), and
+    # we only reach here once delisted_count > SMALL_DELIST_ALWAYS_SAFE, so
+    # eligible is provably >= delisted_count > 0 -- no zero-division guard
+    # needed.
     eligible = len(set(before.keys()) - pinned_ids)
-    if eligible == 0:
-        return True
     return delisted_count / eligible <= MAX_DELISTED_FRACTION
 
 
@@ -111,9 +113,15 @@ def apply_delisting(
     """Removes each delisted listing everywhere it's stored: the DB row and
     its children, downloaded photos, and the JSON store file. Prints one
     line per listing removed. Shared by scrape.py and check.py so the
-    cascade only lives in one place."""
+    cascade only lives in one place. A failure on one listing (e.g. a
+    locked database) is logged and skipped rather than aborting the rest
+    of the batch, matching every other per-item loop in this codebase."""
     for listing_id in delisted_ids:
-        delete_listing(conn, listing_id)
-        delete_photos(photos_dir, listing_id)
-        delete_stored_listing(store_dir, listing_id)
+        try:
+            delete_listing(conn, listing_id)
+            delete_photos(photos_dir, listing_id)
+            delete_stored_listing(store_dir, listing_id)
+        except Exception as exc:
+            print(f"skip delisting (failed to remove {listing_id}): {exc}")
+            continue
         print(f"delisted: {listing_id}")
