@@ -230,6 +230,19 @@ hardening cycle before merging.
 
 ---
 
+## 2026-08-16 — reset local storage for a fresh scrape
+
+With stale-listing removal merged, wiped `data/listings.db`, `data/photos/`,
+`data/listings/` (JSON store), `data/listings.csv`, and `data/gallery.html`
+to start clean — the prior 362-listing local dataset had accumulated well
+past the ~117 currently live on the portal, and now that delisting keeps
+the DB self-cleaning going forward, there's no reason to keep migrating old
+data through the new logic instead of just re-scraping. Kept
+`data/.auth/` (the Playwright login session) since re-authenticating is the
+only non-trivial part to regenerate. `get_connection()` re-creates the DB
+schema automatically on first connect, so no separate init step is needed
+— the next `scrape.py` run rebuilds everything from scratch.
+
 ## Open
 
 - **Six-house tour feedback not yet written down.** Ben and Megan toured
