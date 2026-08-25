@@ -29,6 +29,11 @@ PHOTOS_DIR = DATA_DIR / "photos"
 MODEL = "claude-sonnet-5"
 MAX_TOKENS = 1536
 POLL_INTERVAL_SECONDS = 60
+# Checkpoints the in-flight batch id between submission and the final
+# upsert_visual_score calls, so a crash/Ctrl-C/network blip during polling
+# doesn't leave a re-run submitting (and paying for) a second batch for the
+# same "missing" listings.
+BATCH_STATE_PATH = DATA_DIR / ".photo_scoring_batch_id"
 
 # Ported from assess_six_houses.py's live-validated prompt (verified
 # 2026-08-25 against a real "Virtual Staged" watermark in
@@ -135,24 +140,35 @@ def main() -> None:
         return
 
     client = anthropic.Anthropic()
-    batch = client.messages.batches.create(requests=requests)
-    print(f"submitted batch {batch.id} with {len(requests)} listings")
+    if BATCH_STATE_PATH.exists():
+        # Resuming after an interruption: the batch was already submitted (and
+        # paid for) last run. Requests/garage_expected_by_id above are rebuilt
+        # from local data only (no API cost), so results still parse
+        # correctly -- we just skip paying for a second batch.
+        batch_id = BATCH_STATE_PATH.read_text().strip()
+        print(f"resuming existing batch {batch_id} (found {BATCH_STATE_PATH})")
+    else:
+        batch = client.messages.batches.create(requests=requests)
+        batch_id = batch.id
+        BATCH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        BATCH_STATE_PATH.write_text(batch_id)
+        print(f"submitted batch {batch_id} with {len(requests)} listings")
 
     while True:
-        batch = client.messages.batches.retrieve(batch.id)
+        batch = client.messages.batches.retrieve(batch_id)
         if batch.processing_status == "ended":
             break
         print(f"batch status: {batch.processing_status}, waiting {POLL_INTERVAL_SECONDS}s")
         time.sleep(POLL_INTERVAL_SECONDS)
 
-    for result in client.messages.batches.results(batch.id):
+    for result in client.messages.batches.results(batch_id):
         listing_id = result.custom_id
-        garage_expected = garage_expected_by_id[listing_id]
-        if result.result.type != "succeeded":
-            upsert_visual_score(conn, listing_id, None)
-            print(f"{listing_id}: batch item {result.result.type}")
-            continue
         try:
+            garage_expected = garage_expected_by_id[listing_id]
+            if result.result.type != "succeeded":
+                upsert_visual_score(conn, listing_id, None)
+                print(f"{listing_id}: batch item {result.result.type}")
+                continue
             text = next(
                 block.text for block in result.result.message.content if block.type == "text"
             )
@@ -173,6 +189,7 @@ def main() -> None:
             f"outdoor={visual_result.outdoor_photo_score:.0f}{staging_flag}"
         )
 
+    BATCH_STATE_PATH.unlink(missing_ok=True)
     conn.close()
 
 
