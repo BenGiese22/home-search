@@ -7,10 +7,17 @@ def download_photos(
     photo_urls: list[str],
     dest_dir: Path,
     fetch_bytes: Callable[[str], bytes],
+    sleep_fn: Callable[[], None] | None = None,
 ) -> list[Path]:
     """Download each photo to dest_dir/NN.jpg, skipping files that already
     exist. A failure fetching one photo is logged and skipped rather than
-    aborting the rest of the listing's photos."""
+    aborting the rest of the listing's photos.
+
+    sleep_fn, when given, is called after every photo that actually hit the
+    network (not after a skip) -- callers pass a randomized-delay function
+    to avoid firing hundreds of photo requests back-to-back with no pacing,
+    which looks nothing like a browser loading a gallery. Left as an
+    injected no-op by default so tests run instantly."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     saved: list[Path] = []
     for i, url in enumerate(photo_urls, start=1):
@@ -24,6 +31,8 @@ def download_photos(
             print(f"skip photo (failed to download {url}): {exc}")
             continue
         saved.append(dest)
+        if sleep_fn is not None:
+            sleep_fn()
     return saved
 
 

@@ -1,7 +1,9 @@
+import random
+import time
 from pathlib import Path
 
-import requests
 from dotenv import dotenv_values
+from playwright.sync_api import Page
 
 from src.auth import launch_authenticated_page
 from src.backfill import dedupe_by_listing_id
@@ -18,11 +20,27 @@ AUTH_STATE_PATH = DATA_DIR / ".auth" / "compass_state.json"
 DB_PATH = DATA_DIR / "listings.db"
 LOGIN_URL = "https://www.compass.com/login/"
 
+# See scrape.py's matching constants/helper -- same rationale, kept in sync.
+PHOTO_JITTER_MIN_SECONDS = 0.15
+PHOTO_JITTER_MAX_SECONDS = 0.5
 
-def fetch_bytes(url: str) -> bytes:
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    return response.content
+
+def _photo_jitter() -> None:
+    time.sleep(random.uniform(PHOTO_JITTER_MIN_SECONDS, PHOTO_JITTER_MAX_SECONDS))
+
+
+def _build_fetch_bytes(page: Page):
+    """Fetches photo bytes through the authenticated page's request context
+    rather than a standalone requests.get() call -- see scrape.py's
+    matching helper for why."""
+
+    def fetch_bytes(url: str) -> bytes:
+        response = page.request.get(url)
+        if not response.ok:
+            raise RuntimeError(f"HTTP {response.status} fetching {url}")
+        return response.body()
+
+    return fetch_bytes
 
 
 def main() -> None:
@@ -41,21 +59,27 @@ def main() -> None:
             print(f"failed to fetch collection {config.collection_url}: {exc}")
             fetched = []
 
-    fetched = dedupe_by_listing_id(fetched)
-    print(f"fetched {len(fetched)} listings from the collection\n")
+        fetched = dedupe_by_listing_id(fetched)
+        print(f"fetched {len(fetched)} listings from the collection\n")
 
-    for listing in fetched:
-        # Preserve pin status: this script only touches collection
-        # listings, but one of them may also be individually pinned.
-        upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
-        try:
-            download_photos(listing.photo_urls, PHOTOS_DIR / listing.listing_id, fetch_bytes)
-        except Exception as exc:
-            print(f"skip listing (failed to download photos for {listing.address}): {exc}")
-            continue
-        if not is_scraped(STORE_DIR, listing.listing_id):
-            save_listing(STORE_DIR, listing)
-        print(f"backfilled photos: {listing.address}")
+        fetch_bytes = _build_fetch_bytes(page)
+        for listing in fetched:
+            # Preserve pin status: this script only touches collection
+            # listings, but one of them may also be individually pinned.
+            upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
+            try:
+                download_photos(
+                    listing.photo_urls,
+                    PHOTOS_DIR / listing.listing_id,
+                    fetch_bytes,
+                    sleep_fn=_photo_jitter,
+                )
+            except Exception as exc:
+                print(f"skip listing (failed to download photos for {listing.address}): {exc}")
+                continue
+            if not is_scraped(STORE_DIR, listing.listing_id):
+                save_listing(STORE_DIR, listing)
+            print(f"backfilled photos: {listing.address}")
 
     db_conn.close()
     print(f"\nBackfilled photos for {len(fetched)} listings")

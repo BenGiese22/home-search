@@ -54,6 +54,34 @@ def test_download_photos_skips_photo_on_fetch_failure(tmp_path: Path):
     assert (dest_dir / "02.jpg").read_bytes() == b"good bytes"
 
 
+def test_download_photos_calls_sleep_fn_after_each_network_fetch(tmp_path: Path):
+    dest_dir = tmp_path / "listing-1"
+    sleep_calls = []
+
+    def fake_fetch(url: str) -> bytes:
+        return b"bytes"
+
+    urls = ["https://example.com/a.jpg", "https://example.com/b.jpg"]
+    download_photos(urls, dest_dir, fake_fetch, sleep_fn=lambda: sleep_calls.append(1))
+
+    assert len(sleep_calls) == 2
+
+
+def test_download_photos_does_not_sleep_for_skipped_or_failed_photos(tmp_path: Path):
+    dest_dir = tmp_path / "listing-1"
+    dest_dir.mkdir(parents=True)
+    (dest_dir / "01.jpg").write_bytes(b"already here")
+    sleep_calls = []
+
+    def flaky_fetch(url: str) -> bytes:
+        raise RuntimeError("network error")
+
+    urls = ["https://example.com/a.jpg", "https://example.com/bad.jpg"]
+    download_photos(urls, dest_dir, flaky_fetch, sleep_fn=lambda: sleep_calls.append(1))
+
+    assert sleep_calls == []
+
+
 def test_delete_photos_removes_directory_and_contents(tmp_path: Path):
     listing_dir = tmp_path / "abc123"
     listing_dir.mkdir()

@@ -1,8 +1,10 @@
+import random
 import sys
+import time
 from pathlib import Path
 
-import requests
 from dotenv import dotenv_values
+from playwright.sync_api import Page
 
 from src.auth import launch_authenticated_page
 from src.config import load_config
@@ -29,23 +31,63 @@ GALLERY_PATH = DATA_DIR / "gallery.html"
 DB_PATH = DATA_DIR / "listings.db"
 LOGIN_URL = "https://www.compass.com/login/"
 
+# Randomized pause between photo downloads so a listing's ~20-35 photos
+# don't fire back-to-back with no pacing -- see docs/journal/decisions.md,
+# 2026-08-16, for why this and routing photo fetches through the
+# authenticated page's request context (below) both matter.
+PHOTO_JITTER_MIN_SECONDS = 0.15
+PHOTO_JITTER_MAX_SECONDS = 0.5
 
-def fetch_bytes(url: str) -> bytes:
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    return response.content
+
+def _photo_jitter() -> None:
+    time.sleep(random.uniform(PHOTO_JITTER_MIN_SECONDS, PHOTO_JITTER_MAX_SECONDS))
 
 
-def _save_listing(listing: Listing, skip_photos: bool) -> None:
-    """Download photos (unless skipped) and persist a scraped Listing."""
+def _build_fetch_bytes(page: Page):
+    """Fetches photo bytes through the already-authenticated Playwright
+    page's request context instead of a standalone requests.get() call --
+    this reuses the real browser session's cookies and HTTP/TLS
+    fingerprint, so a photo download looks like a normal in-page image
+    load rather than a separate unauthenticated script hitting the CDN."""
+
+    def fetch_bytes(url: str) -> bytes:
+        response = page.request.get(url)
+        if not response.ok:
+            raise RuntimeError(f"HTTP {response.status} fetching {url}")
+        return response.body()
+
+    return fetch_bytes
+
+
+def _save_listing(listing: Listing, skip_photos: bool, page: Page) -> None:
+    """Download photos (unless skipped) and persist a scraped Listing.
+    Safe to call again for an already-scraped listing (see --force): the
+    JSON store overwrite is idempotent, and download_photos() only fetches
+    photos that aren't already on disk, so a retry fills in gaps from a
+    prior partial failure rather than re-downloading everything."""
     if not skip_photos:
-        download_photos(listing.photo_urls, PHOTOS_DIR / listing.listing_id, fetch_bytes)
+        download_photos(
+            listing.photo_urls,
+            PHOTOS_DIR / listing.listing_id,
+            _build_fetch_bytes(page),
+            sleep_fn=_photo_jitter,
+        )
     save_listing(STORE_DIR, listing)
     print(f"scraped: {listing.address}")
 
 
+def _parse_limit(argv: list[str]) -> int | None:
+    for arg in argv:
+        if arg.startswith("--limit="):
+            return int(arg.split("=", 1)[1])
+    return None
+
+
 def main() -> None:
     skip_photos = "--skip-photos" in sys.argv
+    limit = _parse_limit(sys.argv)
+    new_listing_only = "--new-listing" in sys.argv
+    force = "--force" in sys.argv
     config = load_config(dotenv_values(".env"))
     db_conn = get_connection(DB_PATH)
     # Snapshot BEFORE any upserts this run touch the DB -- including the
@@ -66,17 +108,17 @@ def main() -> None:
     with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
         for url in config.listing_urls:
             precheck_id = derive_listing_id_from_url(url)
-            if precheck_id and is_scraped(STORE_DIR, precheck_id):
+            if not force and precheck_id and is_scraped(STORE_DIR, precheck_id):
                 print(f"skip (already scraped): {url}")
                 continue
             try:
                 listing = scrape_listing(page, url)
                 pinned_ids.add(listing.listing_id)
                 upsert_listing(db_conn, listing, is_pinned=True)
-                if is_scraped(STORE_DIR, listing.listing_id):
+                if not force and is_scraped(STORE_DIR, listing.listing_id):
                     print(f"skip (already scraped): {listing.address}")
                     continue
-                _save_listing(listing, skip_photos)
+                _save_listing(listing, skip_photos, page)
             except Exception as exc:
                 print(f"skip listing (failed to process {url}): {exc}")
                 continue
@@ -91,16 +133,49 @@ def main() -> None:
                 collection_listings = []
                 fetch_succeeded = False
 
+            # Refresh every fetched listing's DB row regardless of
+            # --limit/--new-listing -- cheap (no network), and it's what
+            # keeps price-change detection correct even during a
+            # deliberately limited/staged run that skips most photos.
             for listing in collection_listings:
                 # Preserve pin status if this collection listing happens to
                 # also be individually pinned (via LISTING_URLS, this run
                 # or a prior one) -- upsert_listing fully replaces the row.
                 upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
-                if is_scraped(STORE_DIR, listing.listing_id):
+
+            # --limit caps how many listings this run downloads photos for
+            # and saves to the JSON store -- e.g. for a first smoke test of
+            # the photo-download path against the live site. --new-listing
+            # filters to not-yet-scraped listings *before* that cap is
+            # applied: without it, --limit alone re-slices the same
+            # fixed-order prefix of collection_listings every run, and once
+            # that prefix is already scraped, a repeated --limit run does
+            # zero new work -- --new-listing is what makes a chunked,
+            # staged backfill (several --limit runs over time) actually
+            # make progress each time. compute_changes below still runs
+            # against the full collection_listings, never this filtered/
+            # capped subset, so a small batch is never mistaken for mass
+            # delisting.
+            candidates = collection_listings
+            if new_listing_only:
+                candidates = [
+                    listing for listing in candidates
+                    if not is_scraped(STORE_DIR, listing.listing_id)
+                ]
+            to_process = candidates[:limit] if limit is not None else candidates
+            if limit is not None:
+                flags = f"--limit={limit}" + (" --new-listing" if new_listing_only else "")
+                print(
+                    f"{flags}: processing {len(to_process)} of "
+                    f"{len(collection_listings)} fetched listings this run"
+                )
+
+            for listing in to_process:
+                if not force and is_scraped(STORE_DIR, listing.listing_id):
                     print(f"skip (already scraped): {listing.address}")
                     continue
                 try:
-                    _save_listing(listing, skip_photos)
+                    _save_listing(listing, skip_photos, page)
                 except Exception as exc:
                     print(f"skip listing (failed to process {listing.address}): {exc}")
                     continue
