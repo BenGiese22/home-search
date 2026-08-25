@@ -50,3 +50,12 @@ def delete_photos(photos_dir: Path, listing_id: str) -> None:
         shutil.rmtree(listing_dir)
     except OSError as exc:
         print(f"warning: failed to fully remove photos for {listing_id}: {exc}")
+
+
+def count_downloaded_photos(photos_dir: Path, listing_id: str) -> int:
+    """Counts already-downloaded photos for a listing, used to decide whether
+    there's enough to run vision scoring on."""
+    listing_dir = photos_dir / listing_id
+    if not listing_dir.exists():
+        return 0
+    return len(list(listing_dir.glob("*.jpg")))

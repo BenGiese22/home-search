@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from src.photos import delete_photos, download_photos
+from src.photos import count_downloaded_photos, delete_photos, download_photos
 
 
 def test_download_photos_writes_numbered_files(tmp_path: Path):
@@ -110,3 +110,25 @@ def test_delete_photos_logs_warning_on_real_failure(tmp_path: Path, capsys, monk
     delete_photos(tmp_path, "abc123")  # should not raise
 
     assert "abc123" in capsys.readouterr().out
+
+
+def test_count_downloaded_photos_counts_jpg_files(tmp_path: Path):
+    listing_dir = tmp_path / "abc123"
+    listing_dir.mkdir()
+    (listing_dir / "01.jpg").write_bytes(b"x")
+    (listing_dir / "02.jpg").write_bytes(b"x")
+
+    assert count_downloaded_photos(tmp_path, "abc123") == 2
+
+
+def test_count_downloaded_photos_returns_zero_when_dir_missing(tmp_path: Path):
+    assert count_downloaded_photos(tmp_path, "nope") == 0
+
+
+def test_count_downloaded_photos_ignores_non_jpg_files(tmp_path: Path):
+    listing_dir = tmp_path / "abc123"
+    listing_dir.mkdir()
+    (listing_dir / "01.jpg").write_bytes(b"x")
+    (listing_dir / "notes.txt").write_bytes(b"x")
+
+    assert count_downloaded_photos(tmp_path, "abc123") == 1
