@@ -120,24 +120,42 @@ def score_sqft(sqft: int, sqft_min: int, sqft_max: int) -> float:
     return _clamp((sqft - sqft_min) / (sqft_max - sqft_min) * 100.0)
 
 
-def score_condition(description: str, amenities: list[str], year_built: int) -> float:
-    combined = f"{description} {' '.join(amenities)}"
-    keyword_score = (
-        CONDITION_KEYWORD_HIT_SCORE
-        if _has_any_keyword(combined, RENOVATION_KEYWORDS)
-        else CONDITION_NO_KEYWORD_SCORE
-    )
+def score_condition(
+    description: str,
+    amenities: list[str],
+    year_built: int,
+    visual_condition_score: float | None = None,
+) -> float:
+    if visual_condition_score is not None:
+        condition_component = visual_condition_score
+    else:
+        combined = f"{description} {' '.join(amenities)}"
+        condition_component = (
+            CONDITION_KEYWORD_HIT_SCORE
+            if _has_any_keyword(combined, RENOVATION_KEYWORDS)
+            else CONDITION_NO_KEYWORD_SCORE
+        )
     if not year_built:
         year_score = NEUTRAL_SCORE
     else:
         normalized = (year_built - YEAR_BUILT_MIN) / (YEAR_BUILT_MAX - YEAR_BUILT_MIN)
         year_score = _clamp(normalized * 100.0)
-    return CONDITION_KEYWORD_WEIGHT * keyword_score + CONDITION_YEAR_WEIGHT * year_score
+    return CONDITION_KEYWORD_WEIGHT * condition_component + CONDITION_YEAR_WEIGHT * year_score
 
 
-def score_outdoor(description: str, amenities: list[str]) -> float:
+def score_outdoor(
+    description: str,
+    amenities: list[str],
+    visual_outdoor_score: float | None = None,
+) -> float:
+    if visual_outdoor_score is not None:
+        return visual_outdoor_score
     combined = f"{description} {' '.join(amenities)}"
-    return OUTDOOR_KEYWORD_HIT_SCORE if _has_any_keyword(combined, OUTDOOR_KEYWORDS) else OUTDOOR_NO_KEYWORD_SCORE
+    return (
+        OUTDOOR_KEYWORD_HIT_SCORE
+        if _has_any_keyword(combined, OUTDOOR_KEYWORDS)
+        else OUTDOOR_NO_KEYWORD_SCORE
+    )
 
 
 def score_room_count(beds: int, baths: float, room_count_min: float, room_count_max: float) -> float:
@@ -210,13 +228,17 @@ def score_listing(
     medtronic_minutes: float | None,
     denver_minutes: float | None,
     stats: CollectionStats,
+    visual_condition_score: float | None = None,
+    visual_outdoor_score: float | None = None,
 ) -> ScoreResult:
     commute_score = score_commute(
         medtronic_minutes, denver_minutes, stats.denver_minutes_min, stats.denver_minutes_max
     )
     sqft_score = score_sqft(listing.sqft, stats.sqft_min, stats.sqft_max)
-    condition_score = score_condition(listing.description, listing.amenities, listing.year_built)
-    outdoor_score = score_outdoor(listing.description, listing.amenities)
+    condition_score = score_condition(
+        listing.description, listing.amenities, listing.year_built, visual_condition_score
+    )
+    outdoor_score = score_outdoor(listing.description, listing.amenities, visual_outdoor_score)
     room_count_score = score_room_count(
         listing.beds, listing.baths, stats.room_count_min, stats.room_count_max
     )
