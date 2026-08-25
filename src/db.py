@@ -6,6 +6,7 @@ from pathlib import Path
 from src.commute import CommuteResult
 from src.models import Listing
 from src.scoring import ScoreResult
+from src.vision import VisualScoreResult
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS listings (
@@ -61,6 +62,21 @@ CREATE TABLE IF NOT EXISTS scores (
     composite REAL NOT NULL,
     passes_filters INTEGER NOT NULL,
     has_incomplete_data INTEGER NOT NULL,
+    computed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS visual_scores (
+    listing_id TEXT PRIMARY KEY REFERENCES listings(listing_id),
+    condition_photo_score REAL,
+    outdoor_photo_score REAL,
+    has_layout_plan INTEGER NOT NULL DEFAULT 0,
+    layout_plan_clarity_score REAL,
+    garage_attached INTEGER,
+    watermarked_staging_detected INTEGER NOT NULL DEFAULT 0,
+    suspected_unwatermarked_staging INTEGER NOT NULL DEFAULT 0,
+    staging_notes TEXT,
+    photo_score_unavailable INTEGER NOT NULL,
+    raw_response TEXT,
     computed_at TEXT NOT NULL
 );
 """
@@ -291,3 +307,64 @@ def delete_listing(conn: sqlite3.Connection, listing_id: str) -> None:
         conn.execute("DELETE FROM commute WHERE listing_id = ?", (listing_id,))
         conn.execute("DELETE FROM scores WHERE listing_id = ?", (listing_id,))
         conn.execute("DELETE FROM listings WHERE listing_id = ?", (listing_id,))
+
+
+def _bool_or_none_to_int(value: bool | None) -> int | None:
+    return None if value is None else int(value)
+
+
+def upsert_visual_score(
+    conn: sqlite3.Connection,
+    listing_id: str,
+    result: VisualScoreResult | None,
+    raw_response: str | None = None,
+) -> None:
+    """Insert or replace a listing's visual score. Pass result=None when the
+    listing has too few photos or the vision call failed -- scores are stored
+    as NULL and photo_score_unavailable=True, signaling scoring.py to fall
+    back to the v1 keyword-only computation. garage_attached/staging flags
+    are informational only -- stored for Ben to glance at, never read by
+    scoring.py."""
+    with conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO visual_scores (
+                listing_id, condition_photo_score, outdoor_photo_score,
+                has_layout_plan, layout_plan_clarity_score, garage_attached,
+                watermarked_staging_detected, suspected_unwatermarked_staging,
+                staging_notes, photo_score_unavailable, raw_response, computed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                listing_id,
+                result.condition_photo_score if result else None,
+                result.outdoor_photo_score if result else None,
+                int(result.has_layout_plan) if result else 0,
+                result.layout_plan_clarity_score if result else None,
+                _bool_or_none_to_int(result.garage_attached) if result else None,
+                int(result.watermarked_staging_detected) if result else 0,
+                int(result.suspected_unwatermarked_staging) if result else 0,
+                result.staging_notes if result else None,
+                int(result is None),
+                raw_response,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def get_visual_score(conn: sqlite3.Connection, listing_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM visual_scores WHERE listing_id = ?", (listing_id,)
+    ).fetchone()
+
+
+def get_listing_ids_missing_visual_score(conn: sqlite3.Connection) -> list[str]:
+    """Listings with no visual_scores row yet -- a rerun only pays the vision
+    API cost for listings it hasn't already covered."""
+    rows = conn.execute(
+        """
+        SELECT listing_id FROM listings
+        WHERE listing_id NOT IN (SELECT listing_id FROM visual_scores)
+        """
+    ).fetchall()
+    return [row["listing_id"] for row in rows]

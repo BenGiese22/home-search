@@ -356,3 +356,118 @@ def test_delete_listing_is_safe_when_listing_does_not_exist(tmp_path: Path):
     conn = get_connection(_db_path(tmp_path))
 
     delete_listing(conn, "nope")  # should not raise
+
+
+from src.vision import VisualScoreResult
+from src.db import get_listing_ids_missing_visual_score, get_visual_score, upsert_visual_score
+
+VISUAL_SCORE_SAMPLE = VisualScoreResult(
+    condition_photo_score=67.0,
+    outdoor_photo_score=70.0,
+    has_layout_plan=True,
+    layout_plan_clarity_score=9.0,
+    garage_attached=False,
+    watermarked_staging_detected=False,
+    suspected_unwatermarked_staging=False,
+    staging_notes="No staging concerns.",
+)
+
+
+def test_upsert_visual_score_then_get_visual_score(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+
+    upsert_visual_score(conn, "abc123", VISUAL_SCORE_SAMPLE, raw_response='{"kitchen": {}}')
+
+    row = get_visual_score(conn, "abc123")
+    assert row["condition_photo_score"] == 67.0
+    assert row["outdoor_photo_score"] == 70.0
+    assert row["has_layout_plan"] == 1
+    assert row["layout_plan_clarity_score"] == 9.0
+    assert row["garage_attached"] == 0
+    assert row["watermarked_staging_detected"] == 0
+    assert row["suspected_unwatermarked_staging"] == 0
+    assert row["staging_notes"] == "No staging concerns."
+    assert row["photo_score_unavailable"] == 0
+    assert row["raw_response"] == '{"kitchen": {}}'
+
+
+def test_upsert_visual_score_stores_garage_attached_true_and_staging_flags(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+
+    flagged = VisualScoreResult(
+        condition_photo_score=50.0,
+        outdoor_photo_score=50.0,
+        garage_attached=True,
+        watermarked_staging_detected=True,
+        suspected_unwatermarked_staging=True,
+        staging_notes="Watermark visible on 2 photos.",
+    )
+    upsert_visual_score(conn, "abc123", flagged)
+
+    row = get_visual_score(conn, "abc123")
+    assert row["garage_attached"] == 1
+    assert row["watermarked_staging_detected"] == 1
+    assert row["suspected_unwatermarked_staging"] == 1
+    assert row["staging_notes"] == "Watermark visible on 2 photos."
+
+
+def test_upsert_visual_score_stores_garage_attached_null_when_undeterminable(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+
+    upsert_visual_score(
+        conn, "abc123",
+        VisualScoreResult(condition_photo_score=50.0, outdoor_photo_score=50.0, garage_attached=None),
+    )
+
+    row = get_visual_score(conn, "abc123")
+    assert row["garage_attached"] is None
+
+
+def test_upsert_visual_score_none_marks_unavailable(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+
+    upsert_visual_score(conn, "abc123", None)
+
+    row = get_visual_score(conn, "abc123")
+    assert row["condition_photo_score"] is None
+    assert row["outdoor_photo_score"] is None
+    assert row["has_layout_plan"] == 0
+    assert row["layout_plan_clarity_score"] is None
+    assert row["garage_attached"] is None
+    assert row["watermarked_staging_detected"] == 0
+    assert row["suspected_unwatermarked_staging"] == 0
+    assert row["staging_notes"] is None
+    assert row["photo_score_unavailable"] == 1
+
+
+def test_get_visual_score_returns_none_when_absent(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+
+    assert get_visual_score(conn, "abc123") is None
+
+
+def test_upsert_visual_score_is_idempotent(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    upsert_visual_score(conn, "abc123", VISUAL_SCORE_SAMPLE)
+
+    updated = VisualScoreResult(condition_photo_score=50.0, outdoor_photo_score=50.0)
+    upsert_visual_score(conn, "abc123", updated)
+
+    row = get_visual_score(conn, "abc123")
+    assert row["condition_photo_score"] == 50.0
+
+
+def test_get_listing_ids_missing_visual_score(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    other = SAMPLE.__class__(**{**SAMPLE.__dict__, "listing_id": "other456"})
+    upsert_listing(conn, other)
+    upsert_visual_score(conn, "abc123", VISUAL_SCORE_SAMPLE)
+
+    assert get_listing_ids_missing_visual_score(conn) == ["other456"]
