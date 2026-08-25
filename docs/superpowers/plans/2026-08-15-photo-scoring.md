@@ -1,71 +1,56 @@
-# Photo Scoring Implementation Plan
+# Photo Scoring Implementation Plan (v2 — calibration-informed)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Score every listing's condition and outdoor/hosting appeal from its actual
-downloaded photos via Claude's vision + structured outputs, replacing the v1
-keyword-only placeholders in the same weight slots.
+**Supersedes:** the original 2026-08-15 draft of this same file. Same core architecture (a pure `src/vision.py`, a `visual_scores` table, a `score_photos.py` Batch API orchestrator, small additive edits to `src/scoring.py`/`score.py`), but the schema now ports the staging-detection, garage-attachment, and aerial-exclusion fields validated live by `assess_six_houses.py`, and the cost estimate is grounded in real per-listing spend instead of a guess.
 
-**Architecture:** A new pure module (`src/vision.py`) holds the room-by-room rubric,
-the JSON schema, and response parsing — no network calls, same split as
-`src/commute.py`. A new `visual_scores` SQLite table caches results per listing, keyed
-so a rerun only pays for listings it hasn't scored yet. A new top-level orchestration
-script (`score_photos.py`) does the real work: builds one Message Batch request per
-eligible listing (all its photos + a fixed instruction + the JSON schema), submits it,
-polls, and upserts results. `src/scoring.py` and `score.py` (both from the v1 plan)
-get small, additive edits so a visual score — when present — replaces the keyword
-component of `condition_score`/`outdoor_score`, and falls back to the v1 behavior
-when absent.
+**Goal:** Score every listing's condition and outdoor/hosting appeal from its actual downloaded photos via Claude's vision + structured outputs, replacing the v1 keyword-only placeholders in the same weight slots — while also capturing (never scoring) staging risk, garage attachment, and floor-plan-graphic clarity as informational signals Ben can glance at.
 
-**Tech Stack:** Python 3.12, the official `anthropic` Python SDK (new dependency),
-stdlib `sqlite3`/`json`/`base64`. No new test infrastructure.
+**Architecture:**
 
-**Spec:** `docs/superpowers/specs/2026-08-15-photo-scoring-design.md`
+```
+listings + downloaded photos (data/photos/<listing_id>/*.jpg)
+      +
+score_photos.py (Batch API orchestration, new)
+      ↓
+src/vision.py (pure: photo-count floor, image encoding, rubric, schema, parsing)
+      ↓
+visual_scores table (src/db.py, new)
+      ↓
+src/scoring.py — score_condition()/score_outdoor() read visual_scores when present,
+                  fall back to v1 keyword computation otherwise
+      ↓
+score.py — looks up visual score, passes through to score_listing()
+```
+
+**Tech Stack:** Python 3.12, `anthropic==0.116.0` (already in `requirements.txt` — no dependency work needed), stdlib `sqlite3`/`json`/`base64`. No new test infrastructure.
+
+**Specs:** `docs/superpowers/specs/2026-08-15-photo-scoring-design.md` (architecture baseline), `docs/house-tour-calibration-findings.md` (what changed and why), `assess_six_houses.py` (validated schema/prompt to port).
 
 ## Global Constraints
 
-- **Dependency on the v1 baseline-scoring plan.** Tasks 1&ndash;4 below (`src/vision.py`,
-  `src/photos.py`, the `visual_scores` table) are independent and can run any time.
-  Tasks 5&ndash;7 modify `src/scoring.py` and `score.py`, which don't exist until the v1
-  plan (`docs/superpowers/plans/2026-08-14-baseline-scoring.md`) is fully executed and
-  merged. Do not start Task 5 until `src/scoring.py` exists with `score_condition`,
-  `score_outdoor`, `score_listing`, `ScoreResult`, and `CollectionStats` as that plan
-  defines them.
-- No new `.env` variables. The `anthropic` SDK resolves `ANTHROPIC_API_KEY` (or an
-  `ant auth login` profile) automatically — nothing project-specific to configure.
-- New dependency: add `anthropic==0.116.0` to `requirements.txt` (Task 6).
-- Named constants, not magic numbers: `MIN_PHOTOS_FOR_VISION_SCORING = 5`,
-  `MISSING_CATEGORY_SCORE = 20.0`, `ROOM_WEIGHT_KITCHEN = 0.35`,
-  `ROOM_WEIGHT_BATHROOMS = 0.30`, `ROOM_WEIGHT_LIVING_SPACE = 0.20`,
-  `ROOM_WEIGHT_BASEMENT = 0.10`, `ROOM_WEIGHT_GARAGE = 0.05`.
-- Structured-output JSON schemas in this plan avoid unsupported constraints (no
-  `minimum`/`maximum` on numbers) and set `additionalProperties: false` on every
-  object, per the Claude API's structured-outputs limitations.
-- No live network calls in any test. `score_photos.py` is untested orchestration,
-  matching `scrape.py`/`check.py`/`compute_commutes.py`/`score.py` precedent &mdash;
-  **and it must not be smoke-tested against the real Anthropic API during
-  implementation**, since `ANTHROPIC_API_KEY` billing isn't set up yet and each run
-  costs real money. Verify only that it imports cleanly and is syntactically correct.
-- Test house style, matching `tests/test_db.py`/`tests/test_scoring.py`: module-level
-  fixtures, `tmp_path` for anything touching SQLite, no test classes.
+- **Dependency on `src/scoring.py`'s current shape.** `src/scoring.py` already exists (unlike when the original plan was written) and already has `score_room_count`/`WEIGHT_ROOM_COUNT`, tuned `RENOVATION_KEYWORDS`/`OUTDOOR_KEYWORDS`, and softened no-match fallback scores (`CONDITION_NO_KEYWORD_SCORE = 40.0`, `OUTDOOR_NO_KEYWORD_SCORE = 40.0`). **Task 5 below must not touch any of that** — no keyword-list edits, no fallback-score edits, no `room_count`/`parking` changes. It adds exactly two optional parameters to `score_condition`/`score_outdoor`/`score_listing` and nothing else.
+- Tasks 1–4 (`src/vision.py`, `src/photos.py`, `visual_scores` table) are independent of Task 5 and can run any time. Task 5 depends on `src/scoring.py` in its current form (already true today). Task 6 depends on Tasks 1–4. Task 7 depends on Tasks 4–6.
+- No new `.env` variables and no `requirements.txt` change — `anthropic==0.116.0` is already installed; `anthropic.Anthropic()` resolves `ANTHROPIC_API_KEY` on its own.
+- Named constants, not magic numbers: `MIN_PHOTOS_FOR_VISION_SCORING = 5`, `MISSING_CATEGORY_SCORE = 20.0`, `ROOM_WEIGHT_KITCHEN = 0.35`, `ROOM_WEIGHT_BATHROOMS = 0.30`, `ROOM_WEIGHT_LIVING_SPACE = 0.20`, `ROOM_WEIGHT_BASEMENT = 0.10`, `ROOM_WEIGHT_GARAGE = 0.05`. These stay exactly as originally spec'd — recalibrating weights or `MISSING_CATEGORY_SCORE` is explicitly a v3 concern, not this pass.
+- Structured-output JSON schemas avoid unsupported constraints (no `minimum`/`maximum` on numbers) and set `additionalProperties: false` on every object — matches `assess_six_houses.py`'s already-validated schema shape.
+- **Aerial/drone photos are excluded via a prompt-level instruction only** (in `score_photos.py`'s `INSTRUCTIONS` string) — there is no schema field, no code-level filtering, and no attempt to detect/classify/route them anywhere in `src/vision.py`. All downloaded photos are still sent to the model; the model is told to disregard aerial/drone shots entirely when reasoning about every score, note, and observation.
+- **Layout/vertical-circulation confusion is explicitly out of scope** — see "Out of scope" section below. `layout_plan` stays scoped to detecting a floor-plan/layout *graphic* photo and rating its own clarity; it never becomes a proxy for flow, circulation, or the split-level confusion the calibration findings flagged as the single biggest real rejection reason.
+- **Staging flags and garage attachment are informational only, exactly like `layout_plan`** — never entering `condition_photo_score`, `outdoor_photo_score`, or the composite. Their only effect on the numeric scores is already baked in at the *prompt* level: the model itself is instructed to pull a room's own reported score toward the middle when it suspects staging, before that score is returned to us. `parse_visual_response` does no additional staging-aware math — it only extracts and stores the flags.
+- No live network calls in any test. `score_photos.py` is untested orchestration, matching `scrape.py`/`check.py`/`compute_commutes.py`/`score.py` precedent — **it must not be smoke-tested against the real Anthropic API during implementation**, since a real run costs money. Verify only that it imports and compiles cleanly.
+- Test house style, matching `tests/test_db.py`/`tests/test_scoring.py`: module-level fixtures, `tmp_path` for anything touching SQLite, no test classes.
+- **A latent bug in the superseded plan is fixed here:** its `VisualScoreResult` dataclass had four required fields (no defaults), but its own DB idempotency test constructed one with only two kwargs — that would have raised `TypeError` the moment it ran. This plan gives every field beyond `condition_photo_score`/`outdoor_photo_score` a default, so terse construction in tests (and in `score_photos.py`'s failure paths) type-checks correctly.
 
 ---
 
 ## File Structure
 
-- **Create `src/vision.py`** — room-by-room rubric constants, the JSON schema for
-  structured output, image-encoding helper, and response parsing. Pure functions.
-- **Modify `src/photos.py`** — add `count_downloaded_photos()`, used to decide whether
-  a listing has enough photos to score.
-- **Modify `src/db.py`** — add `visual_scores` table and its accessors, mirroring the
-  `commute` table's pattern.
-- **Modify `src/scoring.py`** (v1 file) — `score_condition`, `score_outdoor`, and
-  `score_listing` gain optional visual-score parameters; `OUTDOOR_KEYWORDS` gains
-  trail/park terms.
-- **Create `score_photos.py`** (top-level, mirrors `compute_commutes.py`) — the real
-  Anthropic Batch API calls: build requests, submit, poll, parse, upsert.
-- **Modify `score.py`** (v1 file) — looks up each listing's visual score and passes it
-  into `score_listing()`.
+- **Create `src/vision.py`** — room-by-room rubric constants, the full JSON schema for structured output (condition rooms, backyard, layout_plan, staging_flags, garage with `attached`), image-encoding helper, and response parsing. Pure functions, no network calls.
+- **Modify `src/photos.py`** — add `count_downloaded_photos()`.
+- **Modify `src/db.py`** — add `visual_scores` table (sized for the full schema, including staging/garage informational columns) and its accessors.
+- **Modify `src/scoring.py`** — `score_condition`, `score_outdoor`, and `score_listing` gain optional visual-score parameters only. No other edits.
+- **Create `score_photos.py`** (top-level, mirrors `compute_commutes.py`) — Batch API orchestration, ported prompt/schema from `assess_six_houses.py`.
+- **Modify `score.py`** — looks up each listing's visual score and passes it into `score_listing()`.
 
 ---
 
@@ -86,6 +71,8 @@ stdlib `sqlite3`/`json`/`base64`. No new test infrastructure.
 # tests/test_vision.py
 import base64
 from pathlib import Path
+
+import pytest
 
 from src.vision import build_image_content_blocks, has_enough_photos
 
@@ -133,6 +120,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'src.vision'`
 ```python
 # src/vision.py
 import base64
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -163,7 +151,7 @@ def build_image_content_blocks(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_vision.py -v`
-Expected: PASS (4 passed)
+Expected: PASS (3 passed)
 
 - [ ] **Step 5: Commit**
 
@@ -174,19 +162,18 @@ git commit -m "feat(vision): add photo-count floor and image encoding"
 
 ---
 
-### Task 2: `src/vision.py` — rubric, schema, and response parsing
+### Task 2: `src/vision.py` — rubric, schema (incl. staging/garage/layout), and response parsing
+
+This is the task that ports `assess_six_houses.py`'s validated schema into the real module. It deliberately **does not** port that prototype's `gut_reaction`/`overall_verdict`/`reasoning`/`notable_photo_observations` fields — those existed only so the prototype's output could be rendered into a markdown doc for Ben to compare against his own tour notes; the real pipeline has no such comparison step and `scoring.py` never reads free-text verdicts. Everything that *is* a rubric signal (room-by-room condition with per-room `notes`, backyard, `layout_plan`, `staging_flags`, garage `attached`) is ported field-for-field.
 
 **Files:**
 - Modify: `src/vision.py`
 - Test: `tests/test_vision.py`
 
 **Interfaces:**
-- Produces: `MISSING_CATEGORY_SCORE = 20.0`, `ROOM_WEIGHT_KITCHEN = 0.35`,
-  `ROOM_WEIGHT_BATHROOMS = 0.30`, `ROOM_WEIGHT_LIVING_SPACE = 0.20`,
-  `ROOM_WEIGHT_BASEMENT = 0.10`, `ROOM_WEIGHT_GARAGE = 0.05`
-- Produces: `VISUAL_SCORE_SCHEMA: dict` (JSON schema for `output_config.format`)
-- Produces: `VisualScoreResult` dataclass (`condition_photo_score: float,
-  outdoor_photo_score: float`)
+- Produces: `MISSING_CATEGORY_SCORE = 20.0`, `ROOM_WEIGHT_KITCHEN = 0.35`, `ROOM_WEIGHT_BATHROOMS = 0.30`, `ROOM_WEIGHT_LIVING_SPACE = 0.20`, `ROOM_WEIGHT_BASEMENT = 0.10`, `ROOM_WEIGHT_GARAGE = 0.05`
+- Produces: `VISUAL_SCORE_SCHEMA: dict`
+- Produces: `VisualScoreResult` dataclass
 - Produces: `parse_visual_response(response_json: dict, garage_expected: bool) -> VisualScoreResult`
 
 - [ ] **Step 1: Write the failing tests**
@@ -196,12 +183,24 @@ git commit -m "feat(vision): add photo-count floor and image encoding"
 from src.vision import VisualScoreResult, parse_visual_response
 
 FULL_RESPONSE = {
-    "kitchen": {"status": "present", "score": 8},
-    "bathrooms": {"status": "present", "score": 6},
-    "living_space": {"status": "present", "score": 7},
-    "basement": {"status": "present", "score": 5},
-    "garage": {"status": "present", "score": 4},
-    "backyard": {"present": True, "tree_coverage": 8, "hosting_suitability": 6},
+    "kitchen": {"status": "present", "score": 8, "notes": "Updated cabinets, newer appliances."},
+    "bathrooms": {"status": "present", "score": 6, "notes": "Original tile, dated but clean."},
+    "living_space": {"status": "present", "score": 7, "notes": "Open and bright."},
+    "basement": {"status": "present", "score": 5, "notes": "Finished but low ceilings."},
+    "garage": {
+        "status": "present", "score": 4, "notes": "Detached, smaller door.",
+        "attached": False,
+    },
+    "staging_flags": {
+        "watermarked_staging_detected": False,
+        "suspected_unwatermarked_staging": False,
+        "notes": "No staging concerns noticed.",
+    },
+    "backyard": {
+        "present": True, "tree_coverage": 8, "hosting_suitability": 6,
+        "notes": "Large shaded patio.",
+    },
+    "layout_plan": {"present": True, "clarity_score": 9, "notes": "Crisp labeled floor plan photo."},
 }
 
 
@@ -213,27 +212,25 @@ def test_parse_visual_response_weighted_average_all_present():
 
 
 def test_parse_visual_response_excludes_not_applicable_basement():
-    response = {**FULL_RESPONSE, "basement": {"status": "not_applicable", "score": None}}
+    response = {**FULL_RESPONSE, "basement": {"status": "not_applicable", "score": None, "notes": "No basement."}}
 
     result = parse_visual_response(response, garage_expected=True)
 
     # weights renormalized over kitchen/bathrooms/living_space/garage (.35+.30+.20+.05=0.90)
-    # (.35*80 + .30*60 + .20*70 + .05*40) / 0.90
     assert result.condition_photo_score == pytest.approx(68.888888888888, rel=1e-9)
 
 
 def test_parse_visual_response_excludes_garage_when_not_expected():
-    response = {**FULL_RESPONSE, "garage": {"status": "present", "score": 9}}
+    response = {**FULL_RESPONSE, "garage": {"status": "present", "score": 9, "notes": "n/a", "attached": None}}
 
     result = parse_visual_response(response, garage_expected=False)
 
     # weights renormalized over kitchen/bathrooms/living_space/basement (.35+.30+.20+.10=0.95)
-    # (.35*80 + .30*60 + .20*70 + .10*50) / 0.95
     assert result.condition_photo_score == pytest.approx(68.42105263157895, rel=1e-9)
 
 
 def test_parse_visual_response_omitted_room_scores_low_not_dropped():
-    response = {**FULL_RESPONSE, "kitchen": {"status": "omitted", "score": None}}
+    response = {**FULL_RESPONSE, "kitchen": {"status": "omitted", "score": None, "notes": "No kitchen photos."}}
 
     result = parse_visual_response(response, garage_expected=True)
 
@@ -248,7 +245,10 @@ def test_parse_visual_response_backyard_present_averages_sub_attributes():
 
 
 def test_parse_visual_response_backyard_absent_scores_missing_category():
-    response = {**FULL_RESPONSE, "backyard": {"present": False, "tree_coverage": None, "hosting_suitability": None}}
+    response = {
+        **FULL_RESPONSE,
+        "backyard": {"present": False, "tree_coverage": None, "hosting_suitability": None, "notes": "No yard shown."},
+    }
 
     result = parse_visual_response(response, garage_expected=True)
 
@@ -259,10 +259,106 @@ def test_parse_visual_response_returns_visual_score_result():
     result = parse_visual_response(FULL_RESPONSE, garage_expected=True)
 
     assert isinstance(result, VisualScoreResult)
+
+
+def test_parse_visual_response_captures_layout_plan_when_present():
+    result = parse_visual_response(FULL_RESPONSE, garage_expected=True)
+
+    assert result.has_layout_plan is True
+    assert result.layout_plan_clarity_score == 9.0
+
+
+def test_parse_visual_response_captures_layout_plan_when_absent():
+    response = {**FULL_RESPONSE, "layout_plan": {"present": False, "clarity_score": None, "notes": ""}}
+
+    result = parse_visual_response(response, garage_expected=True)
+
+    assert result.has_layout_plan is False
+    assert result.layout_plan_clarity_score is None
+
+
+def test_parse_visual_response_layout_plan_does_not_affect_condition_or_outdoor():
+    with_plan = parse_visual_response(FULL_RESPONSE, garage_expected=True)
+    without_plan = parse_visual_response(
+        {**FULL_RESPONSE, "layout_plan": {"present": False, "clarity_score": None, "notes": ""}},
+        garage_expected=True,
+    )
+
+    assert with_plan.condition_photo_score == without_plan.condition_photo_score
+    assert with_plan.outdoor_photo_score == without_plan.outdoor_photo_score
+
+
+def test_parse_visual_response_captures_garage_attached_true():
+    response = {**FULL_RESPONSE, "garage": {**FULL_RESPONSE["garage"], "attached": True}}
+
+    result = parse_visual_response(response, garage_expected=True)
+
+    assert result.garage_attached is True
+
+
+def test_parse_visual_response_captures_garage_attached_false():
+    result = parse_visual_response(FULL_RESPONSE, garage_expected=True)
+
+    assert result.garage_attached is False
+
+
+def test_parse_visual_response_captures_garage_attached_null_when_undeterminable():
+    response = {**FULL_RESPONSE, "garage": {**FULL_RESPONSE["garage"], "attached": None}}
+
+    result = parse_visual_response(response, garage_expected=True)
+
+    assert result.garage_attached is None
+
+
+def test_parse_visual_response_garage_attached_does_not_affect_condition_score():
+    attached = parse_visual_response(
+        {**FULL_RESPONSE, "garage": {**FULL_RESPONSE["garage"], "attached": True}}, garage_expected=True
+    )
+    detached = parse_visual_response(
+        {**FULL_RESPONSE, "garage": {**FULL_RESPONSE["garage"], "attached": False}}, garage_expected=True
+    )
+
+    assert attached.condition_photo_score == detached.condition_photo_score
+
+
+def test_parse_visual_response_captures_staging_flags():
+    response = {
+        **FULL_RESPONSE,
+        "staging_flags": {
+            "watermarked_staging_detected": True,
+            "suspected_unwatermarked_staging": False,
+            "notes": "\"Virtual Staged\" watermark visible on living room photo.",
+        },
+    }
+
+    result = parse_visual_response(response, garage_expected=True)
+
+    assert result.watermarked_staging_detected is True
+    assert result.suspected_unwatermarked_staging is False
+    assert result.staging_notes == "\"Virtual Staged\" watermark visible on living room photo."
+
+
+def test_parse_visual_response_staging_flags_do_not_affect_scores():
+    clean = parse_visual_response(FULL_RESPONSE, garage_expected=True)
+    staged = parse_visual_response(
+        {
+            **FULL_RESPONSE,
+            "staging_flags": {
+                "watermarked_staging_detected": True,
+                "suspected_unwatermarked_staging": True,
+                "notes": "Kitchen furniture scale looks off.",
+            },
+        },
+        garage_expected=True,
+    )
+
+    # parse_visual_response itself never re-derives a score from these flags --
+    # any effect on a room's own score already happened inside the model's
+    # response (per the prompt instruction in score_photos.py), not here.
+    assert clean.condition_photo_score == staged.condition_photo_score
 ```
 
-Add `import pytest` to the top of `tests/test_vision.py` if not already present (needed
-for `pytest.approx`).
+Add `import pytest` to the top of `tests/test_vision.py` if not already present.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -270,11 +366,6 @@ Run: `pytest tests/test_vision.py -v`
 Expected: FAIL — `ImportError: cannot import name 'parse_visual_response' from 'src.vision'`
 
 - [ ] **Step 3: Write the minimal implementation**
-
-```python
-# src/vision.py — add imports at top
-from dataclasses import dataclass
-```
 
 ```python
 # src/vision.py — append at end of file
@@ -286,44 +377,96 @@ ROOM_WEIGHT_LIVING_SPACE = 0.20
 ROOM_WEIGHT_BASEMENT = 0.10
 ROOM_WEIGHT_GARAGE = 0.05
 
-_PRESENT_OMITTED_ROOM = {
+_ROOM = {
     "type": "object",
     "properties": {
         "status": {"enum": ["present", "omitted"]},
         "score": {"type": ["integer", "null"]},
+        "notes": {"type": "string"},
     },
-    "required": ["status", "score"],
+    "required": ["status", "score", "notes"],
+    "additionalProperties": False,
+}
+
+_BASEMENT = {
+    "type": "object",
+    "properties": {
+        "status": {"enum": ["present", "omitted", "not_applicable"]},
+        "score": {"type": ["integer", "null"]},
+        "notes": {"type": "string"},
+    },
+    "required": ["status", "score", "notes"],
+    "additionalProperties": False,
+}
+
+_GARAGE = {
+    "type": "object",
+    "properties": {
+        "status": {"enum": ["present", "omitted"]},
+        "score": {"type": ["integer", "null"]},
+        "notes": {"type": "string"},
+        # Informational only -- never scored, same treatment as layout_plan.
+        # Ben flagged a detached garage as a real rejection reason (960 E 9th
+        # Ave) that a bare condition score can't distinguish from an attached
+        # one. null when the model can't tell from exterior photos.
+        "attached": {"type": ["boolean", "null"]},
+    },
+    "required": ["status", "score", "notes", "attached"],
+    "additionalProperties": False,
+}
+
+_STAGING_FLAGS = {
+    "type": "object",
+    "properties": {
+        "watermarked_staging_detected": {"type": "boolean"},
+        "suspected_unwatermarked_staging": {"type": "boolean"},
+        "notes": {"type": "string"},
+    },
+    "required": [
+        "watermarked_staging_detected", "suspected_unwatermarked_staging", "notes",
+    ],
+    "additionalProperties": False,
+}
+
+_BACKYARD = {
+    "type": "object",
+    "properties": {
+        "present": {"type": "boolean"},
+        "tree_coverage": {"type": ["integer", "null"]},
+        "hosting_suitability": {"type": ["integer", "null"]},
+        "notes": {"type": "string"},
+    },
+    "required": ["present", "tree_coverage", "hosting_suitability", "notes"],
+    "additionalProperties": False,
+}
+
+_LAYOUT_PLAN = {
+    "type": "object",
+    "properties": {
+        "present": {"type": "boolean"},
+        "clarity_score": {"type": ["integer", "null"]},
+        "notes": {"type": "string"},
+    },
+    "required": ["present", "clarity_score", "notes"],
     "additionalProperties": False,
 }
 
 VISUAL_SCORE_SCHEMA = {
     "type": "object",
     "properties": {
-        "kitchen": _PRESENT_OMITTED_ROOM,
-        "bathrooms": _PRESENT_OMITTED_ROOM,
-        "living_space": _PRESENT_OMITTED_ROOM,
-        "basement": {
-            "type": "object",
-            "properties": {
-                "status": {"enum": ["present", "omitted", "not_applicable"]},
-                "score": {"type": ["integer", "null"]},
-            },
-            "required": ["status", "score"],
-            "additionalProperties": False,
-        },
-        "garage": _PRESENT_OMITTED_ROOM,
-        "backyard": {
-            "type": "object",
-            "properties": {
-                "present": {"type": "boolean"},
-                "tree_coverage": {"type": ["integer", "null"]},
-                "hosting_suitability": {"type": ["integer", "null"]},
-            },
-            "required": ["present", "tree_coverage", "hosting_suitability"],
-            "additionalProperties": False,
-        },
+        "kitchen": _ROOM,
+        "bathrooms": _ROOM,
+        "living_space": _ROOM,
+        "basement": _BASEMENT,
+        "garage": _GARAGE,
+        "staging_flags": _STAGING_FLAGS,
+        "backyard": _BACKYARD,
+        "layout_plan": _LAYOUT_PLAN,
     },
-    "required": ["kitchen", "bathrooms", "living_space", "basement", "garage", "backyard"],
+    "required": [
+        "kitchen", "bathrooms", "living_space", "basement", "garage",
+        "staging_flags", "backyard", "layout_plan",
+    ],
     "additionalProperties": False,
 }
 
@@ -332,6 +475,16 @@ VISUAL_SCORE_SCHEMA = {
 class VisualScoreResult:
     condition_photo_score: float
     outdoor_photo_score: float
+    # Everything below is informational only -- never read by scoring.py or
+    # folded into either score above. See
+    # docs/house-tour-calibration-findings.md and
+    # docs/superpowers/specs/2026-08-15-photo-scoring-design.md.
+    has_layout_plan: bool = False
+    layout_plan_clarity_score: float | None = None
+    garage_attached: bool | None = None
+    watermarked_staging_detected: bool = False
+    suspected_unwatermarked_staging: bool = False
+    staging_notes: str = ""
 
 
 def _room_contribution(room: dict) -> float | None:
@@ -367,9 +520,21 @@ def parse_visual_response(response_json: dict, garage_expected: bool) -> VisualS
     else:
         outdoor_photo_score = MISSING_CATEGORY_SCORE
 
+    layout_plan = response_json["layout_plan"]
+    garage = response_json["garage"]
+    staging = response_json["staging_flags"]
+
     return VisualScoreResult(
         condition_photo_score=condition_photo_score,
         outdoor_photo_score=outdoor_photo_score,
+        has_layout_plan=layout_plan["present"],
+        layout_plan_clarity_score=(
+            float(layout_plan["clarity_score"]) if layout_plan["present"] else None
+        ),
+        garage_attached=garage["attached"],
+        watermarked_staging_detected=staging["watermarked_staging_detected"],
+        suspected_unwatermarked_staging=staging["suspected_unwatermarked_staging"],
+        staging_notes=staging["notes"],
     )
 ```
 
@@ -382,7 +547,7 @@ Expected: PASS (all tests)
 
 ```bash
 git add src/vision.py tests/test_vision.py
-git commit -m "feat(vision): add room-by-room rubric and response parsing"
+git commit -m "feat(vision): add room-by-room rubric, staging/garage/layout parsing"
 ```
 
 ---
@@ -395,6 +560,8 @@ git commit -m "feat(vision): add room-by-room rubric and response parsing"
 
 **Interfaces:**
 - Produces: `count_downloaded_photos(photos_dir: Path, listing_id: str) -> int`
+
+Verified against the current `src/photos.py` — it has only `download_photos`/`delete_photos` today, so this is a clean addition, no conflicts.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -425,6 +592,8 @@ def test_count_downloaded_photos_ignores_non_jpg_files(tmp_path: Path):
     assert count_downloaded_photos(tmp_path, "abc123") == 1
 ```
 
+`Path` is already imported at the top of `tests/test_photos.py`.
+
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_photos.py -v`
@@ -446,7 +615,7 @@ def count_downloaded_photos(photos_dir: Path, listing_id: str) -> int:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_photos.py -v`
-Expected: PASS (all tests, including the pre-existing `download_photos` tests)
+Expected: PASS (all tests, including the pre-existing `download_photos`/`delete_photos` tests)
 
 - [ ] **Step 5: Commit**
 
@@ -457,7 +626,7 @@ git commit -m "feat(photos): add downloaded-photo counter"
 
 ---
 
-### Task 4: `src/db.py` — visual_scores table
+### Task 4: `src/db.py` — `visual_scores` table
 
 **Files:**
 - Modify: `src/db.py`
@@ -469,6 +638,8 @@ git commit -m "feat(photos): add downloaded-photo counter"
 - Produces: `get_visual_score(conn: sqlite3.Connection, listing_id: str) -> sqlite3.Row | None`
 - Produces: `get_listing_ids_missing_visual_score(conn: sqlite3.Connection) -> list[str]`
 
+Confirmed against the current `src/db.py`: there is no `visual_scores` table today, so this is a brand-new `CREATE TABLE` with no migration/`ALTER TABLE` needed for pre-existing rows (unlike `has_incomplete_data`/`room_count_score`/`is_pinned`, which needed `init_db`'s patch-in-place logic because they were added to already-existing tables).
+
 - [ ] **Step 1: Write the failing tests**
 
 ```python
@@ -476,7 +647,16 @@ git commit -m "feat(photos): add downloaded-photo counter"
 from src.vision import VisualScoreResult
 from src.db import get_listing_ids_missing_visual_score, get_visual_score, upsert_visual_score
 
-VISUAL_SCORE_SAMPLE = VisualScoreResult(condition_photo_score=67.0, outdoor_photo_score=70.0)
+VISUAL_SCORE_SAMPLE = VisualScoreResult(
+    condition_photo_score=67.0,
+    outdoor_photo_score=70.0,
+    has_layout_plan=True,
+    layout_plan_clarity_score=9.0,
+    garage_attached=False,
+    watermarked_staging_detected=False,
+    suspected_unwatermarked_staging=False,
+    staging_notes="No staging concerns.",
+)
 
 
 def test_upsert_visual_score_then_get_visual_score(tmp_path: Path):
@@ -488,8 +668,48 @@ def test_upsert_visual_score_then_get_visual_score(tmp_path: Path):
     row = get_visual_score(conn, "abc123")
     assert row["condition_photo_score"] == 67.0
     assert row["outdoor_photo_score"] == 70.0
+    assert row["has_layout_plan"] == 1
+    assert row["layout_plan_clarity_score"] == 9.0
+    assert row["garage_attached"] == 0
+    assert row["watermarked_staging_detected"] == 0
+    assert row["suspected_unwatermarked_staging"] == 0
+    assert row["staging_notes"] == "No staging concerns."
     assert row["photo_score_unavailable"] == 0
     assert row["raw_response"] == '{"kitchen": {}}'
+
+
+def test_upsert_visual_score_stores_garage_attached_true_and_staging_flags(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+
+    flagged = VisualScoreResult(
+        condition_photo_score=50.0,
+        outdoor_photo_score=50.0,
+        garage_attached=True,
+        watermarked_staging_detected=True,
+        suspected_unwatermarked_staging=True,
+        staging_notes="Watermark visible on 2 photos.",
+    )
+    upsert_visual_score(conn, "abc123", flagged)
+
+    row = get_visual_score(conn, "abc123")
+    assert row["garage_attached"] == 1
+    assert row["watermarked_staging_detected"] == 1
+    assert row["suspected_unwatermarked_staging"] == 1
+    assert row["staging_notes"] == "Watermark visible on 2 photos."
+
+
+def test_upsert_visual_score_stores_garage_attached_null_when_undeterminable(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+
+    upsert_visual_score(
+        conn, "abc123",
+        VisualScoreResult(condition_photo_score=50.0, outdoor_photo_score=50.0, garage_attached=None),
+    )
+
+    row = get_visual_score(conn, "abc123")
+    assert row["garage_attached"] is None
 
 
 def test_upsert_visual_score_none_marks_unavailable(tmp_path: Path):
@@ -501,6 +721,12 @@ def test_upsert_visual_score_none_marks_unavailable(tmp_path: Path):
     row = get_visual_score(conn, "abc123")
     assert row["condition_photo_score"] is None
     assert row["outdoor_photo_score"] is None
+    assert row["has_layout_plan"] == 0
+    assert row["layout_plan_clarity_score"] is None
+    assert row["garage_attached"] is None
+    assert row["watermarked_staging_detected"] == 0
+    assert row["suspected_unwatermarked_staging"] == 0
+    assert row["staging_notes"] is None
     assert row["photo_score_unavailable"] == 1
 
 
@@ -541,7 +767,7 @@ Expected: FAIL — `ImportError: cannot import name 'upsert_visual_score' from '
 - [ ] **Step 3: Write the minimal implementation**
 
 ```python
-# src/db.py — add import at top
+# src/db.py — add import at top, alongside the existing src.scoring import
 from src.vision import VisualScoreResult
 ```
 
@@ -551,6 +777,12 @@ CREATE TABLE IF NOT EXISTS visual_scores (
     listing_id TEXT PRIMARY KEY REFERENCES listings(listing_id),
     condition_photo_score REAL,
     outdoor_photo_score REAL,
+    has_layout_plan INTEGER NOT NULL DEFAULT 0,
+    layout_plan_clarity_score REAL,
+    garage_attached INTEGER,
+    watermarked_staging_detected INTEGER NOT NULL DEFAULT 0,
+    suspected_unwatermarked_staging INTEGER NOT NULL DEFAULT 0,
+    staging_notes TEXT,
     photo_score_unavailable INTEGER NOT NULL,
     raw_response TEXT,
     computed_at TEXT NOT NULL
@@ -559,6 +791,10 @@ CREATE TABLE IF NOT EXISTS visual_scores (
 
 ```python
 # src/db.py — append at end of file
+def _bool_or_none_to_int(value: bool | None) -> int | None:
+    return None if value is None else int(value)
+
+
 def upsert_visual_score(
     conn: sqlite3.Connection,
     listing_id: str,
@@ -566,21 +802,31 @@ def upsert_visual_score(
     raw_response: str | None = None,
 ) -> None:
     """Insert or replace a listing's visual score. Pass result=None when the
-    listing has too few photos or the vision call failed — scores are stored
+    listing has too few photos or the vision call failed -- scores are stored
     as NULL and photo_score_unavailable=True, signaling scoring.py to fall
-    back to the v1 keyword-only computation."""
+    back to the v1 keyword-only computation. garage_attached/staging flags
+    are informational only -- stored for Ben to glance at, never read by
+    scoring.py."""
     with conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO visual_scores (
                 listing_id, condition_photo_score, outdoor_photo_score,
-                photo_score_unavailable, raw_response, computed_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                has_layout_plan, layout_plan_clarity_score, garage_attached,
+                watermarked_staging_detected, suspected_unwatermarked_staging,
+                staging_notes, photo_score_unavailable, raw_response, computed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 listing_id,
                 result.condition_photo_score if result else None,
                 result.outdoor_photo_score if result else None,
+                int(result.has_layout_plan) if result else 0,
+                result.layout_plan_clarity_score if result else None,
+                _bool_or_none_to_int(result.garage_attached) if result else None,
+                int(result.watermarked_staging_detected) if result else 0,
+                int(result.suspected_unwatermarked_staging) if result else 0,
+                result.staging_notes if result else None,
                 int(result is None),
                 raw_response,
                 datetime.now(timezone.utc).isoformat(),
@@ -595,7 +841,7 @@ def get_visual_score(conn: sqlite3.Connection, listing_id: str) -> sqlite3.Row |
 
 
 def get_listing_ids_missing_visual_score(conn: sqlite3.Connection) -> list[str]:
-    """Listings with no visual_scores row yet — a rerun only pays the vision
+    """Listings with no visual_scores row yet -- a rerun only pays the vision
     API cost for listings it hasn't already covered."""
     rows = conn.execute(
         """
@@ -606,8 +852,7 @@ def get_listing_ids_missing_visual_score(conn: sqlite3.Connection) -> list[str]:
     return [row["listing_id"] for row in rows]
 ```
 
-`datetime`/`timezone` are already imported in `src/db.py` from the commute-table task;
-do not re-import.
+`datetime`/`timezone` are already imported in `src/db.py`; do not re-import.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -618,25 +863,19 @@ Expected: PASS (all `test_db.py` tests)
 
 ```bash
 git add src/db.py tests/test_db.py
-git commit -m "feat(db): add visual_scores table and accessors"
+git commit -m "feat(db): add visual_scores table with staging/garage columns"
 ```
 
 ---
 
-### Task 5: `src/scoring.py` — accept optional visual scores; extend outdoor keywords
+### Task 5: `src/scoring.py` — accept optional visual scores (additive only)
 
 **Files:**
-- Modify: `src/scoring.py` (created by the v1 baseline-scoring plan — read its current
-  full contents before editing; this task adds optional parameters, it does not
-  restructure anything)
+- Modify: `src/scoring.py` (already exists; this task adds two optional parameters to three functions and touches nothing else: `RENOVATION_KEYWORDS`, `OUTDOOR_KEYWORDS`, `CONDITION_NO_KEYWORD_SCORE`, `OUTDOOR_NO_KEYWORD_SCORE`, `score_room_count`, `score_parking`, `passes_filters`, `CollectionStats`, `ScoreResult.room_count_score`/`has_incomplete_data` all stay exactly as they are today)
 - Test: `tests/test_scoring.py`
 
 **Interfaces:**
-- Consumes: `score_condition`, `score_outdoor`, `score_listing`, `ScoreResult`,
-  `CollectionStats`, `OUTDOOR_KEYWORDS`, `RENOVATION_KEYWORDS`, `NEUTRAL_SCORE`,
-  `CONDITION_KEYWORD_WEIGHT`, `CONDITION_YEAR_WEIGHT`, `YEAR_BUILT_MIN`,
-  `YEAR_BUILT_MAX`, `WEIGHT_COMMUTE`/`WEIGHT_SQFT`/`WEIGHT_CONDITION`/`WEIGHT_OUTDOOR`/`WEIGHT_PARKING`,
-  `LISTING` test fixture — all exactly as defined by the v1 plan's Tasks 5&ndash;6
+- Consumes (unchanged, exactly as currently defined): `CollectionStats`, `WEIGHT_COMMUTE`, `WEIGHT_CONDITION`, `WEIGHT_OUTDOOR`, `WEIGHT_PARKING`, `WEIGHT_ROOM_COUNT`, `WEIGHT_SQFT`, `CONDITION_KEYWORD_WEIGHT`, `CONDITION_YEAR_WEIGHT`, `YEAR_BUILT_MIN`, `YEAR_BUILT_MAX`, `NEUTRAL_SCORE`, `LISTING` test fixture
 - Produces: `score_condition(description: str, amenities: list[str], year_built: int, visual_condition_score: float | None = None) -> float`
 - Produces: `score_outdoor(description: str, amenities: list[str], visual_outdoor_score: float | None = None) -> float`
 - Produces: `score_listing(listing: Listing, medtronic_minutes: float | None, denver_minutes: float | None, stats: CollectionStats, visual_condition_score: float | None = None, visual_outdoor_score: float | None = None) -> ScoreResult`
@@ -644,8 +883,9 @@ git commit -m "feat(db): add visual_scores table and accessors"
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-# append to tests/test_scoring.py
-import pytest
+# append to tests/test_scoring.py (add "import pytest" near the top if it
+# isn't already there)
+from src.scoring import CONDITION_KEYWORD_WEIGHT, CONDITION_YEAR_WEIGHT, YEAR_BUILT_MAX, YEAR_BUILT_MIN
 
 
 def test_score_condition_uses_visual_score_when_provided():
@@ -656,10 +896,11 @@ def test_score_condition_uses_visual_score_when_provided():
 
 
 def test_score_condition_visual_score_replaces_keyword_component_exactly():
-    year_component = 0.2 * ((1980 - 1955) / (2005 - 1955) * 100.0)
-    expected = 0.8 * 90.0 + year_component
+    year_score = (1980 - YEAR_BUILT_MIN) / (YEAR_BUILT_MAX - YEAR_BUILT_MIN) * 100.0
+    expected = CONDITION_KEYWORD_WEIGHT * 90.0 + CONDITION_YEAR_WEIGHT * year_score
 
-    assert score_condition("irrelevant text with no keywords", [], 1980, visual_condition_score=90.0) == pytest.approx(expected)
+    result = score_condition("irrelevant text with no keywords", [], 1980, visual_condition_score=90.0)
+    assert result == pytest.approx(expected)
 
 
 def test_score_outdoor_uses_visual_score_when_provided():
@@ -681,11 +922,11 @@ def test_score_listing_passes_visual_scores_through():
 
     assert with_visual.condition_score != without_visual.condition_score
     assert with_visual.outdoor_score != without_visual.outdoor_score
+    # everything else this task doesn't touch should be identical
+    assert with_visual.room_count_score == without_visual.room_count_score
+    assert with_visual.parking_score == without_visual.parking_score
+    assert with_visual.has_incomplete_data == without_visual.has_incomplete_data
 ```
-
-`LISTING`, `CollectionStats`, `score_condition`, `score_outdoor`, `score_listing` are
-already imported/defined at the top of `tests/test_scoring.py` from the v1 plan — add
-`import pytest` if it isn't already present.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -707,7 +948,11 @@ def score_condition(
         condition_component = visual_condition_score
     else:
         combined = f"{description} {' '.join(amenities)}"
-        condition_component = 100.0 if _has_any_keyword(combined, RENOVATION_KEYWORDS) else 0.0
+        condition_component = (
+            CONDITION_KEYWORD_HIT_SCORE
+            if _has_any_keyword(combined, RENOVATION_KEYWORDS)
+            else CONDITION_NO_KEYWORD_SCORE
+        )
     if not year_built:
         year_score = NEUTRAL_SCORE
     else:
@@ -727,10 +972,14 @@ def score_outdoor(
     if visual_outdoor_score is not None:
         return visual_outdoor_score
     combined = f"{description} {' '.join(amenities)}"
-    return OUTDOOR_KEYWORD_HIT_SCORE if _has_any_keyword(combined, OUTDOOR_KEYWORDS) else OUTDOOR_NO_KEYWORD_SCORE
+    return (
+        OUTDOOR_KEYWORD_HIT_SCORE
+        if _has_any_keyword(combined, OUTDOOR_KEYWORDS)
+        else OUTDOOR_NO_KEYWORD_SCORE
+    )
 ```
 
-Replace the existing `score_listing` function with:
+Replace the existing `score_listing` function with (only the two new parameters and the two forwarded call sites change; `room_count_score`, `parking_score`, `has_incomplete_data`, and the composite formula are byte-for-byte what's in the file today):
 
 ```python
 def score_listing(
@@ -749,86 +998,65 @@ def score_listing(
         listing.description, listing.amenities, listing.year_built, visual_condition_score
     )
     outdoor_score = score_outdoor(listing.description, listing.amenities, visual_outdoor_score)
+    room_count_score = score_room_count(
+        listing.beds, listing.baths, stats.room_count_min, stats.room_count_max
+    )
     parking_score = score_parking(listing.parking_spaces)
     composite = (
         WEIGHT_COMMUTE * commute_score
         + WEIGHT_SQFT * sqft_score
         + WEIGHT_CONDITION * condition_score
         + WEIGHT_OUTDOOR * outdoor_score
+        + WEIGHT_ROOM_COUNT * room_count_score
         + WEIGHT_PARKING * parking_score
+    )
+    has_incomplete_data = (
+        medtronic_minutes is None
+        or denver_minutes is None
+        or not listing.sqft
+        or not listing.year_built
+        or not listing.beds
     )
     return ScoreResult(
         commute_score=commute_score,
         sqft_score=sqft_score,
         condition_score=condition_score,
         outdoor_score=outdoor_score,
+        room_count_score=room_count_score,
         parking_score=parking_score,
         composite=composite,
         passes_filters=passes_filters(listing.baths, listing.lot_sqft),
+        has_incomplete_data=has_incomplete_data,
     )
-```
-
-Then extend the existing `OUTDOOR_KEYWORDS` list with trail/park terms:
-
-```python
-OUTDOOR_KEYWORDS = [
-    "mature trees",
-    "private yard",
-    "backyard",
-    "open floor plan",
-    "entertaining",
-    "outdoor living",
-    "trail",
-    "trails",
-    "park",
-    "greenbelt",
-    "bike path",
-]
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_scoring.py -v`
-Expected: PASS (all tests, including the v1 tests already in the file)
+Expected: PASS (all tests, including every pre-existing test in the file — `RENOVATION_KEYWORDS`/`OUTDOOR_KEYWORDS`/fallback scores/`score_room_count`/`score_parking` are untouched)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/scoring.py tests/test_scoring.py
-git commit -m "feat(scoring): accept optional visual scores; add trail keywords"
+git commit -m "feat(scoring): accept optional visual condition/outdoor scores"
 ```
 
 ---
 
-### Task 6: `score_photos.py` — Batch API orchestration
+### Task 6: `score_photos.py` — Batch API orchestration (ported prompt/schema)
 
 **Files:**
 - Create: `score_photos.py`
-- Modify: `requirements.txt`
+
+No `requirements.txt` change — `anthropic==0.116.0` is already installed.
 
 **Interfaces:**
-- Consumes: `has_enough_photos`, `build_image_content_blocks`, `parse_visual_response`,
-  `VISUAL_SCORE_SCHEMA`, `MIN_PHOTOS_FOR_VISION_SCORING` from `src/vision.py`;
-  `count_downloaded_photos` from `src/photos.py`; `get_connection`, `query_listings`,
-  `get_listing_ids_missing_visual_score`, `upsert_visual_score` from `src/db.py`
+- Consumes: `has_enough_photos`, `build_image_content_blocks`, `parse_visual_response`, `VISUAL_SCORE_SCHEMA`, `MIN_PHOTOS_FOR_VISION_SCORING` from `src/vision.py`; `count_downloaded_photos` from `src/photos.py`; `get_connection`, `query_listings`, `get_amenities`, `get_listing_ids_missing_visual_score`, `upsert_visual_score` from `src/db.py`
 
-No test file — untested orchestration, matching `scrape.py`/`check.py`/
-`compute_commutes.py`/`score.py` precedent. **Do not run this script against the real
-Anthropic API** — `ANTHROPIC_API_KEY` isn't configured yet and every real run costs
-money. Verify only that it imports and compiles cleanly.
+No test file — untested orchestration, matching `scrape.py`/`check.py`/`compute_commutes.py`/`score.py` precedent. **Do not run this script against the real Anthropic API during implementation** — every real run costs money. Verify only that it imports and compiles cleanly.
 
-- [ ] **Step 1: Add the `anthropic` dependency**
-
-Add this line to `requirements.txt`:
-
-```
-anthropic==0.116.0
-```
-
-Run: `pip install -r requirements.txt`
-Expected: installs without error
-
-- [ ] **Step 2: Write the script**
+- [ ] **Step 1: Write the script**
 
 ```python
 # score_photos.py
@@ -841,6 +1069,7 @@ from anthropic.types.message_create_params import MessageCreateParamsNonStreamin
 from anthropic.types.messages.batch_create_params import Request
 
 from src.db import (
+    get_amenities,
     get_connection,
     get_listing_ids_missing_visual_score,
     query_listings,
@@ -859,18 +1088,45 @@ DATA_DIR = Path("data")
 DB_PATH = DATA_DIR / "listings.db"
 PHOTOS_DIR = DATA_DIR / "photos"
 MODEL = "claude-sonnet-5"
+MAX_TOKENS = 1536
 POLL_INTERVAL_SECONDS = 60
 
+# Ported from assess_six_houses.py's live-validated prompt (verified
+# 2026-08-25 against a real "Virtual Staged" watermark in
+# data/photos/2126174613662059081/03.jpg), minus the prototype's
+# gut_reaction/overall_verdict/reasoning/notable_photo_observations fields --
+# those existed only so that one-off script's output could be rendered into
+# a markdown doc for comparison against Ben's in-person notes; nothing in
+# the real pipeline reads free-text verdicts.
 INSTRUCTIONS = (
-    "You are assessing the visual condition of a real estate listing from its "
-    "photos. For each room category (kitchen, bathrooms, living_space, garage), "
-    'report status "present" if the photos clearly show it, with a 0-10 '
-    "condition/quality score (10 = updated and move-in ready, 0 = dated or "
-    'poorly maintained), or "omitted" if the room plausibly exists but no '
-    'photo shows it. For basement, also allow "not_applicable" if the home '
-    "clearly has no basement. For the backyard, report whether it's shown, and "
-    "if so rate tree/shade coverage and general hosting/entertaining "
-    "suitability, each 0-10."
+    "You are assessing a real estate listing from its photos alone. Ignore any "
+    "aerial/drone photos entirely -- whether they show this property or the "
+    "surrounding neighborhood, they don't reliably show the home itself and "
+    "shouldn't factor into any score or note below. For each room category "
+    '(kitchen, bathrooms, living_space, garage), report status "present" with '
+    "a 0-10 condition/quality score (10 = updated and move-in ready, 0 = dated "
+    'or poorly maintained) if the photos clearly show it, or "omitted" if the '
+    "room plausibly exists but no photo shows it. For basement, also allow "
+    '"not_applicable" if the home clearly has no basement. Give each room a '
+    "short one-sentence note explaining the score. For garage, also report "
+    "whether it appears attached to the main house structure or a "
+    "separate/detached building, when determinable from exterior photos "
+    "(null if you can't tell). For the backyard, report whether it's shown, "
+    "and if so rate tree/shade coverage and hosting/entertaining suitability, "
+    "each 0-10, with a short note. Separately, report whether any photo is a "
+    "floor-plan/layout graphic, and if so rate how legible and useful it is, "
+    "0-10, with a short note.\n\n"
+    "Staging: check every photo for a literal 'Virtual Staged' or 'Virtually "
+    "Staged' watermark/caption burned into the image, and set "
+    "watermarked_staging_detected accordingly. Separately, even where there's "
+    "no watermark, look for visual signs a photo may still be virtually "
+    "staged or unrealistically over-staged (furniture that looks slightly off "
+    "in scale, perspective, or shadow direction; unnaturally crisp/rendered "
+    "textures; empty-looking rooms with suspiciously perfect furniture) and "
+    "set suspected_unwatermarked_staging accordingly. If either flag is true, "
+    "treat that as a reason for lower confidence in the affected room(s)' "
+    "scores -- let it pull those room scores toward the middle rather than "
+    "taking staged photos at face value, and note what you saw."
 )
 
 
@@ -878,14 +1134,29 @@ def read_bytes(path: Path) -> bytes:
     return path.read_bytes()
 
 
-def build_batch_request(listing_id: str, photo_paths: list[Path]) -> Request:
+def build_listing_context(row, amenities: list[str]) -> str:
+    return (
+        f"Address: {row['address']}, {row['city']}, {row['state']} {row['zip_code']}\n"
+        f"Price: {row['price']}\n"
+        f"Beds: {row['beds']}, Baths: {row['baths']}, Sqft: {row['sqft']}, "
+        f"Lot sqft: {row['lot_sqft']}, Parking spaces: {row['parking_spaces']}, "
+        f"Year built: {row['year_built']}\n"
+        f"Description: {row['description']}\n"
+        f"Amenities: {', '.join(amenities)}"
+    )
+
+
+def build_batch_request(
+    listing_id: str, row, amenities: list[str], photo_paths: list[Path]
+) -> Request:
     content = build_image_content_blocks(photo_paths, read_bytes)
-    content.append({"type": "text", "text": INSTRUCTIONS})
+    listing_context = build_listing_context(row, amenities)
+    content.append({"type": "text", "text": f"{listing_context}\n\n{INSTRUCTIONS}"})
     return Request(
         custom_id=listing_id,
         params=MessageCreateParamsNonStreaming(
             model=MODEL,
-            max_tokens=1024,
+            max_tokens=MAX_TOKENS,
             output_config={"format": {"type": "json_schema", "schema": VISUAL_SCORE_SCHEMA}},
             messages=[{"role": "user", "content": content}],
         ),
@@ -915,8 +1186,9 @@ def main() -> None:
             )
             continue
         photo_paths = sorted((PHOTOS_DIR / listing_id).glob("*.jpg"))
+        amenities = get_amenities(conn, listing_id)
         garage_expected_by_id[listing_id] = row["parking_spaces"] > 0
-        requests.append(build_batch_request(listing_id, photo_paths))
+        requests.append(build_batch_request(listing_id, row, amenities, photo_paths))
 
     if not requests:
         print("no listings had enough photos to score")
@@ -952,9 +1224,14 @@ def main() -> None:
             print(f"{listing_id}: failed to parse response ({exc})")
             continue
         upsert_visual_score(conn, listing_id, visual_result, raw_response=json.dumps(response_json))
+        staging_flag = (
+            " [STAGING FLAGGED]"
+            if visual_result.watermarked_staging_detected or visual_result.suspected_unwatermarked_staging
+            else ""
+        )
         print(
             f"{listing_id}: condition={visual_result.condition_photo_score:.0f} "
-            f"outdoor={visual_result.outdoor_photo_score:.0f}"
+            f"outdoor={visual_result.outdoor_photo_score:.0f}{staging_flag}"
         )
 
     conn.close()
@@ -964,19 +1241,18 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 3: Verify the script imports cleanly (no live API call)**
+- [ ] **Step 2: Verify the script imports cleanly (no live API call)**
 
 Run: `python -c "import score_photos"`
-Expected: no output, no traceback (a bare import runs no code inside `if __name__ ==
-"__main__":`, so this cannot make a network call or spend money)
+Expected: no output, no traceback
 
 Also run: `python -m py_compile score_photos.py`
 Expected: no output, no traceback
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add score_photos.py requirements.txt
+git add score_photos.py
 git commit -m "feat(vision): add photo scoring batch orchestration script"
 ```
 
@@ -985,51 +1261,73 @@ git commit -m "feat(vision): add photo scoring batch orchestration script"
 ### Task 7: `score.py` — look up and pass through visual scores
 
 **Files:**
-- Modify: `score.py` (created by the v1 baseline-scoring plan — read its current full
-  contents before editing)
+- Modify: `score.py` (current file already handles `room_count_score`/`value_score`/`--sort-by-value`; this task only adds the visual-score lookup and passes it through)
 
 **Interfaces:**
-- Consumes: `get_visual_score` from `src/db.py` (Task 4); `score_listing`'s new
-  `visual_condition_score`/`visual_outdoor_score` parameters (Task 5)
+- Consumes: `get_visual_score` from `src/db.py` (Task 4); `score_listing`'s new `visual_condition_score`/`visual_outdoor_score` parameters (Task 5)
 
-No test file — untested orchestration, matching v1's `score.py` precedent.
+No test file — untested orchestration, matching current `score.py` precedent.
 
 - [ ] **Step 1: Add the import**
 
-Add `get_visual_score` to the existing `from src.db import (...)` line at the top of
-`score.py`.
+Change the existing import line:
+
+```python
+from src.db import get_amenities, get_commute, get_connection, query_listings, upsert_score
+```
+
+to:
+
+```python
+from src.db import get_amenities, get_commute, get_connection, get_visual_score, query_listings, upsert_score
+```
 
 - [ ] **Step 2: Look up and pass the visual score in the scoring loop**
 
-In `main()`'s per-listing loop, immediately before the call to `score_listing(...)`,
-add:
+In `main()`, immediately before the `for listing in listings:` scoring loop's call to `score_listing(...)`, change:
 
 ```python
+    ranked = []
+    for listing in listings:
+        commute = commute_by_id[listing.listing_id]
+        medtronic_minutes = commute["medtronic_minutes"] if commute else None
+        denver_minutes = commute["denver_minutes"] if commute else None
+        result = score_listing(listing, medtronic_minutes, denver_minutes, stats)
+        upsert_score(conn, listing.listing_id, result)
+        value = value_score(result.composite, price_numeric_by_id[listing.listing_id])
+        ranked.append((listing, result, value))
+```
+
+to:
+
+```python
+    ranked = []
+    for listing in listings:
+        commute = commute_by_id[listing.listing_id]
+        medtronic_minutes = commute["medtronic_minutes"] if commute else None
+        denver_minutes = commute["denver_minutes"] if commute else None
+
         visual_row = get_visual_score(conn, listing.listing_id)
         visual_condition_score = None
         visual_outdoor_score = None
         if visual_row is not None and not visual_row["photo_score_unavailable"]:
             visual_condition_score = visual_row["condition_photo_score"]
             visual_outdoor_score = visual_row["outdoor_photo_score"]
-```
 
-Then update the `score_listing(...)` call to pass them through:
-
-```python
         result = score_listing(
             listing, medtronic_minutes, denver_minutes, stats,
             visual_condition_score=visual_condition_score,
             visual_outdoor_score=visual_outdoor_score,
         )
+        upsert_score(conn, listing.listing_id, result)
+        value = value_score(result.composite, price_numeric_by_id[listing.listing_id])
+        ranked.append((listing, result, value))
 ```
 
 - [ ] **Step 3: Smoke-test against the real database**
 
 Run: `python score.py`
-Expected: same ranked report as before, no traceback. Since `visual_scores` is empty
-until `score_photos.py` actually runs against the real API, every listing falls back to
-`visual_condition_score=None`/`visual_outdoor_score=None` &mdash; the v1 keyword-only
-behavior &mdash; confirming the fallback path works correctly.
+Expected: same ranked report as before, no traceback. Since `visual_scores` is empty until `score_photos.py` actually runs against the real API, every listing falls back to `visual_condition_score=None`/`visual_outdoor_score=None` — the v1 keyword-only behavior — confirming the fallback path works.
 
 - [ ] **Step 4: Commit**
 
@@ -1040,54 +1338,56 @@ git commit -m "feat(scoring): wire visual scores into the ranked report"
 
 ---
 
-## Self-Review
+## Out of scope (restated)
 
-**Spec coverage:**
-- Room-by-room condition scoring (kitchen, bathrooms, living space, basement, garage),
-  weighted and renormalized → Task 2 (`parse_visual_response`), boundary-tested for
-  every `status` value. ✓
-- Garage applicability driven by `parking_spaces`, not the model → Task 6
-  (`garage_expected_by_id[listing_id] = row["parking_spaces"] > 0`), Task 2 (excluded
-  from the average when `garage_expected=False`). ✓
-- Basement `not_applicable` excluded from the average, not penalized → Task 2,
-  `test_parse_visual_response_excludes_not_applicable_basement`. ✓
-- Omitted room scores low, not dropped → Task 2, `MISSING_CATEGORY_SCORE`,
-  `test_parse_visual_response_omitted_room_scores_low_not_dropped`. ✓
-- Below-floor listings excluded from vision scoring entirely → Task 1
-  (`has_enough_photos`), Task 6 (checked before building a request). ✓
-- Cron-safe / idempotent (only scores listings without an existing row) → Task 4
-  (`get_listing_ids_missing_visual_score`), Task 6 (the whole loop is built around it). ✓
-- Trails/parks folded into the existing outdoor keyword slot, no new weighted category
-  → Task 5, `OUTDOOR_KEYWORDS` extension. ✓
-- One Claude request per listing, all photos batched, structured JSON output → Task 6,
-  `build_batch_request`. ✓
-- Message Batches API for the whole run → Task 6, `client.messages.batches.create` /
-  `.retrieve` / `.results`. ✓
-- Integration replaces the v1 placeholders in the same weight slots, falls back cleanly
-  when absent → Task 5 (`score_condition`/`score_outdoor`/`score_listing`), Task 7
-  (`score.py`'s lookup-or-`None` logic). ✓
-- No new `.env` variables → confirmed; `anthropic.Anthropic()` resolves credentials on
-  its own. ✓
-- `score_photos.py` never live-tested during implementation → Task 6, Step 3 uses only
-  a bare import and `py_compile`, never calls `main()`. ✓
+**Layout/vertical-circulation detection is explicitly NOT part of this plan**, even though the calibration findings identify it as the single most repeated real rejection reason (4 of 7 toured houses: disjointed split-level flow, "spiral staircase maze of 4 half floors," stairwell placement). This is a known, accepted blind spot for this pass. `layout_plan` in `src/vision.py` stays scoped exactly to detecting whether a floor-plan/layout *graphic* photo exists among a listing's photos and rating that graphic's own legibility/clarity (`clarity_score`) — it says nothing about, and is never used as a proxy for, how a home's rooms actually connect or flow. No new field, heuristic, or model instruction in this plan attempts to infer circulation quality from room photos, photo ordering, or anything else. Solving this is tracked separately (per the calibration findings doc) as a future rubric concern, not this implementation.
 
-**Placeholder scan:** No "TBD"/"handle appropriately"/"similar to Task N" language;
-every step has literal code, including the full rewritten `score_condition`,
-`score_outdoor`, and `score_listing` bodies in Task 5 so an implementer reading tasks
-out of order never has to guess at unchanged parts.
+Also out of scope, per the same reasoning as the original design spec: no reweighting of `WEIGHT_*`, no new top-level scored category for staging/garage/lot-context/school-district, and no recalibration of `MISSING_CATEGORY_SCORE`/room weights — those remain v3 concerns pending real scored-listing review.
 
-**Type consistency:** `VisualScoreResult` (Task 2: `condition_photo_score,
-outdoor_photo_score`) is read identically in Task 4's `upsert_visual_score` and Task
-6's orchestration. `visual_condition_score`/`visual_outdoor_score` parameter names are
-identical across Task 5's three function signatures and Task 7's call site. Task 6's
-`garage_expected_by_id` dict is keyed by the same `listing_id` string used everywhere
-else in this plan and the v1 plan (never `listing.listing_id` vs. a mismatched key).
+## Cost estimate (revised)
+
+The original design spec's ballpark (~114 listings × ~20 photos, "$5–10 total") was a guess made before any real API calls existed. Real synchronous (non-batch) Sonnet 5 requests against real listings (the 7 toured houses, 23–50 photos each) have now run at **$0.11–$0.24 per listing** (~50,000–115,000 input tokens, ~700–2,400 output tokens, cost dominated by image tokens and scaling with photo count).
+
+For the real ~117-listing collection:
+- That 7-house sample averages ~33 photos/listing — higher than the original spec's ~20-photo assumption — so the realistic per-listing sync cost likely sits in the middle-to-upper part of the observed $0.11–$0.24 range for a typical listing, not just the low end.
+- **Sync-equivalent total, 117 listings:** roughly $13–$28, with ~$20–22 as a reasonable central estimate given the observed photo-count average.
+- **With the Batch API's 50% discount** (applies to both input and output tokens): roughly **$6.50–$14**, with **~$10–11** as the working estimate.
+- Production's schema drops the prototype's `gut_reaction`/`overall_verdict`/`reasoning`/`notable_photo_observations` free-text fields, which trims some output-token cost — but output tokens are a small fraction of the total next to image input tokens, so this doesn't meaningfully change the range above.
+
+This is meaningfully higher than the original spec's "$5–10" floor, but still cheap enough not to gate the decision to run `score_photos.py` for real. Worth confirming with `client.messages.count_tokens` against a handful of real listings before submitting the full batch, since the real collection's photo-count distribution may differ from this 7-house sample.
 
 ---
 
-Plan complete and saved to `docs/superpowers/plans/2026-08-15-photo-scoring.md`. Two execution options:
+## Self-Review
 
-1. **Subagent-Driven (recommended)** — I dispatch a fresh subagent per task, review between tasks, fast iteration
-2. **Inline Execution** — Execute tasks in this session using executing-plans, batch execution with checkpoints
+**Spec coverage:**
+- Room-by-room condition scoring, weighted and renormalized → Task 2 (`parse_visual_response`), boundary-tested for every `status` value. ✓
+- Garage applicability driven by `parking_spaces`, not the model → Task 6, Task 2. ✓
+- Garage `attached` captured as a structured, informational-only field → Task 2, Task 4, Task 6. ✓
+- Staging flags captured, informational-only, with the score-softening effect happening at the *prompt* level → Task 2, Task 4, Task 6. ✓
+- Aerial/drone exclusion as a prompt-level instruction only, no schema field → Task 6's `INSTRUCTIONS`. ✓
+- Basement `not_applicable` excluded from the average, not penalized → Task 2. ✓
+- Omitted room scores low, not dropped → Task 2, `MISSING_CATEGORY_SCORE`. ✓
+- Below-floor listings excluded from vision scoring entirely → Task 1, Task 6. ✓
+- Cron-safe / idempotent → Task 4, Task 6. ✓
+- Floor-plan/layout photos detected and rated but excluded from the composite, and NOT used as a circulation proxy → Task 2, "Out of scope" section. ✓
+- One Claude request per listing, all photos batched, structured JSON output, listing context ported from the validated prototype → Task 6. ✓
+- Message Batches API for the whole run → Task 6. ✓
+- `score_condition`/`score_outdoor`/`score_listing` match the CURRENT actual signatures and this plan adds only two optional parameters, touching nothing else. ✓
+- Integration replaces v1 placeholders in the same weight slots, falls back cleanly when absent → Task 5, Task 7. ✓
+- `score_photos.py` never live-tested during implementation → Task 6, Step 2. ✓
+- Refined cost estimate grounded in real per-listing spend → "Cost estimate (revised)" section. ✓
 
-Which approach?
+**Type consistency:** `VisualScoreResult` (Task 2, 8 fields, 6 with defaults) is read identically in Task 4's `upsert_visual_score` and Task 6's orchestration. `visual_condition_score`/`visual_outdoor_score` parameter names are identical across Task 5's three function signatures and Task 7's call site. Task 6's `garage_expected_by_id` dict is keyed by the same `listing_id` string used everywhere else in this plan.
+
+**Fixed from the superseded plan:** `VisualScoreResult` now has defaults on every field beyond the two required scores, so terse test/production construction actually type-checks — the prior draft plan's DB idempotency test would have raised `TypeError` had it been run.
+
+---
+
+### Critical Files for Implementation
+
+- /home/bengi/code/home-search/src/vision.py
+- /home/bengi/code/home-search/src/scoring.py
+- /home/bengi/code/home-search/src/db.py
+- /home/bengi/code/home-search/score_photos.py
+- /home/bengi/code/home-search/assess_six_houses.py
