@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 
-from src.db import get_amenities, get_commute, get_connection, query_listings, upsert_score
+from src.db import get_amenities, get_commute, get_connection, get_visual_score, query_listings, upsert_score
 from src.models import Listing
 from src.scoring import compute_collection_stats, score_listing
 
@@ -71,7 +71,19 @@ def main() -> None:
         commute = commute_by_id[listing.listing_id]
         medtronic_minutes = commute["medtronic_minutes"] if commute else None
         denver_minutes = commute["denver_minutes"] if commute else None
-        result = score_listing(listing, medtronic_minutes, denver_minutes, stats)
+
+        visual_row = get_visual_score(conn, listing.listing_id)
+        visual_condition_score = None
+        visual_outdoor_score = None
+        if visual_row is not None and not visual_row["photo_score_unavailable"]:
+            visual_condition_score = visual_row["condition_photo_score"]
+            visual_outdoor_score = visual_row["outdoor_photo_score"]
+
+        result = score_listing(
+            listing, medtronic_minutes, denver_minutes, stats,
+            visual_condition_score=visual_condition_score,
+            visual_outdoor_score=visual_outdoor_score,
+        )
         upsert_score(conn, listing.listing_id, result)
         value = value_score(result.composite, price_numeric_by_id[listing.listing_id])
         ranked.append((listing, result, value))
