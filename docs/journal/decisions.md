@@ -243,35 +243,174 @@ only non-trivial part to regenerate. `get_connection()` re-creates the DB
 schema automatically on first connect, so no separate init step is needed
 — the next `scrape.py` run rebuilds everything from scratch.
 
+## 2026-08-16 — price-per-score metric implemented; layout/floor-plan folded into photo-scoring design
+
+Implemented both items queued after the stale-listing-removal merge:
+
+- **`score.py` price-per-score field.** Added `value_score(composite, price_numeric)`
+  = composite points per $100k of price, printed as a `value=` column on every ranked
+  report line. `None` (rendered `n/a`) when `price_numeric` is missing rather than
+  defaulting to 0, since a "Contact agent" listing has nothing to divide by. Sorted by
+  composite by default, unchanged; a new `--sort-by-value` flag sorts by this field
+  instead, with `None` values always sorting last regardless of direction. Deliberately
+  not blended into the composite itself — a separate lens for weighing score against
+  price, not a scoring factor. No test file, matching `score.py`'s existing untested-
+  orchestration precedent; smoke-tested against the (currently empty, post-reset) real
+  DB.
+- **Layout/floor-plan photos folded into the photo-scoring design and plan**, not yet
+  implemented — `score_photos.py`/`src/vision.py` still don't exist; that work is still
+  blocked on finishing the photo backfill (see Open, below). Added a `layout_plan`
+  field to the vision response schema (`present: bool`, `clarity_score: 0-10 | null`)
+  and a matching `VisualScoreResult.has_layout_plan`/`layout_plan_clarity_score`, stored
+  in a widened `visual_scores` table. Confirmed direction from Ben: assess it (it's
+  useful to know which listings include one, and how legible it is), but never let it
+  enter `condition_photo_score`, `outdoor_photo_score`, or the composite — captured as
+  information only, the same pattern `raw_response` already uses for anything Ben might
+  want to look at directly without it being a scored signal.
+
+## 2026-08-16 — anti-botting countermeasures for photo downloads, before running the full backfill
+
+Ben raised a concern before kicking off the ~4,000-photo fresh backfill: could this
+pattern of requests get the Compass account flagged or shut down? Audited the actual
+request shape rather than guessing:
+
+- Listing/collection data was already low-risk: it goes through a real authenticated
+  Playwright session with persisted `storage_state` (no repeated logins), and the
+  collection comes from one batched paginated API call
+  (`fetch_collection_listings`), not one page load per listing.
+- The one real gap: `download_photos()`'s `fetch_bytes` (in both `scrape.py` and
+  `backfill_photos.py`) used a bare `requests.get()` &mdash; no cookies, the default
+  `python-requests` User-Agent, and no delay between calls. For the backfill that's
+  ~4,000 back-to-back unauthenticated-looking requests to Compass's media CDN from one
+  IP in a tight loop &mdash; the one part of the pipeline that didn't look like a
+  browser at all.
+
+Fixed both scripts the same way:
+- Photo downloads now go through the authenticated page's own request context
+  (`page.request.get(url)`) instead of a standalone `requests` call &mdash; reuses the
+  real session's cookies and browser HTTP/TLS fingerprint, so each photo fetch looks
+  like a normal in-page image load. `src/photos.py`'s `download_photos()` gained an
+  optional `sleep_fn` parameter (no-op by default, so existing tests still run
+  instantly) that callers use to inject pacing.
+- Added `PHOTO_JITTER_MIN/MAX_SECONDS` (0.15&ndash;0.5s) random delay between photo
+  downloads in both scripts, called only after an actual network fetch (never after a
+  skip-because-already-downloaded).
+- `backfill_photos.py`'s download loop had to move *inside* the `with
+  launch_authenticated_page(...)` block &mdash; it previously ran after the browser
+  had already closed, which would have broken outright once photo fetches started
+  depending on `page.request`.
+
+Deliberately did not add concurrency/parallel downloads to compensate for the slower,
+paced sequential shape &mdash; sequential-with-jitter is the safer pattern here, not
+something to optimize away.
+
+Also added a `--limit=N` flag to `scrape.py`, so the very first run after this change
+can process a small batch (e.g. 10&ndash;20 listings) rather than committing straight
+to the full ~117-listing/~4,000-photo backfill. Worth it specifically because
+`download_photos()`'s per-photo `try/except` means a systemic problem with the new
+`page.request`-based fetch (wrong API assumption, CDN rejecting the request shape)
+would fail *silently* &mdash; the script exits 0 with every photo individually logged
+as skipped, not a loud error. `--limit` only caps which collection listings get
+upserted/have photos downloaded *this run*; `compute_changes`/delisting still evaluate
+against the full fetched collection, so a small test batch is never misread as mass
+delisting.
+
+Also added `--new-listing` and `--force`, both `scrape.py`-only, both meant to pair
+with `--limit`:
+
+- **`--new-listing`** filters the collection down to not-yet-scraped listings *before*
+  `--limit` slices it. Without this, `--limit` alone re-slices the same fixed-order
+  prefix of the fetched collection every run (Compass's collection API returns a
+  stable order), so once that prefix is scraped, a repeated `--limit=N` run does zero
+  new work. `--new-listing --limit=N` is what makes a chunked, staged backfill (several
+  runs over time, spreading the ~4,000-photo download out rather than one long burst)
+  actually make progress each run. `upsert_listing` still runs against every fetched
+  listing regardless of this filter &mdash; it's cheap, no network, and it's what keeps
+  price-change detection correct even during a staged run that skips most photos.
+- **`--force`** bypasses the "already scraped, skip" check so `_save_listing` runs
+  again for a listing the JSON store already has an entry for. Exists because
+  `_save_listing` writes that JSON marker *unconditionally* after `download_photos()`,
+  even if some individual photos failed &mdash; `download_photos()` swallows per-photo
+  errors and never raises. A transient network blip mid-listing can silently leave a
+  listing "scraped" with an incomplete photo set that no future unlimited run will
+  ever retry, since `is_scraped()` only checks presence, not completeness. `--force`
+  is the recovery path, and it's cheap to use: `download_photos()`'s own per-photo
+  `dest.exists()` check means a forced retry only fetches what's actually missing, not
+  a full re-download.
+
+## 2026-08-25 — rubric and assessment-prompt changes from the calibration findings
+
+Acted on 5 of the items `docs/house-tour-calibration-findings.md` flagged, per Ben's
+go-ahead on each:
+
+**`src/scoring.py` (real, live rubric):**
+- **Room count factor added.** New `score_room_count(beds, baths, ...)`, min-max
+  normalized against the collection exactly like `score_sqft`. New
+  `WEIGHT_ROOM_COUNT = 0.10`, carved out by dropping `WEIGHT_COMMUTE` 0.35→0.30 and
+  `WEIGHT_PARKING` 0.10→0.05 (still sums to 1.0). `ScoreResult`/`CollectionStats`
+  gained matching fields (defaulted, so existing tests keep constructing them
+  unchanged); `scores` table gained a migrated `room_count_score` column.
+- **`score_condition`'s no-keyword fallback softened 0.0 → 40.0** (new
+  `CONDITION_NO_KEYWORD_SCORE`), matching `OUTDOOR_NO_KEYWORD_SCORE`'s
+  already-existing "weak signal, not proof of absence" pattern — the two were
+  inconsistent for no real reason.
+- **Both keyword lists broadened**, then corrected once against real data:
+  adding `"fenced"`/`"trees"` to `OUTDOOR_KEYWORDS` fixed 93rd Way's known false
+  negative but immediately created a false *positive* on 77th Dr (Ben's most
+  decisive real NO) via its description's "Fenced yard for the family pet" —
+  confirmed live with `score.py`, not just reasoned about. Removed both; kept
+  `"landscaped"/"landscaping"/"patio"/"deck"/"garden"/"fire pit"/"hot tub"`,
+  which still fix 93rd Way without the boilerplate-triggering risk. Re-verified
+  after the fix: 93rd Way's `outdoor_score` stayed 100.0, 77th Dr's dropped back
+  to 40.0.
+
+**`assess_six_houses.py` (still-prototype vision assessment):**
+- **Staging detection, in both directions.** New `staging_flags` schema field:
+  explicit instruction to read for a literal "Virtual Staged"/"Virtually Staged"
+  watermark, *and* a separate look for unwatermarked staging tells (off
+  furniture scale/shadows, unrealistic rendering). Verified live against
+  Kipling Place (the confirmed-virtually-staged house, watermark visible in
+  `data/photos/2126174613662059081/03.jpg`): correctly detected
+  `watermarked_staging_detected: true` with the specific rooms named. Did not
+  flip the overall verdict to NO on its own — it's a confidence signal per the
+  prompt's design, not an automatic veto.
+- **Aerial/drone photos now explicitly disregarded.** Confirmed real via a
+  direct photo read: Kipling's `39.jpg` is a pure aerial shot of a nearby
+  school/ballfields, not the house. Ben's call: not enough signal either way
+  to be worth classifying/routing elsewhere — just excluded from scoring and
+  observations entirely.
+- **`garage.attached` promoted from stray prose to a real field** (own
+  `_GARAGE` schema, informational only like `layout_plan` — "a formal note,"
+  not scored). Verified live: Kipling's garage correctly read `attached: true`
+  from exterior photos alone.
+
+Not yet re-run: the existing 7 entries in `docs/claude-six-house-assessment.md`
+still reflect the old prompt/schema. Left as-is pending Ben's call on whether to
+regenerate them (each costs ~$0.15-0.25) or treat them as a frozen first-pass
+snapshot the findings doc already analyzed.
+
 ## Open
 
-- **Six-house tour feedback not yet written down.** Ben and Megan toured
-  six homes before this project started — Canossa Dr. was a "yes," five
-  others were "no" — but the detailed reasoning behind each verdict has
-  never been captured in writing. This is exactly the calibration data the
-  photo-scoring rubric (and eventually the stats rubric's weights) should
-  be checked against. Ben has said he'll write it up separately when he has
-  time, rather than dictating it in conversation.
+- **House tour feedback and calibration findings — done.** All 7 homes Ben
+  and Megan toured are written up in `docs/house-tour-feedback.md`, and
+  compared against Claude's photo-only read (`assess_six_houses.py`) and the
+  current live v1 algorithm in `docs/house-tour-calibration-findings.md`.
+  Layout/vertical-circulation confirmed as the single most repeated real
+  rejection reason (4 of 7 houses); staging, both real and virtual,
+  demonstrated to actively fool a photo-only assessment on two separate
+  houses; concrete, verified false-negatives found in both
+  `RENOVATION_KEYWORDS` and `OUTDOOR_KEYWORDS` against real listing
+  descriptions. Nothing acted on yet — pure calibration data, flagged for
+  whenever the rubric next gets tuned.
 - **Photo backfill incomplete.** Only 61 of 362 listings have any downloaded
-  photos (2,133 photo files total). Needs to be resumed/finished before the
-  photo-scoring plan can meaningfully run — most listings would currently
-  fail the plan's 5-photo floor purely because photos were never fetched,
-  not because anything's wrong with them.
-- **Stale-listing removal** — implemented and hardened (see entry above),
-  ready to merge to `main`. Once merged, the DB and photo storage directory
-  should be reset for a fresh scrape (Ben's explicit second priority, after
-  this feature).
-- **Layout/floor-plan photos in photo-scoring** — Ben noted some listings
-  include a floor-plan/layout graphic among their photos and asked whether
-  it's worth assessing. Confirmed direction: assess it, but exclude it from
-  the composite score. Not yet folded into
-  `docs/superpowers/specs/2026-08-15-photo-scoring-design.md` or the
-  matching plan.
-- **Price-per-score as a separate metric** — Ben's idea: surface
-  "composite score per dollar" (or similar) alongside the existing ranked
-  report, e.g. to compare a $500K home scoring 8 against a $650K home
-  scoring 6.5. Confirmed as an additional sortable field in `score.py`'s
-  report, deliberately *not* blended into the composite score itself.
-  Queued for after the stale-listing-removal branch merges.
-- **Photo-scoring implementation** — plan written, not yet started; queued
-  behind the photo backfill and the stale-listing removal work.
+  photos (2,133 photo files total) — though note the 362-listing dataset
+  this count refers to predates the 2026-08-16 data reset; the DB is
+  starting fresh from the 7 pinned tour houses plus whatever the next real
+  `scrape.py` run adds. Needs to be resumed/finished before the
+  photo-scoring plan can meaningfully run at collection scale.
+- **Photo-scoring implementation** — plan written (including the
+  `layout_plan` field), not yet started; queued behind the photo backfill.
+  Should be read against `docs/house-tour-calibration-findings.md` before
+  implementation starts — layout/circulation and staging-detection aren't in
+  the current design at all, and the findings doc explains why in concrete,
+  evidenced detail rather than in the abstract.

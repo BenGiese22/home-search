@@ -4,6 +4,27 @@ Raw, ungroomed ideas that haven't been formalized into a spec yet. Items
 graduate out of here (and get deleted from this file) once they're written
 up properly under `docs/superpowers/specs/`.
 
+## 2026-08-24 — vertical circulation/split-level flow is invisible to photo-only scoring
+
+`assess_six_houses.py`'s Claude-vs-Ben comparison: on House 2 (4552 W 111th Ave)
+and House 3 (8221 W 93rd Way), Claude's photo-only assessment said YES on both;
+Ben and Megan's actual in-person verdict was NO on both, for the same reason each
+time — a disjointed multi-half-floor split-level layout ("spiral staircase maze
+of 4 half floors" / "immediately throw you into a split level stairway"), not
+condition. The planned `layout_plan` rubric field (design spec, `src/vision.py`)
+only detects whether a floor-plan graphic photo exists — it doesn't and can't
+judge whether a home's actual circulation feels confusing. Two of three real "no"
+verdicts so far hinged entirely on this, so it's a real blind spot worth knowing
+about, not something to solve now.
+
+**Update 2026-08-25:** confirmed at the full 7-house dataset, not just the
+first 3 — see `docs/house-tour-calibration-findings.md` for the complete
+comparison (human verdict vs. Claude's photo-only read vs. the current v1
+algorithm) plus several more findings from the same exercise: staging (real
+and virtual) actively fooling a photo-only read, bed/bath count as an unused
+signal distinct from sqft, and concrete verified false-negatives in both
+keyword lists against real listing descriptions.
+
 ## 2026-08-15 — nearby bike trails / parks as a scoring factor
 
 Ben flagged proximity to bike trails and/or parks as worth assessing

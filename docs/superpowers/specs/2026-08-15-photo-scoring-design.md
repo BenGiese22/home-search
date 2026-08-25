@@ -36,12 +36,16 @@ replace the two placeholders, without touching the rest of the v1 composite.
   from photo scoring rather than penalized for it.
 - Fold "nearby bike trails/parks" into the existing outdoor keyword scan as a cheap v1
   addition &mdash; no new weighted category.
+- Detect and assess any floor-plan/layout graphic among a listing's photos (some
+  listings include one), but exclude it from the composite score entirely &mdash; it's
+  informational, not a signal about the home's condition or outdoor appeal.
 
 ## Non-goals (v2)
 
 - No new top-level weighted category and no reweighting of `WEIGHT_*`. Trails/parks
   joins the existing outdoor slot's keyword list; room-level condition detail stays
-  inside the existing condition slot.
+  inside the existing condition slot; `layout_plan` is captured but never scored at
+  all &mdash; it doesn't join any existing slot either.
 - No geocoded or Claude-API-prompt-based trails/parks proximity check yet (tracked in
   `docs/journal/backlog.md` for v3).
 - No OS-level scheduling. The script is built to be safe to invoke repeatedly (see
@@ -86,9 +90,19 @@ testing is what happens with its result.
     "living_space": {"status": "present", "score": 6},
     "basement": {"status": "not_applicable", "score": null},
     "garage": {"status": "present", "score": 5},
-    "backyard": {"present": true, "tree_coverage": 8, "hosting_suitability": 6}
+    "backyard": {"present": true, "tree_coverage": 8, "hosting_suitability": 6},
+    "layout_plan": {"present": true, "clarity_score": 8}
   }
   ```
+
+  `layout_plan` reports whether a floor-plan/layout graphic appears among the listing's
+  photos and, if so, how legible/useful it is (`clarity_score`, 0&ndash;10 &mdash; a
+  crisp labeled floor plan scores high, a blurry or partial one scores low).
+  `present: false` means no such graphic was found; `clarity_score` is `null` in that
+  case. Unlike every other category, `layout_plan` is stored but never enters
+  `condition_photo_score`, `outdoor_photo_score`, or the composite &mdash; it's captured
+  purely as information Ben can glance at (e.g. while reviewing `raw_response`), not a
+  scored signal.
 
   Each condition room reports a `status`: `"present"` (photographed, `score` is a
   0&ndash;10 rating) or `"omitted"` (the room plausibly exists but no photo shows it
@@ -119,12 +133,17 @@ testing is what happens with its result.
 
 ### `visual_scores` table (new, in `src/db.py`)
 
-`listing_id, condition_photo_score, outdoor_photo_score, photo_score_unavailable,
-raw_response, computed_at`. `photo_score_unavailable` covers both exclusion paths
-(too few photos, and a failed/errored API call for an eligible listing) with one flag,
-since `scoring.py`'s fallback behavior is identical either way: use the v1 keyword
-score. `raw_response` keeps the model's full room-by-room JSON for debugging, nullable
-when unavailable.
+`listing_id, condition_photo_score, outdoor_photo_score, has_layout_plan,
+layout_plan_clarity_score, photo_score_unavailable, raw_response, computed_at`.
+`photo_score_unavailable` covers both exclusion paths (too few photos, and a
+failed/errored API call for an eligible listing) with one flag, since `scoring.py`'s
+fallback behavior is identical either way: use the v1 keyword score. `raw_response`
+keeps the model's full room-by-room JSON for debugging, nullable when unavailable.
+`has_layout_plan`/`layout_plan_clarity_score` are stored alongside the scored columns
+for the same idempotency/caching reasons but are never read by `scoring.py` &mdash;
+no accessor treats them as part of a listing's score, only as data available for
+Ben to look at directly (e.g. a query against the DB) if he wants to see which
+listings included a floor plan.
 
 ### `score_photos.py` (new, top-level orchestration script)
 
@@ -175,9 +194,13 @@ pure functions) builds and tests without it, same as `src/commute.py` did.
 &mdash; boundary cases at the 5-photo floor, each room `status` value (`present`,
 `omitted`, `not_applicable`), `garage_expected = false` excluding garage regardless of
 what the model reports, and the renormalized weighted average when one or more
-categories are inapplicable. No live API calls in tests, matching `src/commute.py`'s
-precedent. `score_photos.py`'s Batch API submission and polling is untested
-orchestration, matching `compute_commutes.py` and `score.py`.
+categories are inapplicable. Also covered: `layout_plan.present = true/false` parses
+into `has_layout_plan`/`layout_plan_clarity_score` correctly, and neither value shifts
+`condition_photo_score` or `outdoor_photo_score` &mdash; the regression case that
+matters most, since a silent leak into the composite would be easy to miss. No live API
+calls in tests, matching `src/commute.py`'s precedent. `score_photos.py`'s Batch API
+submission and polling is untested orchestration, matching `compute_commutes.py` and
+`score.py`.
 
 ## Cost
 
