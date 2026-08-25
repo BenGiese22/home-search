@@ -5,6 +5,7 @@ from src.scoring import (
     WEIGHT_CONDITION,
     WEIGHT_OUTDOOR,
     WEIGHT_PARKING,
+    WEIGHT_ROOM_COUNT,
     WEIGHT_SQFT,
     compute_collection_stats,
     passes_filters,
@@ -13,6 +14,7 @@ from src.scoring import (
     score_listing,
     score_outdoor,
     score_parking,
+    score_room_count,
     score_sqft,
 )
 
@@ -126,6 +128,20 @@ def test_score_outdoor_no_keyword_is_weak_not_zero():
     assert 0.0 < result < 100.0
 
 
+def test_score_room_count_min_max_normalizes_across_collection():
+    assert score_room_count(beds=4, baths=2.0, room_count_min=4.0, room_count_max=8.0) == 50.0
+    assert score_room_count(beds=2, baths=2.0, room_count_min=4.0, room_count_max=8.0) == 0.0
+    assert score_room_count(beds=6, baths=2.0, room_count_min=4.0, room_count_max=8.0) == 100.0
+
+
+def test_score_room_count_missing_is_neutral():
+    assert score_room_count(beds=0, baths=0.0, room_count_min=4.0, room_count_max=8.0) == 50.0
+
+
+def test_score_room_count_no_variance_scores_full():
+    assert score_room_count(beds=4, baths=2.0, room_count_min=6.0, room_count_max=6.0) == 100.0
+
+
 def test_score_parking_two_or_more_spaces_is_full():
     assert score_parking(2) == 100.0
     assert score_parking(4) == 100.0
@@ -153,6 +169,13 @@ def test_compute_collection_stats_returns_min_and_max():
     )
 
 
+def test_compute_collection_stats_returns_room_count_min_and_max():
+    stats = compute_collection_stats([1000, 2000], [10.0, 20.0], [4.0, 6.5, 8.0])
+
+    assert stats.room_count_min == 4.0
+    assert stats.room_count_max == 8.0
+
+
 def test_compute_collection_stats_handles_empty_input():
     stats = compute_collection_stats([], [])
 
@@ -169,6 +192,7 @@ def test_score_listing_combines_sub_scores_with_named_weights():
         + WEIGHT_SQFT * result.sqft_score
         + WEIGHT_CONDITION * result.condition_score
         + WEIGHT_OUTDOOR * result.outdoor_score
+        + WEIGHT_ROOM_COUNT * result.room_count_score
         + WEIGHT_PARKING * result.parking_score
     )
     assert result.composite == expected
@@ -209,6 +233,15 @@ def test_score_listing_flags_incomplete_data_when_year_built_missing():
     no_year_built = LISTING.__class__(**{**LISTING.__dict__, "year_built": 0})
 
     result = score_listing(no_year_built, 18.0, 15.0, stats)
+
+    assert result.has_incomplete_data is True
+
+
+def test_score_listing_flags_incomplete_data_when_beds_missing():
+    stats = CollectionStats(1000, 3000, 10.0, 30.0)
+    no_beds = LISTING.__class__(**{**LISTING.__dict__, "beds": 0})
+
+    result = score_listing(no_beds, 18.0, 15.0, stats)
 
     assert result.has_incomplete_data is True
 

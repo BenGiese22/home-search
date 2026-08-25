@@ -7,11 +7,12 @@ NEUTRAL_SCORE = 50.0
 MEDTRONIC_LEG_WEIGHT = 0.8
 DENVER_LEG_WEIGHT = 0.2
 
-WEIGHT_COMMUTE = 0.35
+WEIGHT_COMMUTE = 0.30
 WEIGHT_SQFT = 0.20
 WEIGHT_CONDITION = 0.20
 WEIGHT_OUTDOOR = 0.15
-WEIGHT_PARKING = 0.10
+WEIGHT_ROOM_COUNT = 0.10
+WEIGHT_PARKING = 0.05
 
 YEAR_BUILT_MIN = 1955
 YEAR_BUILT_MAX = 2005
@@ -24,7 +25,24 @@ RENOVATION_KEYWORDS = [
     "remodeled",
     "new roof",
     "fully updated",
+    "updated",
+    "upgraded",
+    "new appliances",
+    "new flooring",
+    "new fixtures",
+    "move-in ready",
+    "turnkey",
+    "freshly painted",
 ]
+CONDITION_KEYWORD_HIT_SCORE = 100.0
+# Same reasoning as OUTDOOR_NO_KEYWORD_SCORE below: a missing keyword isn't
+# proof of poor condition, just a placeholder until photo scoring exists.
+# Previously hardcoded to 0.0, which punished a keyword miss as hard as a
+# real negative signal — house-tour calibration found a real listing
+# (12307 Utica St) with good actual condition but zero keyword hits, scoring
+# near the bottom purely from this fallback. Softened to match outdoor's
+# already-weak-not-zero pattern.
+CONDITION_NO_KEYWORD_SCORE = 40.0
 
 OUTDOOR_KEYWORDS = [
     "mature trees",
@@ -33,6 +51,13 @@ OUTDOOR_KEYWORDS = [
     "open floor plan",
     "entertaining",
     "outdoor living",
+    "landscaped",
+    "landscaping",
+    "patio",
+    "deck",
+    "garden",
+    "fire pit",
+    "hot tub",
 ]
 OUTDOOR_KEYWORD_HIT_SCORE = 100.0
 # Absence of these phrases isn't proof there's no yard — this is an
@@ -97,7 +122,11 @@ def score_sqft(sqft: int, sqft_min: int, sqft_max: int) -> float:
 
 def score_condition(description: str, amenities: list[str], year_built: int) -> float:
     combined = f"{description} {' '.join(amenities)}"
-    keyword_score = 100.0 if _has_any_keyword(combined, RENOVATION_KEYWORDS) else 0.0
+    keyword_score = (
+        CONDITION_KEYWORD_HIT_SCORE
+        if _has_any_keyword(combined, RENOVATION_KEYWORDS)
+        else CONDITION_NO_KEYWORD_SCORE
+    )
     if not year_built:
         year_score = NEUTRAL_SCORE
     else:
@@ -109,6 +138,20 @@ def score_condition(description: str, amenities: list[str], year_built: int) -> 
 def score_outdoor(description: str, amenities: list[str]) -> float:
     combined = f"{description} {' '.join(amenities)}"
     return OUTDOOR_KEYWORD_HIT_SCORE if _has_any_keyword(combined, OUTDOOR_KEYWORDS) else OUTDOOR_NO_KEYWORD_SCORE
+
+
+def score_room_count(beds: int, baths: float, room_count_min: float, room_count_max: float) -> float:
+    """Min-max normalized against the collection's own beds+baths spread,
+    same treatment as score_sqft. Exists because sqft alone doesn't capture
+    "enough distinct rooms for our needs" -- house-tour calibration found two
+    listings rejected specifically for feeling short on rooms (bath count,
+    then overall bed+bath count) despite adequate square footage."""
+    total = (beds or 0) + (baths or 0)
+    if not total:
+        return NEUTRAL_SCORE
+    if room_count_max <= room_count_min:
+        return 100.0
+    return _clamp((total - room_count_min) / (room_count_max - room_count_min) * 100.0)
 
 
 def score_parking(parking_spaces: int) -> float:
@@ -129,16 +172,23 @@ class CollectionStats:
     sqft_max: int
     denver_minutes_min: float
     denver_minutes_max: float
+    room_count_min: float = 0.0
+    room_count_max: float = 0.0
 
 
 def compute_collection_stats(
-    sqft_values: list[int], denver_minutes_values: list[float]
+    sqft_values: list[int],
+    denver_minutes_values: list[float],
+    room_count_values: list[float] | None = None,
 ) -> CollectionStats:
+    room_count_values = room_count_values or []
     return CollectionStats(
         sqft_min=min(sqft_values) if sqft_values else 0,
         sqft_max=max(sqft_values) if sqft_values else 0,
         denver_minutes_min=min(denver_minutes_values) if denver_minutes_values else 0.0,
         denver_minutes_max=max(denver_minutes_values) if denver_minutes_values else 0.0,
+        room_count_min=min(room_count_values) if room_count_values else 0.0,
+        room_count_max=max(room_count_values) if room_count_values else 0.0,
     )
 
 
@@ -148,6 +198,7 @@ class ScoreResult:
     sqft_score: float
     condition_score: float
     outdoor_score: float
+    room_count_score: float
     parking_score: float
     composite: float
     passes_filters: bool
@@ -166,12 +217,16 @@ def score_listing(
     sqft_score = score_sqft(listing.sqft, stats.sqft_min, stats.sqft_max)
     condition_score = score_condition(listing.description, listing.amenities, listing.year_built)
     outdoor_score = score_outdoor(listing.description, listing.amenities)
+    room_count_score = score_room_count(
+        listing.beds, listing.baths, stats.room_count_min, stats.room_count_max
+    )
     parking_score = score_parking(listing.parking_spaces)
     composite = (
         WEIGHT_COMMUTE * commute_score
         + WEIGHT_SQFT * sqft_score
         + WEIGHT_CONDITION * condition_score
         + WEIGHT_OUTDOOR * outdoor_score
+        + WEIGHT_ROOM_COUNT * room_count_score
         + WEIGHT_PARKING * parking_score
     )
     # Same missing-data conditions that trigger a NEUTRAL_SCORE fallback
@@ -183,12 +238,14 @@ def score_listing(
         or denver_minutes is None
         or not listing.sqft
         or not listing.year_built
+        or not listing.beds
     )
     return ScoreResult(
         commute_score=commute_score,
         sqft_score=sqft_score,
         condition_score=condition_score,
         outdoor_score=outdoor_score,
+        room_count_score=room_count_score,
         parking_score=parking_score,
         composite=composite,
         passes_filters=passes_filters(listing.baths, listing.lot_sqft),

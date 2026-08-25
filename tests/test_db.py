@@ -258,7 +258,7 @@ def test_get_listing_ids_missing_commute(tmp_path: Path):
 
 SCORE_SAMPLE = ScoreResult(
     commute_score=80.0, sqft_score=50.0, condition_score=90.0,
-    outdoor_score=100.0, parking_score=100.0, composite=79.5,
+    outdoor_score=100.0, room_count_score=70.0, parking_score=100.0, composite=79.5,
     passes_filters=True, has_incomplete_data=False,
 )
 
