@@ -29,11 +29,32 @@ PHOTOS_DIR = DATA_DIR / "photos"
 MODEL = "claude-sonnet-5"
 MAX_TOKENS = 1536
 POLL_INTERVAL_SECONDS = 60
-# Checkpoints the in-flight batch id between submission and the final
-# upsert_visual_score calls, so a crash/Ctrl-C/network blip during polling
-# doesn't leave a re-run submitting (and paying for) a second batch for the
-# same "missing" listings.
-BATCH_STATE_PATH = DATA_DIR / ".photo_scoring_batch_id"
+# Checkpoints the in-flight batch id AND the garage_expected_by_id mapping
+# used to submit it, between submission and the final upsert_visual_score
+# calls. Storing garage_expected_by_id here (not just batch_id) matters: a
+# crash partway through the results loop below leaves some listings already
+# scored in the DB, which would make get_listing_ids_missing_visual_score()
+# return a *narrower* set on resume than the batch actually contains -- the
+# Batch API has no concept of partial consumption, so it always returns the
+# full original result set. Rebuilding garage_expected_by_id from that
+# narrower set would KeyError on the already-scored listings and silently
+# null out their real scores. Loading it back from this checkpoint instead
+# means resume always matches exactly what the batch was submitted with,
+# regardless of how far a prior run got before crashing.
+BATCH_STATE_PATH = DATA_DIR / ".photo_scoring_batch_state.json"
+
+
+def _load_checkpoint() -> dict | None:
+    if not BATCH_STATE_PATH.exists():
+        return None
+    return json.loads(BATCH_STATE_PATH.read_text())
+
+
+def _save_checkpoint(batch_id: str, garage_expected_by_id: dict[str, bool]) -> None:
+    BATCH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    BATCH_STATE_PATH.write_text(
+        json.dumps({"batch_id": batch_id, "garage_expected_by_id": garage_expected_by_id})
+    )
 
 # Ported from assess_six_houses.py's live-validated prompt (verified
 # 2026-08-25 against a real "Virtual Staged" watermark in
@@ -109,49 +130,51 @@ def build_batch_request(
 
 def main() -> None:
     conn = get_connection(DB_PATH)
-    listings_by_id = {row["listing_id"]: row for row in query_listings(conn)}
-    missing_ids = get_listing_ids_missing_visual_score(conn)
-
-    if not missing_ids:
-        print("visual_scores table already covers every listing")
-        conn.close()
-        return
-
-    requests = []
-    garage_expected_by_id: dict[str, bool] = {}
-    for listing_id in missing_ids:
-        row = listings_by_id[listing_id]
-        photo_count = count_downloaded_photos(PHOTOS_DIR, listing_id)
-        if not has_enough_photos(photo_count):
-            upsert_visual_score(conn, listing_id, None)
-            print(
-                f"{listing_id}: skipped ({photo_count} photos, below floor of "
-                f"{MIN_PHOTOS_FOR_VISION_SCORING})"
-            )
-            continue
-        photo_paths = sorted((PHOTOS_DIR / listing_id).glob("*.jpg"))
-        amenities = get_amenities(conn, listing_id)
-        garage_expected_by_id[listing_id] = row["parking_spaces"] > 0
-        requests.append(build_batch_request(listing_id, row, amenities, photo_paths))
-
-    if not requests:
-        print("no listings had enough photos to score")
-        conn.close()
-        return
-
     client = anthropic.Anthropic()
-    if BATCH_STATE_PATH.exists():
-        # Resuming after an interruption: the batch was already submitted (and
-        # paid for) last run. Requests/garage_expected_by_id above are rebuilt
-        # from local data only (no API cost), so results still parse
-        # correctly -- we just skip paying for a second batch.
-        batch_id = BATCH_STATE_PATH.read_text().strip()
+
+    checkpoint = _load_checkpoint()
+    if checkpoint is not None:
+        # Resuming after an interruption: the batch was already submitted
+        # (and paid for) last run. Trust the checkpoint's garage_expected_by_id
+        # as-is rather than recomputing it from the DB's current state -- see
+        # the comment on BATCH_STATE_PATH for why that distinction matters.
+        batch_id = checkpoint["batch_id"]
+        garage_expected_by_id = checkpoint["garage_expected_by_id"]
         print(f"resuming existing batch {batch_id} (found {BATCH_STATE_PATH})")
     else:
+        listings_by_id = {row["listing_id"]: row for row in query_listings(conn)}
+        missing_ids = get_listing_ids_missing_visual_score(conn)
+
+        if not missing_ids:
+            print("visual_scores table already covers every listing")
+            conn.close()
+            return
+
+        requests = []
+        garage_expected_by_id = {}
+        for listing_id in missing_ids:
+            row = listings_by_id[listing_id]
+            photo_count = count_downloaded_photos(PHOTOS_DIR, listing_id)
+            if not has_enough_photos(photo_count):
+                upsert_visual_score(conn, listing_id, None)
+                print(
+                    f"{listing_id}: skipped ({photo_count} photos, below floor of "
+                    f"{MIN_PHOTOS_FOR_VISION_SCORING})"
+                )
+                continue
+            photo_paths = sorted((PHOTOS_DIR / listing_id).glob("*.jpg"))
+            amenities = get_amenities(conn, listing_id)
+            garage_expected_by_id[listing_id] = row["parking_spaces"] > 0
+            requests.append(build_batch_request(listing_id, row, amenities, photo_paths))
+
+        if not requests:
+            print("no listings had enough photos to score")
+            conn.close()
+            return
+
         batch = client.messages.batches.create(requests=requests)
         batch_id = batch.id
-        BATCH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        BATCH_STATE_PATH.write_text(batch_id)
+        _save_checkpoint(batch_id, garage_expected_by_id)
         print(f"submitted batch {batch_id} with {len(requests)} listings")
 
     while True:
