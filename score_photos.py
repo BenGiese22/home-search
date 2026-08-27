@@ -28,7 +28,14 @@ DATA_DIR = Path("data")
 DB_PATH = DATA_DIR / "listings.db"
 PHOTOS_DIR = DATA_DIR / "photos"
 MODEL = "claude-sonnet-5"
-MAX_TOKENS = 1536
+# 1536 was too small: confirmed live, 2026-08-27, that ~30% of listings hit
+# stop_reason="max_tokens" before finishing all 8 schema fields, producing
+# truncated, unparseable JSON. The room-by-room "notes" text can run long
+# enough that the smaller production schema (no gut_reaction/reasoning/etc.
+# fields, unlike the assess_six_houses.py prototype) still isn't a safe fit
+# at 1536. Raised with real margin -- the cost difference is negligible
+# next to the image-input tokens that dominate this request's cost anyway.
+MAX_TOKENS = 4096
 POLL_INTERVAL_SECONDS = 60
 # The Message Batches API rejects a single batch-create request over 256MB
 # (confirmed live, 2026-08-26: submitting ~142 listings' photos in one
