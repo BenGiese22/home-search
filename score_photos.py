@@ -6,6 +6,7 @@ from pathlib import Path
 import anthropic
 from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
 from anthropic.types.messages.batch_create_params import Request
+from dotenv import dotenv_values
 
 from src.db import (
     get_amenities,
@@ -130,7 +131,12 @@ def build_batch_request(
 
 def main() -> None:
     conn = get_connection(DB_PATH)
-    client = anthropic.Anthropic()
+    env = dotenv_values(".env")
+    if not env.get("ANTHROPIC_API_KEY"):
+        print("ANTHROPIC_API_KEY not set in .env -- add it before running this script.")
+        conn.close()
+        return
+    client = anthropic.Anthropic(api_key=env["ANTHROPIC_API_KEY"])
 
     checkpoint = _load_checkpoint()
     if checkpoint is not None:
