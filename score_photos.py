@@ -172,6 +172,41 @@ def build_batch_request(
     )
 
 
+def _process_batch_results(
+    client: anthropic.Anthropic,
+    conn,
+    batch_id: str,
+    garage_expected_by_id: dict[str, bool],
+) -> None:
+    for result in client.messages.batches.results(batch_id):
+        listing_id = result.custom_id
+        try:
+            garage_expected = garage_expected_by_id[listing_id]
+            if result.result.type != "succeeded":
+                upsert_visual_score(conn, listing_id, None)
+                print(f"{listing_id}: batch item {result.result.type}")
+                continue
+            text = next(
+                block.text for block in result.result.message.content if block.type == "text"
+            )
+            response_json = json.loads(text)
+            visual_result = parse_visual_response(response_json, garage_expected)
+        except Exception as exc:
+            upsert_visual_score(conn, listing_id, None)
+            print(f"{listing_id}: failed to parse response ({exc})")
+            continue
+        upsert_visual_score(conn, listing_id, visual_result, raw_response=json.dumps(response_json))
+        staging_flag = (
+            " [STAGING FLAGGED]"
+            if visual_result.watermarked_staging_detected or visual_result.suspected_unwatermarked_staging
+            else ""
+        )
+        print(
+            f"{listing_id}: condition={visual_result.condition_photo_score:.0f} "
+            f"outdoor={visual_result.outdoor_photo_score:.0f}{staging_flag}"
+        )
+
+
 def main() -> None:
     conn = get_connection(DB_PATH)
     env = dotenv_values(".env")
@@ -240,44 +275,32 @@ def main() -> None:
         conn.close()
         return
 
-    for batch_entry in submitted_batches:
-        batch_id = batch_entry["batch_id"]
-        garage_expected_by_id = batch_entry["garage_expected_by_id"]
-
-        while True:
+    # Round-robin across all in-flight batches rather than fully polling one
+    # to completion before even checking the next -- batches don't finish in
+    # submission order (confirmed live, 2026-08-27: batch 1 of 9 was still
+    # in_progress after 5 of the other 8 had already ended), so processing
+    # strictly in list order can leave already-finished batches' results
+    # sitting unprocessed while the script waits on an unrelated straggler.
+    pending_batches = list(submitted_batches)
+    while pending_batches:
+        still_pending = []
+        for batch_entry in pending_batches:
+            batch_id = batch_entry["batch_id"]
             batch = client.messages.batches.retrieve(batch_id)
             if batch.processing_status == "ended":
-                break
-            print(f"batch {batch_id} status: {batch.processing_status}, waiting {POLL_INTERVAL_SECONDS}s")
-            time.sleep(POLL_INTERVAL_SECONDS)
-
-        for result in client.messages.batches.results(batch_id):
-            listing_id = result.custom_id
-            try:
-                garage_expected = garage_expected_by_id[listing_id]
-                if result.result.type != "succeeded":
-                    upsert_visual_score(conn, listing_id, None)
-                    print(f"{listing_id}: batch item {result.result.type}")
-                    continue
-                text = next(
-                    block.text for block in result.result.message.content if block.type == "text"
+                print(f"batch {batch_id}: ended, processing results")
+                _process_batch_results(
+                    client, conn, batch_id, batch_entry["garage_expected_by_id"]
                 )
-                response_json = json.loads(text)
-                visual_result = parse_visual_response(response_json, garage_expected)
-            except Exception as exc:
-                upsert_visual_score(conn, listing_id, None)
-                print(f"{listing_id}: failed to parse response ({exc})")
-                continue
-            upsert_visual_score(conn, listing_id, visual_result, raw_response=json.dumps(response_json))
-            staging_flag = (
-                " [STAGING FLAGGED]"
-                if visual_result.watermarked_staging_detected or visual_result.suspected_unwatermarked_staging
-                else ""
-            )
+            else:
+                still_pending.append(batch_entry)
+        pending_batches = still_pending
+        if pending_batches:
             print(
-                f"{listing_id}: condition={visual_result.condition_photo_score:.0f} "
-                f"outdoor={visual_result.outdoor_photo_score:.0f}{staging_flag}"
+                f"{len(pending_batches)} batch(es) still processing, "
+                f"waiting {POLL_INTERVAL_SECONDS}s"
             )
+            time.sleep(POLL_INTERVAL_SECONDS)
 
     _clear_checkpoint()
     conn.close()
