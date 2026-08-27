@@ -1,3 +1,4 @@
+import csv
 import sys
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from src.scoring import compute_collection_stats, score_listing
 
 DATA_DIR = Path("data")
 DB_PATH = DATA_DIR / "listings.db"
+RANKED_CSV_PATH = DATA_DIR / "ranked_report.csv"
 
 # Points of composite score per $100k of price -- lets a $500k listing
 # scoring 8 be compared against a $650k listing scoring 6.5 on a like-for-like
@@ -23,6 +25,37 @@ def value_score(composite: float, price_numeric: float | None) -> float | None:
     if not price_numeric:
         return None
     return composite / (price_numeric / PRICE_UNIT)
+
+
+def write_ranked_csv(ranked: list[tuple], csv_path: Path) -> None:
+    """Same ranked order as the terminal report, with listing_url included so
+    each row can be clicked straight through to the real listing."""
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "rank", "passes_filters", "composite", "address", "price",
+            "commute_score", "sqft_score", "condition_score", "outdoor_score",
+            "room_count_score", "parking_score", "value_per_100k",
+            "has_incomplete_data", "listing_url",
+        ])
+        for rank, (listing, result, value) in enumerate(ranked, start=1):
+            writer.writerow([
+                rank,
+                result.passes_filters,
+                f"{result.composite:.1f}",
+                listing.address,
+                listing.price,
+                f"{result.commute_score:.1f}",
+                f"{result.sqft_score:.1f}",
+                f"{result.condition_score:.1f}",
+                f"{result.outdoor_score:.1f}",
+                f"{result.room_count_score:.1f}",
+                f"{result.parking_score:.1f}",
+                f"{value:.2f}" if value is not None else "",
+                result.has_incomplete_data,
+                listing.listing_url,
+            ])
 
 
 def _row_to_listing(row, amenities: list[str]) -> Listing:
@@ -109,7 +142,10 @@ def main() -> None:
             f"value={value_str}pts/$100k{incomplete}"
         )
 
+    write_ranked_csv(ranked, RANKED_CSV_PATH)
+
     print(f"\nScored {len(ranked)} listings into {DB_PATH}")
+    print(f"Wrote ranked report to {RANKED_CSV_PATH}")
     if not sort_by_value:
         print("(sorted by composite; rerun with --sort-by-value to sort by score per $100k)")
 
