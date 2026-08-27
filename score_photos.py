@@ -30,32 +30,75 @@ PHOTOS_DIR = DATA_DIR / "photos"
 MODEL = "claude-sonnet-5"
 MAX_TOKENS = 1536
 POLL_INTERVAL_SECONDS = 60
-# Checkpoints the in-flight batch id AND the garage_expected_by_id mapping
-# used to submit it, between submission and the final upsert_visual_score
-# calls. Storing garage_expected_by_id here (not just batch_id) matters: a
-# crash partway through the results loop below leaves some listings already
-# scored in the DB, which would make get_listing_ids_missing_visual_score()
-# return a *narrower* set on resume than the batch actually contains -- the
-# Batch API has no concept of partial consumption, so it always returns the
-# full original result set. Rebuilding garage_expected_by_id from that
-# narrower set would KeyError on the already-scored listings and silently
-# null out their real scores. Loading it back from this checkpoint instead
-# means resume always matches exactly what the batch was submitted with,
-# regardless of how far a prior run got before crashing.
+# The Message Batches API rejects a single batch-create request over 256MB
+# (confirmed live, 2026-08-26: submitting ~142 listings' photos in one
+# request hit a 413 request_too_large before any cost was incurred). Photos
+# are sent base64-encoded (~4/3 the raw byte size) alongside a small amount
+# of JSON/schema overhead per request, so this threshold is set well under
+# the hard cap to leave real margin rather than tune close to the edge.
+MAX_BATCH_REQUEST_BYTES = 180_000_000
+# Per-request estimated overhead beyond the base64 photo payload itself
+# (the schema, instructions text, and JSON structure) -- small relative to
+# image bytes, but included so the size estimate isn't purely image-based.
+REQUEST_OVERHEAD_BYTES = 5_000
+
+# Checkpoints every already-submitted batch's id AND the garage_expected_by_id
+# mapping used to submit it, as a list -- one batch can no longer cover every
+# listing in one request (see MAX_BATCH_REQUEST_BYTES above), so a single-batch
+# checkpoint isn't enough. Storing garage_expected_by_id per batch (not just
+# batch_id) matters: a crash partway through the results loop below leaves
+# some listings already scored in the DB, which would make
+# get_listing_ids_missing_visual_score() return a *narrower* set on resume
+# than a given batch actually contains -- the Batch API has no concept of
+# partial consumption, so it always returns the full original result set for
+# that batch. Rebuilding garage_expected_by_id from that narrower set would
+# KeyError on the already-scored listings and silently null out their real
+# scores. Loading it back from this checkpoint instead means every batch's
+# results always resolve against exactly what it was submitted with,
+# regardless of how far a prior run got before crashing -- and listing_ids
+# already covered by an already-submitted batch are excluded from what still
+# needs submitting on resume, so nothing is submitted (and paid for) twice.
 BATCH_STATE_PATH = DATA_DIR / ".photo_scoring_batch_state.json"
 
 
-def _load_checkpoint() -> dict | None:
+def _load_checkpoint() -> list[dict]:
     if not BATCH_STATE_PATH.exists():
-        return None
+        return []
     return json.loads(BATCH_STATE_PATH.read_text())
 
 
-def _save_checkpoint(batch_id: str, garage_expected_by_id: dict[str, bool]) -> None:
+def _append_checkpoint(batch_id: str, garage_expected_by_id: dict[str, bool]) -> None:
+    batches = _load_checkpoint()
+    batches.append({"batch_id": batch_id, "garage_expected_by_id": garage_expected_by_id})
     BATCH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    BATCH_STATE_PATH.write_text(
-        json.dumps({"batch_id": batch_id, "garage_expected_by_id": garage_expected_by_id})
-    )
+    BATCH_STATE_PATH.write_text(json.dumps(batches))
+
+
+def _clear_checkpoint() -> None:
+    BATCH_STATE_PATH.unlink(missing_ok=True)
+
+
+def _chunk_by_size(entries: list[tuple], max_bytes: int) -> list[list[tuple]]:
+    """Groups (listing_id, request, garage_expected, size_estimate) entries
+    into chunks whose summed size_estimate stays under max_bytes. A single
+    entry larger than max_bytes on its own still gets its own chunk rather
+    than being dropped -- the Batch API's per-request-item limits are far
+    smaller than a whole listing's photos, so this is a defensive fallback,
+    not an expected case."""
+    chunks: list[list[tuple]] = []
+    current: list[tuple] = []
+    current_size = 0
+    for entry in entries:
+        size = entry[3]
+        if current and current_size + size > max_bytes:
+            chunks.append(current)
+            current = []
+            current_size = 0
+        current.append(entry)
+        current_size += size
+    if current:
+        chunks.append(current)
+    return chunks
 
 # Ported from assess_six_houses.py's live-validated prompt (verified
 # 2026-08-25 against a real "Virtual Staged" watermark in
@@ -138,87 +181,105 @@ def main() -> None:
         return
     client = anthropic.Anthropic(api_key=env["ANTHROPIC_API_KEY"])
 
-    checkpoint = _load_checkpoint()
-    if checkpoint is not None:
-        # Resuming after an interruption: the batch was already submitted
-        # (and paid for) last run. Trust the checkpoint's garage_expected_by_id
-        # as-is rather than recomputing it from the DB's current state -- see
-        # the comment on BATCH_STATE_PATH for why that distinction matters.
-        batch_id = checkpoint["batch_id"]
-        garage_expected_by_id = checkpoint["garage_expected_by_id"]
-        print(f"resuming existing batch {batch_id} (found {BATCH_STATE_PATH})")
-    else:
-        listings_by_id = {row["listing_id"]: row for row in query_listings(conn)}
-        missing_ids = get_listing_ids_missing_visual_score(conn)
+    # Batches already submitted (this run or a prior, interrupted one) --
+    # trusted as-is, never recomputed from the DB's current state. See the
+    # comment on BATCH_STATE_PATH for why that distinction matters.
+    submitted_batches = _load_checkpoint()
+    already_submitted_ids = {
+        listing_id
+        for batch_entry in submitted_batches
+        for listing_id in batch_entry["garage_expected_by_id"]
+    }
+    if submitted_batches:
+        print(f"resuming {len(submitted_batches)} already-submitted batch(es) (found {BATCH_STATE_PATH})")
 
-        if not missing_ids:
-            print("visual_scores table already covers every listing")
-            conn.close()
-            return
+    listings_by_id = {row["listing_id"]: row for row in query_listings(conn)}
+    missing_ids = [
+        listing_id
+        for listing_id in get_listing_ids_missing_visual_score(conn)
+        if listing_id not in already_submitted_ids
+    ]
 
-        requests = []
-        garage_expected_by_id = {}
-        for listing_id in missing_ids:
-            row = listings_by_id[listing_id]
-            photo_count = count_downloaded_photos(PHOTOS_DIR, listing_id)
-            if not has_enough_photos(photo_count):
-                upsert_visual_score(conn, listing_id, None)
-                print(
-                    f"{listing_id}: skipped ({photo_count} photos, below floor of "
-                    f"{MIN_PHOTOS_FOR_VISION_SCORING})"
-                )
-                continue
-            photo_paths = sorted((PHOTOS_DIR / listing_id).glob("*.jpg"))
-            amenities = get_amenities(conn, listing_id)
-            garage_expected_by_id[listing_id] = row["parking_spaces"] > 0
-            requests.append(build_batch_request(listing_id, row, amenities, photo_paths))
-
-        if not requests:
-            print("no listings had enough photos to score")
-            conn.close()
-            return
-
-        batch = client.messages.batches.create(requests=requests)
-        batch_id = batch.id
-        _save_checkpoint(batch_id, garage_expected_by_id)
-        print(f"submitted batch {batch_id} with {len(requests)} listings")
-
-    while True:
-        batch = client.messages.batches.retrieve(batch_id)
-        if batch.processing_status == "ended":
-            break
-        print(f"batch status: {batch.processing_status}, waiting {POLL_INTERVAL_SECONDS}s")
-        time.sleep(POLL_INTERVAL_SECONDS)
-
-    for result in client.messages.batches.results(batch_id):
-        listing_id = result.custom_id
-        try:
-            garage_expected = garage_expected_by_id[listing_id]
-            if result.result.type != "succeeded":
-                upsert_visual_score(conn, listing_id, None)
-                print(f"{listing_id}: batch item {result.result.type}")
-                continue
-            text = next(
-                block.text for block in result.result.message.content if block.type == "text"
-            )
-            response_json = json.loads(text)
-            visual_result = parse_visual_response(response_json, garage_expected)
-        except Exception as exc:
+    pending_entries = []  # (listing_id, request, garage_expected, size_estimate)
+    for listing_id in missing_ids:
+        row = listings_by_id[listing_id]
+        photo_count = count_downloaded_photos(PHOTOS_DIR, listing_id)
+        if not has_enough_photos(photo_count):
             upsert_visual_score(conn, listing_id, None)
-            print(f"{listing_id}: failed to parse response ({exc})")
+            print(
+                f"{listing_id}: skipped ({photo_count} photos, below floor of "
+                f"{MIN_PHOTOS_FOR_VISION_SCORING})"
+            )
             continue
-        upsert_visual_score(conn, listing_id, visual_result, raw_response=json.dumps(response_json))
-        staging_flag = (
-            " [STAGING FLAGGED]"
-            if visual_result.watermarked_staging_detected or visual_result.suspected_unwatermarked_staging
-            else ""
+        photo_paths = sorted((PHOTOS_DIR / listing_id).glob("*.jpg"))
+        amenities = get_amenities(conn, listing_id)
+        garage_expected = row["parking_spaces"] > 0
+        request = build_batch_request(listing_id, row, amenities, photo_paths)
+        size_estimate = (
+            sum(p.stat().st_size for p in photo_paths) * 4 // 3 + REQUEST_OVERHEAD_BYTES
         )
-        print(
-            f"{listing_id}: condition={visual_result.condition_photo_score:.0f} "
-            f"outdoor={visual_result.outdoor_photo_score:.0f}{staging_flag}"
-        )
+        pending_entries.append((listing_id, request, garage_expected, size_estimate))
 
-    BATCH_STATE_PATH.unlink(missing_ok=True)
+    if pending_entries:
+        for chunk in _chunk_by_size(pending_entries, MAX_BATCH_REQUEST_BYTES):
+            chunk_requests = [entry[1] for entry in chunk]
+            chunk_garage_expected = {entry[0]: entry[2] for entry in chunk}
+            chunk_bytes = sum(entry[3] for entry in chunk)
+            batch = client.messages.batches.create(requests=chunk_requests)
+            _append_checkpoint(batch.id, chunk_garage_expected)
+            submitted_batches.append(
+                {"batch_id": batch.id, "garage_expected_by_id": chunk_garage_expected}
+            )
+            print(
+                f"submitted batch {batch.id} with {len(chunk_requests)} listings "
+                f"(~{chunk_bytes / 1e6:.0f}MB estimated)"
+            )
+
+    if not submitted_batches:
+        print("no listings had enough photos to score, and none already in flight")
+        conn.close()
+        return
+
+    for batch_entry in submitted_batches:
+        batch_id = batch_entry["batch_id"]
+        garage_expected_by_id = batch_entry["garage_expected_by_id"]
+
+        while True:
+            batch = client.messages.batches.retrieve(batch_id)
+            if batch.processing_status == "ended":
+                break
+            print(f"batch {batch_id} status: {batch.processing_status}, waiting {POLL_INTERVAL_SECONDS}s")
+            time.sleep(POLL_INTERVAL_SECONDS)
+
+        for result in client.messages.batches.results(batch_id):
+            listing_id = result.custom_id
+            try:
+                garage_expected = garage_expected_by_id[listing_id]
+                if result.result.type != "succeeded":
+                    upsert_visual_score(conn, listing_id, None)
+                    print(f"{listing_id}: batch item {result.result.type}")
+                    continue
+                text = next(
+                    block.text for block in result.result.message.content if block.type == "text"
+                )
+                response_json = json.loads(text)
+                visual_result = parse_visual_response(response_json, garage_expected)
+            except Exception as exc:
+                upsert_visual_score(conn, listing_id, None)
+                print(f"{listing_id}: failed to parse response ({exc})")
+                continue
+            upsert_visual_score(conn, listing_id, visual_result, raw_response=json.dumps(response_json))
+            staging_flag = (
+                " [STAGING FLAGGED]"
+                if visual_result.watermarked_staging_detected or visual_result.suspected_unwatermarked_staging
+                else ""
+            )
+            print(
+                f"{listing_id}: condition={visual_result.condition_photo_score:.0f} "
+                f"outdoor={visual_result.outdoor_photo_score:.0f}{staging_flag}"
+            )
+
+    _clear_checkpoint()
     conn.close()
 
 
