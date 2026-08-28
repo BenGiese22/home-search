@@ -389,8 +389,140 @@ still reflect the old prompt/schema. Left as-is pending Ben's call on whether to
 regenerate them (each costs ~$0.15-0.25) or treat them as a frozen first-pass
 snapshot the findings doc already analyzed.
 
+## 2026-08-25 to 2026-08-27 — photo-scoring merged and run against the full live collection; three real bugs found in production
+
+`bgiese/photo-scoring` merged to `main`. Before running it for real, estimated
+cost against Ben's account balance ($4, then topped up to $23.59) — batch
+pricing (50% discount) against ~144 listings' photo sets came in well under
+that. Ran the full pipeline for real: `scrape.py` (fresh collection fetch +
+photo backfill) then `score_photos.py` (the paid vision-scoring batch job)
+against the live 144-listing collection, not a sample.
+
+None of these three bugs were caught by code review, since none involve a
+live API call during implementation — all three only surfaced through real
+usage against the actual Batches API:
+
+- **`ANTHROPIC_API_KEY` not resolved.** Bare `anthropic.Anthropic()` doesn't
+  see `.env` (loaded via `dotenv_values()`, which never touches `os.environ`).
+  Fixed by loading and passing the key explicitly, matching the pattern
+  `assess_six_houses.py` already used.
+- **`anthropic.RequestTooLargeError` (413) on submission.** One batch of 142
+  listings' photos exceeded the API's 256MB per-request limit. Fixed with
+  `_chunk_by_size()` — splits the submission into size-bounded sub-batches,
+  each independently checkpointed to a JSON list
+  (`.photo_scoring_batch_state.json`) so a crash mid-submission never
+  double-submits or double-bills.
+- **Round-robin processing bug.** The original loop processed batches strictly
+  in submission order, so it sat blocked on whichever batch was submitted
+  first even after other batches had already finished — caught via real
+  numbers (80 `visual_scores` rows stuck at a stale count while Anthropic
+  reported 78 succeeded). Fixed by extracting `_process_batch_results()` and
+  switching to a poll-all-pending-each-cycle loop.
+- **Truncated JSON responses.** `MAX_TOKENS = 1536` was too small for ~30% of
+  listings' longer per-room notes, causing `stop_reason == "max_tokens"` and
+  `json.loads` failures on the truncated output. Diagnosed by fetching a
+  specific batch result directly and checking `stop_reason`. Fixed by raising
+  to 4096, then clearing and re-running just the 44 affected rows.
+
+Also handled, mid-run: Ben shut down the OS and resumed later, explicitly
+confirmed safe first (Anthropic batches run server-side, independent of local
+machine state; the checkpoint file survives a restart). Final result: 142 of
+144 listings scored successfully, zero remaining truncation failures.
+
+Once complete, `score.py` gained `write_ranked_csv()` — writes the full
+ranked report (with clickable listing URLs) to `data/ranked_report.csv`,
+so Ben can navigate the ranked list without going back through the terminal.
+
+## 2026-08-27 — status/property-type filtering: an over-broad first attempt, corrected to Active + Coming Soon only
+
+Ben flagged two data-quality issues in the ranked list: one listing was
+expired with no real data left, another he suspected was a duplex. Live
+investigation (DB queries, the raw collection API response, and direct
+browser checks via claude-in-chrome) disproved the duplex claim for that
+specific listing (Single Family, confirmed three independent ways) but fully
+confirmed the expired one — Compass's own collection API already returns
+`localizedStatus` ("Active", "Pending", "Closed", "Expired", "Withdrawn",
+"Coming Soon", "Active / Backup", ...) and a coarse `property_type`, neither
+of which `src/listing_parser.py` was extracting.
+
+Added both fields to `Listing`, wired extraction into `listing_parser.py` and
+storage into `db.py`, and reused the existing, already-hardened delisting
+infrastructure (`compute_changes`/`run_delisting`/circuit breaker from the
+2026-08-16 stale-listing-removal work) to treat a non-Active status as
+"absent from the collection" — rather than writing new deletion logic.
+
+First version of `is_active_status()` only accepted blank or exactly
+`"Active"`. Running it live delisted 67 of 139 listings (48%) — an
+implausible rate that got investigated rather than trusted: the breakdown was
+`{Pending: 28, Closed: 23, Expired: 9, Withdrawn: 5, Active/Backup: 1, Coming
+Soon: 1}`. Ben then explicitly clarified intent with real example URLs: for
+the purpose of a home-*purchase* dataset, only "Active" and "Coming Soon"
+matter — Pending/Closed/Expired/Withdrawn should all be excluded, since
+they're no longer purchasable, but should keep being re-checked (not deleted
+from tracking logic entirely, just excluded from this dataset — they
+reappear automatically if a status ever reverts to Active).
+
+Corrected `is_active_status()` to accept blank, any `"Active"`-prefixed
+status (covers "Active" and "Active / Backup"), or exactly "Coming Soon" —
+meaning only 2 of the original 67 delistings (the Coming Soon and
+Active/Backup listings) were actually wrong under the clarified rule.
+Restored both (3777 Shefield Drive, 8240 Garland Drive) via a fresh
+`scrape.py` run. Wired into both `scrape.py` and `check.py`, exempting
+pinned listings the same way delisting already does.
+
+Deliberately held off on an actual duplex/multi-family filter — no confirmed
+real example exists in the data yet (see above), so there's nothing concrete
+to build a check against.
+
+## 2026-08-28 — concurrent-session git collision, resolved via cross-session coordination
+
+A second Claude Code session (`short-list-f2`, working on a separate
+`~/code/short-list` repo) was using this same `~/code/home-search` checkout
+to build a cloud-publish pipeline (`src/turso_sync.py`, `src/blob_upload.py`,
+`publish.py` on branch `bgiese/publish-to-cloud`) for a planned short-list
+viewer app. Two sessions sharing one non-worktree checkout means either
+session's `git checkout` moves the same `HEAD` out from under the other —
+`short-list-f2`'s `git checkout -b bgiese/publish-to-cloud main` did exactly
+that, so this session's next commit (the status/property-type fix above,
+`2bdb69c`) landed on their branch instead of `main`, sandwiched between their
+first two commits and their third.
+
+Caught it, stopped immediately (no further git mutations), and coordinated
+directly with the other session via cross-session messaging rather than
+guessing or unilaterally rewriting shared branch history. `short-list-f2`
+confirmed ownership of its 3 (later 4) commits and consented to the fix:
+cherry-picked `2bdb69c` onto `main` as `7ff5ef6`, full test suite green (197
+passed), `bgiese/publish-to-cloud` left completely untouched. `main` also
+picked up a small doc commit (`docs/journal/2026-08-27-photo-scoring-batch-ids.md`,
+committed but missed in an earlier "commit everything" pass).
+
+Two things noted for later, not acted on:
+- `bgiese/publish-to-cloud`'s history still technically carries a duplicate of
+  `2bdb69c` (harmless — git will de-dupe identical content if that branch is
+  ever merged). Dropping it would mean rebasing that branch; low-risk since
+  it's local/unpushed, but left as Ben's call rather than either session
+  doing it unasked.
+- `publish.py`/Turso/Blob sync is complete and reviewed on `short-list-f2`'s
+  side, but only import-checked, never run end-to-end — no Turso or Blob
+  credentials exist yet. The first real run (provisioning cloud resources,
+  deploying a public site) was deliberately left to Ben rather than either
+  session doing it autonomously.
+
 ## Open
 
+- **`bgiese/publish-to-cloud` cleanup** — rebase to drop the duplicate
+  `2bdb69c` commit, or leave as-is and let git de-dupe on eventual merge.
+  Ben's call; not urgent, branch is local and unpushed.
+- **Turso/Blob publish pipeline untested end-to-end.** `publish.py` needs real
+  Turso and Vercel Blob credentials before its first live run — deliberately
+  not run by either Claude session since it means provisioning cloud
+  resources and deploying a public site.
+- **`data/ranked_report.csv` needs regenerating** — it was generated before
+  the Active/Coming-Soon-only filtering landed, so it still reflects the
+  larger, pre-filter dataset.
+- **Duplex/multi-family filter still not built** — deferred until a real
+  duplex example turns up in the data; the one flagged so far turned out to
+  be Single Family on investigation.
 - **House tour feedback and calibration findings — done.** All 7 homes Ben
   and Megan toured are written up in `docs/house-tour-feedback.md`, and
   compared against Claude's photo-only read (`assess_six_houses.py`) and the
@@ -402,15 +534,9 @@ snapshot the findings doc already analyzed.
   `RENOVATION_KEYWORDS` and `OUTDOOR_KEYWORDS` against real listing
   descriptions. Nothing acted on yet — pure calibration data, flagged for
   whenever the rubric next gets tuned.
-- **Photo backfill incomplete.** Only 61 of 362 listings have any downloaded
-  photos (2,133 photo files total) — though note the 362-listing dataset
-  this count refers to predates the 2026-08-16 data reset; the DB is
-  starting fresh from the 7 pinned tour houses plus whatever the next real
-  `scrape.py` run adds. Needs to be resumed/finished before the
-  photo-scoring plan can meaningfully run at collection scale.
-- **Photo-scoring implementation** — plan written (including the
-  `layout_plan` field), not yet started; queued behind the photo backfill.
-  Should be read against `docs/house-tour-calibration-findings.md` before
-  implementation starts — layout/circulation and staging-detection aren't in
-  the current design at all, and the findings doc explains why in concrete,
-  evidenced detail rather than in the abstract.
+- **Photo backfill and photo-scoring — done.** See the 2026-08-25 to
+  2026-08-27 entry above: full collection scraped and scored, 142 of 144
+  listings successfully vision-scored. Note `docs/house-tour-calibration-findings.md`'s
+  layout/circulation and staging-detection findings were never folded into
+  the shipped rubric — still an open gap in what gets scored, just not an
+  incomplete-run problem anymore.
