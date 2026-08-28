@@ -30,16 +30,23 @@ REQUIRED_ENV_VARS = [
 ]
 
 
-def _sync_keyed_tables(local_conn, turso_conn) -> int:
+def _sync_keyed_tables(local_conn, turso_conn) -> tuple[int, int]:
     synced = 0
+    failed = 0
     for table in KEYED_TABLES:
         for row in local_conn.execute(f"SELECT * FROM {table}"):
-            upsert_row(turso_conn, table, row)
-            synced += 1
-    return synced
+            try:
+                upsert_row(turso_conn, table, row)
+                synced += 1
+            except Exception as exc:
+                failed += 1
+                print(f"  {table}/{row['listing_id']}: row sync failed ({exc})")
+                continue
+    return synced, failed
 
 
-def _sync_per_listing_tables(local_conn, turso_conn, listing_ids: list[str]) -> None:
+def _sync_per_listing_tables(local_conn, turso_conn, listing_ids: list[str]) -> int:
+    failed = 0
     for listing_id in listing_ids:
         try:
             amenity_rows = local_conn.execute(
@@ -52,12 +59,15 @@ def _sync_per_listing_tables(local_conn, turso_conn, listing_ids: list[str]) -> 
             ).fetchall()
             replace_listing_rows(turso_conn, "photo_urls", listing_id, photo_url_rows)
         except Exception as exc:
+            failed += 1
             print(f"  {listing_id}: per-listing table sync failed ({exc})")
             continue
+    return failed
 
 
-def _upload_new_photos(turso_conn, listing_ids: list[str], rw_token: str) -> int:
+def _upload_new_photos(turso_conn, listing_ids: list[str], rw_token: str) -> tuple[int, int]:
     uploaded = 0
+    failed = 0
     for listing_id in listing_ids:
         photo_dir = PHOTOS_DIR / listing_id
         if not photo_dir.exists():
@@ -69,16 +79,22 @@ def _upload_new_photos(turso_conn, listing_ids: list[str], rw_token: str) -> int
             try:
                 url = upload_photo(photo_path, listing_id, position, rw_token)
             except Exception as exc:
+                failed += 1
                 print(f"  {listing_id}/{photo_path.name}: upload failed ({exc})")
                 continue
-            turso_conn.execute(
-                "INSERT OR REPLACE INTO hosted_photos (listing_id, position, blob_url) "
-                "VALUES (?, ?, ?)",
-                (listing_id, position, url),
-            )
-            turso_conn.commit()
+            try:
+                turso_conn.execute(
+                    "INSERT OR REPLACE INTO hosted_photos (listing_id, position, blob_url) "
+                    "VALUES (?, ?, ?)",
+                    (listing_id, position, url),
+                )
+                turso_conn.commit()
+            except Exception as exc:
+                failed += 1
+                print(f"  {listing_id}/{photo_path.name}: hosted_photos record failed ({exc})")
+                continue
             uploaded += 1
-    return uploaded
+    return uploaded, failed
 
 
 def _revalidate(short_list_url: str, secret: str) -> None:
@@ -109,22 +125,29 @@ def main() -> None:
     turso_conn = turso_serverless.connect(
         env["TURSO_DATABASE_URL"], auth_token=env["TURSO_AUTH_TOKEN"]
     )
-    ensure_schema(turso_conn)
+    try:
+        ensure_schema(turso_conn)
 
-    rows = query_listings(local_conn)
-    listing_ids = [row["listing_id"] for row in rows]
+        rows = query_listings(local_conn)
+        listing_ids = [row["listing_id"] for row in rows]
 
-    synced = _sync_keyed_tables(local_conn, turso_conn)
-    _sync_per_listing_tables(local_conn, turso_conn, listing_ids)
-    print(f"synced {synced} rows across {len(KEYED_TABLES)} tables for {len(listing_ids)} listings")
+        synced, row_failed = _sync_keyed_tables(local_conn, turso_conn)
+        listing_failed = _sync_per_listing_tables(local_conn, turso_conn, listing_ids)
+        summary = f"synced {synced} rows across {len(KEYED_TABLES)} tables for {len(listing_ids)} listings"
+        if row_failed or listing_failed:
+            summary += f" ({row_failed} row failures, {listing_failed} listing failures)"
+        print(summary)
 
-    uploaded = _upload_new_photos(turso_conn, listing_ids, env["BLOB_READ_WRITE_TOKEN"])
-    print(f"uploaded {uploaded} new photos")
+        uploaded, upload_failed = _upload_new_photos(turso_conn, listing_ids, env["BLOB_READ_WRITE_TOKEN"])
+        photo_summary = f"uploaded {uploaded} new photos"
+        if upload_failed:
+            photo_summary += f" ({upload_failed} failed)"
+        print(photo_summary)
 
-    _revalidate(env["SHORT_LIST_URL"], env["REVALIDATE_SECRET"])
-
-    local_conn.close()
-    turso_conn.close()
+        _revalidate(env["SHORT_LIST_URL"], env["REVALIDATE_SECRET"])
+    finally:
+        local_conn.close()
+        turso_conn.close()
 
 
 if __name__ == "__main__":
