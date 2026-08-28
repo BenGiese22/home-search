@@ -517,9 +517,6 @@ Two things noted for later, not acted on:
   Turso and Vercel Blob credentials before its first live run — deliberately
   not run by either Claude session since it means provisioning cloud
   resources and deploying a public site.
-- **`data/ranked_report.csv` needs regenerating** — it was generated before
-  the Active/Coming-Soon-only filtering landed, so it still reflects the
-  larger, pre-filter dataset.
 - **Duplex/multi-family filter still not built** — deferred until a real
   duplex example turns up in the data; the one flagged so far turned out to
   be Single Family on investigation.
