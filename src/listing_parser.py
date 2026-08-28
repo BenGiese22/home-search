@@ -14,6 +14,11 @@ def parse_listing_object(obj: dict, listing_url: str) -> Listing:
     three_quarter_baths = size.get("threeQuarterBathrooms", 0) or 0
     baths = full_baths + half_baths * 0.5 + three_quarter_baths * 0.75
 
+    global_property_types = (
+        detailed.get("propertyType", {}).get("masterType", {}).get("GLOBAL", [])
+    )
+    property_type = global_property_types[0] if global_property_types else ""
+
     return Listing(
         listing_id=obj.get("listingIdSHA") or obj.get("feedListingId", ""),
         address=location.get("prettyAddress", ""),
@@ -31,4 +36,6 @@ def parse_listing_object(obj: dict, listing_url: str) -> Listing:
         amenities=list(detailed.get("amenities", [])),
         photo_urls=[m["originalUrl"] for m in media if "originalUrl" in m],
         listing_url=listing_url,
+        property_type=property_type,
+        localized_status=obj.get("localizedStatus", ""),
     )

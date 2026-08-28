@@ -6,6 +6,7 @@ from src.auth import launch_authenticated_page
 from src.config import load_config
 from src.db import get_connection, get_pinned_listing_ids, get_price_snapshot, upsert_listing
 from src.diff import compute_changes, format_report, run_delisting
+from src.models import is_active_status
 from src.scraper import derive_pinned_ids_from_urls, fetch_collection_listings
 
 DATA_DIR = Path("data")
@@ -47,7 +48,17 @@ def main() -> None:
         # pinned from a prior scrape.py run must not be un-pinned here.
         upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
 
-    report = compute_changes(fetched, before, pinned_ids=pinned_ids)
+    # A listing whose fresh status comes back non-Active (Expired, Sold,
+    # Withdrawn, ...) is treated as absent from the collection for
+    # delisting purposes, exactly like one that dropped out of the
+    # collection API's results entirely -- see scrape.py's matching logic
+    # for the full rationale. Pinned listings are exempt.
+    present = [
+        listing for listing in fetched
+        if listing.listing_id in pinned_ids or is_active_status(listing.localized_status)
+    ]
+
+    report = compute_changes(present, before, pinned_ids=pinned_ids)
     run_delisting(db_conn, PHOTOS_DIR, STORE_DIR, fetch_succeeded, report, before, pinned_ids)
 
     db_conn.close()

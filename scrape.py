@@ -12,7 +12,7 @@ from src.csv_writer import write_csv
 from src.db import get_connection, get_pinned_listing_ids, get_price_snapshot, upsert_listing
 from src.diff import compute_changes, run_delisting
 from src.gallery import write_gallery
-from src.models import Listing
+from src.models import Listing, is_active_status
 from src.photos import download_photos
 from src.scraper import (
     derive_listing_id_from_url,
@@ -143,20 +143,37 @@ def main() -> None:
                 # or a prior one) -- upsert_listing fully replaces the row.
                 upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
 
+            # A listing whose fresh status comes back non-Active (Expired,
+            # Sold, Withdrawn, ...) is treated as absent from the
+            # collection for every purpose below -- photo/JSON saving and
+            # delisting -- exactly like one that dropped out of the
+            # collection API's results entirely, going through the same
+            # reviewed, circuit-breaker-protected removal path rather than
+            # new logic. Pinned listings are exempt, same as delisting
+            # already exempts them: an explicit pin means Ben wants it
+            # tracked regardless of what the MLS status says.
+            present_listings = [
+                listing for listing in collection_listings
+                if listing.listing_id in pinned_ids or is_active_status(listing.localized_status)
+            ]
+            inactive_count = len(collection_listings) - len(present_listings)
+            if inactive_count:
+                print(f"{inactive_count} listing(s) no longer active (expired/sold/withdrawn), excluding")
+
             # --limit caps how many listings this run downloads photos for
             # and saves to the JSON store -- e.g. for a first smoke test of
             # the photo-download path against the live site. --new-listing
             # filters to not-yet-scraped listings *before* that cap is
             # applied: without it, --limit alone re-slices the same
-            # fixed-order prefix of collection_listings every run, and once
+            # fixed-order prefix of present_listings every run, and once
             # that prefix is already scraped, a repeated --limit run does
             # zero new work -- --new-listing is what makes a chunked,
             # staged backfill (several --limit runs over time) actually
-            # make progress each time. compute_changes below still runs
-            # against the full collection_listings, never this filtered/
-            # capped subset, so a small batch is never mistaken for mass
-            # delisting.
-            candidates = collection_listings
+            # make progress each time. compute_changes below runs against
+            # present_listings too (not the raw collection_listings), so an
+            # excluded inactive listing is treated as a delisting candidate,
+            # and a small --limit batch is never mistaken for mass delisting.
+            candidates = present_listings
             if new_listing_only:
                 candidates = [
                     listing for listing in candidates
@@ -167,7 +184,7 @@ def main() -> None:
                 flags = f"--limit={limit}" + (" --new-listing" if new_listing_only else "")
                 print(
                     f"{flags}: processing {len(to_process)} of "
-                    f"{len(collection_listings)} fetched listings this run"
+                    f"{len(present_listings)} active/pinned listings this run"
                 )
 
             for listing in to_process:
@@ -181,7 +198,7 @@ def main() -> None:
                     continue
 
             report = compute_changes(
-                collection_listings, before, pinned_ids=frozenset(pinned_ids)
+                present_listings, before, pinned_ids=frozenset(pinned_ids)
             )
             run_delisting(
                 db_conn, PHOTOS_DIR, STORE_DIR, fetch_succeeded, report, before,

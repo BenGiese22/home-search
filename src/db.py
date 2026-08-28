@@ -25,7 +25,9 @@ CREATE TABLE IF NOT EXISTS listings (
     year_built INTEGER NOT NULL,
     description TEXT NOT NULL,
     listing_url TEXT NOT NULL,
-    is_pinned INTEGER NOT NULL DEFAULT 0
+    is_pinned INTEGER NOT NULL DEFAULT 0,
+    property_type TEXT NOT NULL DEFAULT '',
+    localized_status TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS amenities (
@@ -107,6 +109,10 @@ def init_db(conn: sqlite3.Connection) -> None:
     existing_listing_columns = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
     if "is_pinned" not in existing_listing_columns:
         conn.execute("ALTER TABLE listings ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
+    if "property_type" not in existing_listing_columns:
+        conn.execute("ALTER TABLE listings ADD COLUMN property_type TEXT NOT NULL DEFAULT ''")
+    if "localized_status" not in existing_listing_columns:
+        conn.execute("ALTER TABLE listings ADD COLUMN localized_status TEXT NOT NULL DEFAULT ''")
     conn.commit()
 
 
@@ -137,8 +143,9 @@ def upsert_listing(conn: sqlite3.Connection, listing: Listing, is_pinned: bool =
             INSERT OR REPLACE INTO listings (
                 listing_id, address, city, state, zip_code,
                 price, price_numeric, beds, baths, sqft, lot_sqft,
-                parking_spaces, year_built, description, listing_url, is_pinned
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                parking_spaces, year_built, description, listing_url, is_pinned,
+                property_type, localized_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 listing.listing_id,
@@ -157,6 +164,8 @@ def upsert_listing(conn: sqlite3.Connection, listing: Listing, is_pinned: bool =
                 listing.description,
                 listing.listing_url,
                 int(is_pinned),
+                listing.property_type,
+                listing.localized_status,
             ),
         )
         conn.execute("DELETE FROM amenities WHERE listing_id = ?", (listing.listing_id,))

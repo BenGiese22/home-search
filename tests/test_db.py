@@ -52,6 +52,21 @@ def test_upsert_inserts_queryable_listing(tmp_path: Path):
     assert rows[0]["listing_id"] == "abc123"
     assert rows[0]["address"] == "1 Test St"
     assert rows[0]["parking_spaces"] == 2
+    assert rows[0]["property_type"] == ""
+    assert rows[0]["localized_status"] == ""
+
+
+def test_upsert_stores_property_type_and_localized_status(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    expired = SAMPLE.__class__(
+        **{**SAMPLE.__dict__, "property_type": "Single Family", "localized_status": "Expired"}
+    )
+
+    upsert_listing(conn, expired)
+
+    rows = query_listings(conn)
+    assert rows[0]["property_type"] == "Single Family"
+    assert rows[0]["localized_status"] == "Expired"
 
 
 def test_upsert_parses_price_into_price_numeric(tmp_path: Path):

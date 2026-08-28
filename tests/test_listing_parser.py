@@ -43,3 +43,41 @@ def test_parse_listing_object_missing_optional_fields_defaults_safely():
     assert listing.year_built == 0
     assert listing.amenities == []
     assert listing.photo_urls == []
+    assert listing.property_type == ""
+    assert listing.localized_status == ""
+
+
+def test_parse_listing_object_extracts_status_and_property_type():
+    # Shape confirmed live, 2026-08-27, against the real collection API
+    # response for an expired listing and an active single-family listing.
+    obj = {
+        "location": {"prettyAddress": "1 Test St", "city": "X", "state": "CO", "zipCode": "00000"},
+        "size": {"bedrooms": 2, "fullBathrooms": 1, "squareFeet": 900, "lotSizeInSquareFeet": 0},
+        "price": {"formatted": "$1"},
+        "media": [],
+        "localizedStatus": "Expired",
+        "detailedInfo": {
+            "propertyType": {
+                "masterType": {
+                    "GLOBAL": ["Single Family"],
+                    "LOCAL_1": ["Residential"],
+                    "LOCAL_2": ["Single Family Residence"],
+                }
+            }
+        },
+    }
+    listing = parse_listing_object(obj, listing_url="https://example.com/1")
+    assert listing.localized_status == "Expired"
+    assert listing.property_type == "Single Family"
+
+
+def test_parse_listing_object_property_type_defaults_empty_when_global_list_empty():
+    obj = {
+        "location": {"prettyAddress": "1 Test St", "city": "X", "state": "CO", "zipCode": "00000"},
+        "size": {"bedrooms": 2, "fullBathrooms": 1, "squareFeet": 900, "lotSizeInSquareFeet": 0},
+        "price": {"formatted": "$1"},
+        "media": [],
+        "detailedInfo": {"propertyType": {"masterType": {"GLOBAL": []}}},
+    }
+    listing = parse_listing_object(obj, listing_url="https://example.com/1")
+    assert listing.property_type == ""

@@ -1,4 +1,4 @@
-from src.models import Listing
+from src.models import Listing, is_active_status
 
 
 def test_listing_construction():
@@ -25,3 +25,44 @@ def test_listing_construction():
     assert listing.baths == 3.5
     assert listing.parking_spaces == 2
     assert listing.amenities == ["Renovated Kitchen", "Private Yard"]
+
+
+def test_listing_property_type_and_status_default_to_empty_string():
+    listing = Listing(
+        listing_id="abc123", address="1 Test St", city="X", state="CO", zip_code="00000",
+        price="$1", beds=1, baths=1.0, sqft=1, lot_sqft=1, parking_spaces=1, year_built=2000,
+        description="", amenities=[], photo_urls=[], listing_url="https://example.com/1",
+    )
+    assert listing.property_type == ""
+    assert listing.localized_status == ""
+
+
+def test_is_active_status_true_for_active():
+    assert is_active_status("Active") is True
+
+
+def test_is_active_status_true_for_blank_or_unknown():
+    # Absence of status isn't proof a listing is inactive -- only an
+    # explicit non-Active value counts.
+    assert is_active_status("") is True
+
+
+def test_is_active_status_false_for_expired():
+    assert is_active_status("Expired") is False
+
+
+def test_is_active_status_false_for_other_non_active_values():
+    assert is_active_status("Sold") is False
+    assert is_active_status("Withdrawn") is False
+    assert is_active_status("Pending") is False
+    assert is_active_status("Closed") is False
+
+
+def test_is_active_status_true_for_coming_soon():
+    assert is_active_status("Coming Soon") is True
+
+
+def test_is_active_status_true_for_active_prefixed_variants():
+    # "Active / Backup" (an accepted backup offer, still technically for
+    # sale) confirmed live, 2026-08-27, as a real status Compass returns.
+    assert is_active_status("Active / Backup") is True
