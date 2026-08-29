@@ -42,21 +42,28 @@ def main() -> None:
             fetched = []
             fetch_succeeded = False
 
-    for listing in fetched:
-        # Preserve pin status: check.py never sets a pin itself (it doesn't
-        # scrape LISTING_URLS), but a collection listing that's already
-        # pinned from a prior scrape.py run must not be un-pinned here.
-        upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
-
     # A listing whose fresh status comes back non-Active (Expired, Sold,
     # Withdrawn, ...) is treated as absent from the collection for
-    # delisting purposes, exactly like one that dropped out of the
-    # collection API's results entirely -- see scrape.py's matching logic
-    # for the full rationale. Pinned listings are exempt.
+    # upserting and delisting purposes alike, exactly like one that dropped
+    # out of the collection API's results entirely -- see scrape.py's
+    # matching logic for the full rationale. Pinned listings are exempt.
     present = [
         listing for listing in fetched
         if listing.listing_id in pinned_ids or is_active_status(listing.localized_status)
     ]
+
+    # Deliberately loop over `present`, not the raw `fetched` list: an
+    # inactive, non-pinned listing must never be upserted here, even for the
+    # first time -- compute_changes()/run_delisting() below can only remove
+    # a listing that was already tracked (present in `before`) and then
+    # drops out; a listing that shows up already inactive and was never
+    # tracked before would otherwise get written in here and then never be
+    # eligible for removal.
+    for listing in present:
+        # Preserve pin status: check.py never sets a pin itself (it doesn't
+        # scrape LISTING_URLS), but a collection listing that's already
+        # pinned from a prior scrape.py run must not be un-pinned here.
+        upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
 
     report = compute_changes(present, before, pinned_ids=pinned_ids)
     run_delisting(db_conn, PHOTOS_DIR, STORE_DIR, fetch_succeeded, report, before, pinned_ids)

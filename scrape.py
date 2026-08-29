@@ -133,21 +133,11 @@ def main() -> None:
                 collection_listings = []
                 fetch_succeeded = False
 
-            # Refresh every fetched listing's DB row regardless of
-            # --limit/--new-listing -- cheap (no network), and it's what
-            # keeps price-change detection correct even during a
-            # deliberately limited/staged run that skips most photos.
-            for listing in collection_listings:
-                # Preserve pin status if this collection listing happens to
-                # also be individually pinned (via LISTING_URLS, this run
-                # or a prior one) -- upsert_listing fully replaces the row.
-                upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
-
             # A listing whose fresh status comes back non-Active (Expired,
             # Sold, Withdrawn, ...) is treated as absent from the
-            # collection for every purpose below -- photo/JSON saving and
-            # delisting -- exactly like one that dropped out of the
-            # collection API's results entirely, going through the same
+            # collection for every purpose below -- upserting, photo/JSON
+            # saving, and delisting -- exactly like one that dropped out of
+            # the collection API's results entirely, going through the same
             # reviewed, circuit-breaker-protected removal path rather than
             # new logic. Pinned listings are exempt, same as delisting
             # already exempts them: an explicit pin means Ben wants it
@@ -159,6 +149,23 @@ def main() -> None:
             inactive_count = len(collection_listings) - len(present_listings)
             if inactive_count:
                 print(f"{inactive_count} listing(s) no longer active (expired/sold/withdrawn), excluding")
+
+            # Refresh every present (active/pinned) listing's DB row
+            # regardless of --limit/--new-listing -- cheap (no network), and
+            # it's what keeps price-change detection correct even during a
+            # deliberately limited/staged run that skips most photos.
+            # Deliberately NOT looping over the raw collection_listings: an
+            # inactive, non-pinned listing must never be upserted here, even
+            # for the first time -- compute_changes()/run_delisting() below
+            # can only remove a listing that was already tracked (present in
+            # `before`) and then drops out; a listing that shows up already
+            # inactive and was never tracked before would otherwise get
+            # written in here and then never be eligible for removal.
+            for listing in present_listings:
+                # Preserve pin status if this collection listing happens to
+                # also be individually pinned (via LISTING_URLS, this run
+                # or a prior one) -- upsert_listing fully replaces the row.
+                upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
 
             # --limit caps how many listings this run downloads photos for
             # and saves to the JSON store -- e.g. for a first smoke test of
