@@ -1,3 +1,4 @@
+import re
 import sqlite3
 
 TURSO_SCHEMA_EXTRA = """
@@ -8,6 +9,77 @@ CREATE TABLE IF NOT EXISTS hosted_photos (
     PRIMARY KEY (listing_id, position)
 );
 """
+
+_CREATE_TABLE_RE = re.compile(
+    r"CREATE TABLE IF NOT EXISTS\s+(\w+)\s*\((.*?)\)\s*;", re.DOTALL
+)
+_TABLE_CONSTRAINT_KEYWORDS = {"PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT"}
+
+
+def _split_top_level(body: str) -> list[str]:
+    """Splits a CREATE TABLE column list on commas that are not nested
+    inside parentheses (e.g. the comma-free `REFERENCES listings(listing_id)`
+    inline constraints already used throughout _SCHEMA)."""
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for ch in body:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    return parts
+
+
+def _parse_columns(schema_sql: str) -> dict[str, dict[str, str]]:
+    """Parses `{table_name: {column_name: column_def_sql}}` out of a block of
+    `CREATE TABLE IF NOT EXISTS` statements, where column_def_sql is the
+    column's type plus constraints (minus PRIMARY KEY / REFERENCES, which
+    SQLite's ALTER TABLE ... ADD COLUMN does not accept on an existing
+    table), ready to append after `ALTER TABLE t ADD COLUMN <name> `."""
+    tables: dict[str, dict[str, str]] = {}
+    for match in _CREATE_TABLE_RE.finditer(schema_sql):
+        table_name, body = match.group(1), match.group(2)
+        columns: dict[str, str] = {}
+        for part in _split_top_level(body):
+            part = part.strip()
+            if not part:
+                continue
+            tokens = part.split(None, 1)
+            if len(tokens) != 2:
+                continue
+            name, rest = tokens
+            if name.upper() in _TABLE_CONSTRAINT_KEYWORDS:
+                continue  # table-level constraint, not a column definition
+            rest = re.sub(r"PRIMARY KEY", "", rest, flags=re.IGNORECASE)
+            rest = re.sub(r"REFERENCES\s+\w+\s*\([^)]*\)", "", rest, flags=re.IGNORECASE)
+            columns[name] = re.sub(r"\s+", " ", rest).strip()
+        if columns:
+            tables[table_name] = columns
+    return tables
+
+
+def _migrate_missing_columns(conn, schema_sql: str) -> None:
+    """`CREATE TABLE IF NOT EXISTS` no-ops on a table that already exists, so
+    a mirror created before a column was added to _SCHEMA never gains it
+    (silently -- upsert_row then fails with "table X has no column named Y").
+    Diffs each mirrored table's actual columns (PRAGMA table_info) against
+    the columns _SCHEMA now declares and ALTER TABLE ... ADD COLUMN whatever
+    is missing -- the same migration pattern src.db.init_db() already
+    applies to the local sqlite db, generalized so new _SCHEMA columns never
+    need a matching hand-written branch here."""
+    for table, columns in _parse_columns(schema_sql).items():
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, definition in columns.items():
+            if name in existing:
+                continue
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
 def ensure_schema(conn) -> None:
@@ -27,6 +99,7 @@ def ensure_schema(conn) -> None:
             if not statement:
                 continue
             conn.execute(statement)
+        _migrate_missing_columns(conn, fragment)
 
     if hasattr(conn, "commit"):
         conn.commit()

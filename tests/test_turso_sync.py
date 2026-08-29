@@ -75,6 +75,62 @@ def test_upsert_row_replaces_existing_row_with_same_key():
     assert rows[0]["denver_minutes"] == 99
 
 
+def test_ensure_schema_migrates_a_mirror_created_before_a_column_existed():
+    # Simulates a Turso mirror created before `property_type` was added to
+    # _SCHEMA: CREATE TABLE IF NOT EXISTS alone would no-op on this table
+    # forever, so the column must be added by an explicit ALTER TABLE.
+    conn = _connect()
+    conn.execute(
+        """
+        CREATE TABLE listings (
+            listing_id TEXT PRIMARY KEY,
+            address TEXT NOT NULL,
+            city TEXT NOT NULL,
+            state TEXT NOT NULL,
+            zip_code TEXT NOT NULL,
+            price TEXT NOT NULL,
+            price_numeric REAL,
+            beds INTEGER NOT NULL,
+            baths REAL NOT NULL,
+            sqft INTEGER NOT NULL,
+            lot_sqft INTEGER NOT NULL,
+            parking_spaces INTEGER NOT NULL,
+            year_built INTEGER NOT NULL,
+            description TEXT NOT NULL,
+            listing_url TEXT NOT NULL,
+            is_pinned INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    cols_before = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
+    assert "property_type" not in cols_before
+    assert "localized_status" not in cols_before
+
+    ensure_schema(conn)
+
+    cols_after = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
+    assert "property_type" in cols_after
+    assert "localized_status" in cols_after
+
+    source = _connect()
+    source.executescript(_SCHEMA)
+    source.execute(
+        "INSERT INTO listings (listing_id, address, city, state, zip_code, price, "
+        "price_numeric, beds, baths, sqft, lot_sqft, parking_spaces, year_built, "
+        "description, listing_url, is_pinned, property_type, localized_status) "
+        "VALUES ('abc', '123 Main St', 'Denver', 'CO', '80202', '$500,000', 500000, "
+        "3, 2.0, 1500, 5000, 2, 2000, 'A house', 'https://example.com', 0, "
+        "'SingleFamily', 'Active')"
+    )
+    row = source.execute("SELECT * FROM listings WHERE listing_id = 'abc'").fetchone()
+
+    upsert_row(conn, "listings", row)
+
+    result = conn.execute("SELECT * FROM listings WHERE listing_id = 'abc'").fetchone()
+    assert result["property_type"] == "SingleFamily"
+    assert result["localized_status"] == "Active"
+
+
 def test_replace_listing_rows_drops_stale_rows_not_in_the_new_set():
     source = _connect()
     source.executescript(_SCHEMA)
