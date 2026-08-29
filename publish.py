@@ -19,6 +19,13 @@ PHOTOS_DIR = DATA_DIR / "photos"
 # since they have no primary key of their own.
 KEYED_TABLES = ["listings", "commute", "scores", "visual_scores"]
 
+# Every table pruning must consider: the keyed tables above, plus the
+# per-listing tables and the Turso-only hosted_photos table. This is the
+# only source of table names _prune_deleted_listings uses -- it is a fixed
+# internal list, never derived from external input, so interpolating a name
+# from it into SQL cannot become an injection path.
+PRUNABLE_TABLES = KEYED_TABLES + ["amenities", "photo_urls", "hosted_photos"]
+
 # Config publish.py needs from the environment. Checked up front so a
 # missing var fails with a readable message instead of a bare KeyError.
 REQUIRED_ENV_VARS = [
@@ -63,6 +70,44 @@ def _sync_per_listing_tables(local_conn, turso_conn, listing_ids: list[str]) -> 
             print(f"  {listing_id}: per-listing table sync failed ({exc})")
             continue
     return failed
+
+
+def _prune_deleted_listings(turso_conn, listing_ids: list[str]) -> int:
+    """Deletes rows for any listing_id no longer present in the current
+    local sync from every mirrored table (PRUNABLE_TABLES) -- the
+    counterpart to upsert that KEYED_TABLES never had, so a delisted home
+    (scrape.py/check.py already exclude non-Active listings) stayed in the
+    viewer forever instead of disappearing like it does locally.
+
+    Table names are only ever drawn from the fixed PRUNABLE_TABLES list
+    above; listing ids are always passed as bound parameters -- never
+    interpolated into the SQL string -- so this cannot become a table-name
+    or value injection path.
+
+    If listing_ids is empty, prune is skipped entirely: that almost
+    certainly means the local read failed rather than "every listing was
+    delisted", and `NOT IN ()` would otherwise match (and delete) every
+    row in the mirror.
+    """
+    if not listing_ids:
+        return 0
+    placeholders = ", ".join("?" for _ in listing_ids)
+    pruned = 0
+    for table in PRUNABLE_TABLES:
+        row = turso_conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE listing_id NOT IN ({placeholders})",
+            listing_ids,
+        ).fetchone()
+        table_pruned = row[0] if row is not None else 0
+        if table_pruned:
+            turso_conn.execute(
+                f"DELETE FROM {table} WHERE listing_id NOT IN ({placeholders})",
+                listing_ids,
+            )
+            pruned += table_pruned
+    if hasattr(turso_conn, "commit"):
+        turso_conn.commit()
+    return pruned
 
 
 def _upload_new_photos(turso_conn, listing_ids: list[str], rw_token: str) -> tuple[int, int]:
@@ -137,6 +182,9 @@ def main() -> None:
         if row_failed or listing_failed:
             summary += f" ({row_failed} row failures, {listing_failed} listing failures)"
         print(summary)
+
+        pruned = _prune_deleted_listings(turso_conn, listing_ids)
+        print(f"pruned {pruned} rows for listings no longer in the local sync")
 
         uploaded, upload_failed = _upload_new_photos(turso_conn, listing_ids, env["BLOB_READ_WRITE_TOKEN"])
         photo_summary = f"uploaded {uploaded} new photos"
