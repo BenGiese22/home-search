@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -118,14 +119,14 @@ def _upload_new_photos(turso_conn, listing_ids: list[str], rw_token: str) -> tup
         if not photo_dir.exists():
             continue
         for photo_path in sorted(photo_dir.glob("*.jpg")):
-            position = int(photo_path.stem)
-            if already_uploaded(turso_conn, listing_id, position):
-                continue
             try:
+                position = int(photo_path.stem)
+                if already_uploaded(turso_conn, listing_id, position):
+                    continue
                 url = upload_photo(photo_path, listing_id, position, rw_token)
             except Exception as exc:
                 failed += 1
-                print(f"  {listing_id}/{photo_path.name}: upload failed ({exc})")
+                print(f"  {listing_id}/{photo_path.name}: photo processing failed ({exc})")
                 continue
             try:
                 turso_conn.execute(
@@ -166,6 +167,18 @@ def main() -> None:
             + " (set them in .env -- see .env.example)"
         )
 
+    # upload_photo() shells out to the `vercel` CLI (see src/blob_upload.py).
+    # It's an undeclared dependency requirements.txt can't express: if it's
+    # missing, subprocess.run raises FileNotFoundError once per photo, which
+    # _upload_new_photos already catches and counts as a failure -- so
+    # without this check, a missing CLI silently fails every photo instead
+    # of failing fast with a clear cause.
+    if shutil.which("vercel") is None:
+        sys.exit(
+            "publish.py: the `vercel` CLI is required for photo uploads but "
+            "was not found on PATH (npm install -g vercel)"
+        )
+
     local_conn = get_connection(DB_PATH)
     turso_conn = turso_serverless.connect(
         env["TURSO_DATABASE_URL"], auth_token=env["TURSO_AUTH_TOKEN"]
@@ -196,6 +209,16 @@ def main() -> None:
     finally:
         local_conn.close()
         turso_conn.close()
+
+    # A partial sync must not exit 0 -- otherwise a caller (cron, CI) has no
+    # signal that some rows/listings/photos never made it to Turso, and the
+    # viewer silently serves stale or incomplete data.
+    total_failures = row_failed + listing_failed + upload_failed
+    if total_failures > 0:
+        sys.exit(
+            f"publish.py: completed with {total_failures} failure(s) "
+            f"({row_failed} row, {listing_failed} listing, {upload_failed} photo) -- see log above"
+        )
 
 
 if __name__ == "__main__":
