@@ -508,6 +508,37 @@ Two things noted for later, not acted on:
   deploying a public site) was deliberately left to Ben rather than either
   session doing it autonomously.
 
+## 2026-08-28 — full second pipeline pass surfaces a real leak: inactive listings could never actually stay excluded
+
+Ran the complete pipeline end-to-end (`scrape.py` → `check.py` →
+`score_photos.py` → `score.py`) as a second real pass, expecting only a
+handful of new listings. `score.py` reported 148 listings scored against
+`scrape.py`'s own JSON-store count of 83 — a mismatch worth chasing rather
+than reporting the run as clean.
+
+Root cause: both `scrape.py` and `check.py` had an "upsert every fetched
+listing, no matter what" loop that ran *before* the Active/Coming-Soon
+filter from the 2026-08-27 entry above was applied. `compute_changes()`'s
+delisting logic can only remove a listing that goes from present to
+absent — it has no way to catch one that shows up already inactive and was
+never tracked locally before. Confirmed live: 65 non-active, non-pinned rows
+were sitting in the DB, several of them the *exact* IDs `scrape.py` had just
+hard-deleted moments earlier in the same run — `check.py`'s identical
+upsert-everything loop, running right after, silently wrote them straight
+back in since its own "before" snapshot no longer knew about them.
+
+Fixed by computing `present_listings` (active + pinned) before the upsert
+loop in both scripts and upserting only those — an inactive, non-pinned
+listing now never enters the DB, whether it's brand new or was just removed.
+Cleaned up the 65 leaked rows via the existing `apply_delisting()` cascade
+(same reviewed removal path as regular delisting, not a raw SQL delete).
+Verified the fix under real conditions, not just unit tests: re-ran
+`check.py` then `scrape.py --new-listing` against the live collection — 4
+genuinely new active listings picked up correctly, 2 genuinely delisted,
+zero leaked rows either time. Full pipeline finished clean at 85 listings,
+matching across `scrape.py`'s JSON store, the DB, and `score.py`'s count for
+the first time.
+
 ## Open
 
 - **`bgiese/publish-to-cloud` cleanup** — rebase to drop the duplicate
