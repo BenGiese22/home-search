@@ -10,7 +10,7 @@ from dotenv import dotenv_values
 
 from src.db import get_connection, query_listings
 from src.turso_sync import ensure_schema, replace_listing_rows, upsert_row
-from src.blob_upload import already_uploaded, upload_photo
+from src.blob_upload import upload_photo
 
 DATA_DIR = Path("data")
 DB_PATH = DATA_DIR / "listings.db"
@@ -120,9 +120,18 @@ def _prune_deleted_listings(turso_conn, listing_ids: list[str]) -> int:
 
 
 def _collect_pending_photos(turso_conn, listing_ids: list[str]) -> list[tuple[str, int, Path]]:
-    """Walks the local photo directories and returns the photos that still
-    need uploading. Runs on the main thread because already_uploaded() reads
-    the shared Turso connection, which is not safe to use from workers."""
+    """Walks the local photo directories and returns the photos still needing
+    upload.
+
+    Fetches the whole hosted_photos key set in ONE query instead of calling
+    already_uploaded() per photo. Against hosted Turso every query is a real
+    HTTP round-trip -- measured at ~240ms -- so the per-photo version spent
+    ~12 minutes on ~3000 photos before a single upload could start. Runs on
+    the main thread because it reads the shared Turso connection."""
+    already: set[tuple[str, int]] = set()
+    for row in turso_conn.execute("SELECT listing_id, position FROM hosted_photos"):
+        already.add((row[0], int(row[1])))
+
     pending: list[tuple[str, int, Path]] = []
     for listing_id in listing_ids:
         photo_dir = PHOTOS_DIR / listing_id
@@ -131,10 +140,10 @@ def _collect_pending_photos(turso_conn, listing_ids: list[str]) -> list[tuple[st
         for photo_path in sorted(photo_dir.glob("*.jpg")):
             try:
                 position = int(photo_path.stem)
-                if already_uploaded(turso_conn, listing_id, position):
-                    continue
-            except Exception as exc:
-                print(f"  {listing_id}/{photo_path.name}: skipped ({exc})")
+            except ValueError:
+                print(f"  {listing_id}/{photo_path.name}: skipped (name is not NN.jpg)")
+                continue
+            if (listing_id, position) in already:
                 continue
             pending.append((listing_id, position, photo_path))
     return pending
