@@ -1,3 +1,4 @@
+from src.hoa import parse_hoa_from_description
 from src.models import Listing
 
 
@@ -19,6 +20,8 @@ def parse_listing_object(obj: dict, listing_url: str) -> Listing:
     )
     property_type = global_property_types[0] if global_property_types else ""
 
+    description = obj.get("description", "")
+
     return Listing(
         listing_id=obj.get("listingIdSHA") or obj.get("feedListingId", ""),
         address=location.get("prettyAddress", ""),
@@ -32,10 +35,11 @@ def parse_listing_object(obj: dict, listing_url: str) -> Listing:
         lot_sqft=size.get("lotSizeInSquareFeet", 0) or 0,
         parking_spaces=detailed.get("totalParkingSpaces", 0) or 0,
         year_built=building.get("buildingYearOpened", 0) or 0,
-        description=obj.get("description", ""),
+        description=description,
         amenities=list(detailed.get("amenities", [])),
         photo_urls=[m["originalUrl"] for m in media if "originalUrl" in m],
         listing_url=listing_url,
         property_type=property_type,
         localized_status=obj.get("localizedStatus", ""),
+        hoa_annual=parse_hoa_from_description(description),
     )

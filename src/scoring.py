@@ -7,12 +7,23 @@ NEUTRAL_SCORE = 50.0
 MEDTRONIC_LEG_WEIGHT = 0.8
 DENVER_LEG_WEIGHT = 0.2
 
-WEIGHT_COMMUTE = 0.30
-WEIGHT_SQFT = 0.20
-WEIGHT_CONDITION = 0.20
-WEIGHT_OUTDOOR = 0.15
-WEIGHT_ROOM_COUNT = 0.10
-WEIGHT_PARKING = 0.05
+# All six pre-HOA weights scaled by (1 - WEIGHT_HOA) = 0.955, which
+# preserves their importance relative to each other instead of taking the
+# whole cost out of one arbitrary donor factor.
+WEIGHT_COMMUTE = 0.2865
+WEIGHT_SQFT = 0.191
+WEIGHT_CONDITION = 0.191
+WEIGHT_OUTDOOR = 0.14325
+WEIGHT_ROOM_COUNT = 0.0955
+WEIGHT_PARKING = 0.04775
+WEIGHT_HOA = 0.045
+
+HOA_NO_FEE_BONUS = 2.5
+HOA_MAX_PENALTY = 50.0
+# The annual fee costing exactly half of HOA_MAX_PENALTY.
+HOA_HALF_PENALTY_AT = 3850.0
+# How sharply the curve turns around that point.
+HOA_PENALTY_STEEPNESS = 2.6
 
 YEAR_BUILT_MIN = 1955
 YEAR_BUILT_MAX = 2005
@@ -172,6 +183,36 @@ def score_room_count(beds: int, baths: float, room_count_min: float, room_count_
     return _clamp((total - room_count_min) / (room_count_max - room_count_min) * 100.0)
 
 
+def score_hoa(annual_hoa: float | None) -> float:
+    """Unknown (None) is neutral -- no bonus, no penalty -- exactly like
+    every other missing-data case in this module. A confirmed absence of
+    HOA (0.0) earns a small bonus.
+
+    A positive fee is penalized on a saturating curve rather than a plain
+    power curve: very shallow at the low end, so a cheap HOA barely dents
+    a home that is good on the things that matter; steepest through the
+    middle where the fee starts being real money; then flattening as it
+    approaches HOA_MAX_PENALTY without ever reaching it. Because it only
+    approaches its asymptote there is no hard cap and so no flat region --
+    a $9,600 and a $20,000 HOA still rank differently, which a ceiling
+    could not do -- and the sub-score stays above 0 for any finite fee, so
+    an expensive HOA drags a listing down without ever vetoing it outright.
+
+    Two knobs, and it matters which one you reach for. HOA_HALF_PENALTY_AT
+    slides the whole curve: lower it to make every fee cost more. Only
+    HOA_PENALTY_STEEPNESS changes the shape: raising it punishes expensive
+    fees harder while making cheap ones cheaper. If only the expensive end
+    feels wrong, sliding the curve will quietly make cheap HOAs costly too.
+    """
+    if annual_hoa is None:
+        return NEUTRAL_SCORE
+    if annual_hoa <= 0:
+        return NEUTRAL_SCORE + HOA_NO_FEE_BONUS
+    fee = annual_hoa**HOA_PENALTY_STEEPNESS
+    midpoint = HOA_HALF_PENALTY_AT**HOA_PENALTY_STEEPNESS
+    return _clamp(NEUTRAL_SCORE - HOA_MAX_PENALTY * fee / (fee + midpoint))
+
+
 def score_parking(parking_spaces: int) -> float:
     if parking_spaces >= 2:
         return 100.0
@@ -218,6 +259,7 @@ class ScoreResult:
     outdoor_score: float
     room_count_score: float
     parking_score: float
+    hoa_score: float
     composite: float
     passes_filters: bool
     has_incomplete_data: bool
@@ -243,6 +285,7 @@ def score_listing(
         listing.beds, listing.baths, stats.room_count_min, stats.room_count_max
     )
     parking_score = score_parking(listing.parking_spaces)
+    hoa_score = score_hoa(listing.hoa_annual)
     composite = (
         WEIGHT_COMMUTE * commute_score
         + WEIGHT_SQFT * sqft_score
@@ -250,6 +293,7 @@ def score_listing(
         + WEIGHT_OUTDOOR * outdoor_score
         + WEIGHT_ROOM_COUNT * room_count_score
         + WEIGHT_PARKING * parking_score
+        + WEIGHT_HOA * hoa_score
     )
     # Same missing-data conditions that trigger a NEUTRAL_SCORE fallback
     # inside score_commute/score_sqft/score_condition — mirrored here so a
@@ -261,6 +305,9 @@ def score_listing(
         or not listing.sqft
         or not listing.year_built
         or not listing.beds
+        # None means the listing never disclosed an HOA. A confirmed 0.0 is
+        # real data and deliberately does not set this flag.
+        or listing.hoa_annual is None
     )
     return ScoreResult(
         commute_score=commute_score,
@@ -269,6 +316,7 @@ def score_listing(
         outdoor_score=outdoor_score,
         room_count_score=room_count_score,
         parking_score=parking_score,
+        hoa_score=hoa_score,
         composite=composite,
         passes_filters=passes_filters(listing.baths, listing.lot_sqft),
         has_incomplete_data=has_incomplete_data,

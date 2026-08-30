@@ -36,7 +36,7 @@ def write_ranked_csv(ranked: list[tuple], csv_path: Path) -> None:
         writer.writerow([
             "rank", "passes_filters", "composite", "address", "price",
             "commute_score", "sqft_score", "condition_score", "outdoor_score",
-            "room_count_score", "parking_score", "value_per_100k",
+            "room_count_score", "parking_score", "hoa_score", "value_per_100k",
             "has_incomplete_data", "listing_url",
         ])
         for rank, (listing, result, value) in enumerate(ranked, start=1):
@@ -52,6 +52,7 @@ def write_ranked_csv(ranked: list[tuple], csv_path: Path) -> None:
                 f"{result.outdoor_score:.1f}",
                 f"{result.room_count_score:.1f}",
                 f"{result.parking_score:.1f}",
+                f"{result.hoa_score:.1f}",
                 f"{value:.2f}" if value is not None else "",
                 result.has_incomplete_data,
                 listing.listing_url,
@@ -76,6 +77,7 @@ def _row_to_listing(row, amenities: list[str]) -> Listing:
         amenities=amenities,
         photo_urls=[],
         listing_url=row["listing_url"],
+        hoa_annual=row["hoa_annual"],
     )
 
 
@@ -139,6 +141,7 @@ def main() -> None:
             f"commute={result.commute_score:5.1f} sqft={result.sqft_score:5.1f} "
             f"condition={result.condition_score:5.1f} outdoor={result.outdoor_score:5.1f} "
             f"rooms={result.room_count_score:5.1f} parking={result.parking_score:5.1f} "
+            f"hoa={result.hoa_score:5.1f} "
             f"value={value_str}pts/$100k{incomplete}"
         )
 

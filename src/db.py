@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS listings (
     listing_url TEXT NOT NULL,
     is_pinned INTEGER NOT NULL DEFAULT 0,
     property_type TEXT NOT NULL DEFAULT '',
-    localized_status TEXT NOT NULL DEFAULT ''
+    localized_status TEXT NOT NULL DEFAULT '',
+    hoa_annual REAL
 );
 
 CREATE TABLE IF NOT EXISTS amenities (
@@ -61,6 +62,7 @@ CREATE TABLE IF NOT EXISTS scores (
     outdoor_score REAL NOT NULL,
     room_count_score REAL NOT NULL DEFAULT 0,
     parking_score REAL NOT NULL,
+    hoa_score REAL NOT NULL DEFAULT 0,
     composite REAL NOT NULL,
     passes_filters INTEGER NOT NULL,
     has_incomplete_data INTEGER NOT NULL,
@@ -106,6 +108,11 @@ def init_db(conn: sqlite3.Connection) -> None:
         )
     if "room_count_score" not in existing_score_columns:
         conn.execute("ALTER TABLE scores ADD COLUMN room_count_score REAL NOT NULL DEFAULT 0")
+    # Unlike listings.hoa_annual, a DEFAULT here is harmless: score.py
+    # rewrites every scores row on each run, so the default is only ever
+    # visible between the migration and the next scoring pass.
+    if "hoa_score" not in existing_score_columns:
+        conn.execute("ALTER TABLE scores ADD COLUMN hoa_score REAL NOT NULL DEFAULT 0")
     existing_listing_columns = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
     if "is_pinned" not in existing_listing_columns:
         conn.execute("ALTER TABLE listings ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
@@ -113,6 +120,12 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE listings ADD COLUMN property_type TEXT NOT NULL DEFAULT ''")
     if "localized_status" not in existing_listing_columns:
         conn.execute("ALTER TABLE listings ADD COLUMN localized_status TEXT NOT NULL DEFAULT ''")
+    # Deliberately nullable with no default: NULL means "HOA unknown",
+    # which is scored differently from a confirmed 0.0. A DEFAULT 0 here
+    # would silently tell the scorer every un-backfilled listing has no
+    # HOA and hand out the no-HOA bonus across the board.
+    if "hoa_annual" not in existing_listing_columns:
+        conn.execute("ALTER TABLE listings ADD COLUMN hoa_annual REAL")
     conn.commit()
 
 
@@ -144,8 +157,8 @@ def upsert_listing(conn: sqlite3.Connection, listing: Listing, is_pinned: bool =
                 listing_id, address, city, state, zip_code,
                 price, price_numeric, beds, baths, sqft, lot_sqft,
                 parking_spaces, year_built, description, listing_url, is_pinned,
-                property_type, localized_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                property_type, localized_status, hoa_annual
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 listing.listing_id,
@@ -166,6 +179,7 @@ def upsert_listing(conn: sqlite3.Connection, listing: Listing, is_pinned: bool =
                 int(is_pinned),
                 listing.property_type,
                 listing.localized_status,
+                listing.hoa_annual,
             ),
         )
         conn.execute("DELETE FROM amenities WHERE listing_id = ?", (listing.listing_id,))
@@ -273,9 +287,9 @@ def upsert_score(conn: sqlite3.Connection, listing_id: str, result: ScoreResult)
             """
             INSERT OR REPLACE INTO scores (
                 listing_id, commute_score, sqft_score, condition_score,
-                outdoor_score, room_count_score, parking_score, composite,
-                passes_filters, has_incomplete_data, computed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                outdoor_score, room_count_score, parking_score, hoa_score,
+                composite, passes_filters, has_incomplete_data, computed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 listing_id,
@@ -285,6 +299,7 @@ def upsert_score(conn: sqlite3.Connection, listing_id: str, result: ScoreResult)
                 result.outdoor_score,
                 result.room_count_score,
                 result.parking_score,
+                result.hoa_score,
                 result.composite,
                 int(result.passes_filters),
                 int(result.has_incomplete_data),

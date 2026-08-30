@@ -44,3 +44,18 @@ def test_write_csv_round_trips_fields(tmp_path: Path):
     assert row["amenities"] == "Renovated Kitchen; Private Yard"
     assert row["listing_url"] == "https://example.com/listing/abc123"
     assert row["photo_dir"] == str(photos_root / "abc123")
+
+
+def test_write_csv_leaves_hoa_annual_blank_when_unknown(tmp_path: Path):
+    path = tmp_path / "out.csv"
+    write_csv([LISTING], tmp_path / "photos", path)
+    row = list(csv.DictReader(path.open()))[0]
+    assert row["hoa_annual"] == ""
+
+
+def test_write_csv_writes_known_hoa_annual(tmp_path: Path):
+    path = tmp_path / "out.csv"
+    listing = LISTING.__class__(**{**LISTING.__dict__, "hoa_annual": 1200.0})
+    write_csv([listing], tmp_path / "photos", path)
+    row = list(csv.DictReader(path.open()))[0]
+    assert float(row["hoa_annual"]) == 1200.0

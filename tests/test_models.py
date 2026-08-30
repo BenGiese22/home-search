@@ -66,3 +66,28 @@ def test_is_active_status_true_for_active_prefixed_variants():
     # "Active / Backup" (an accepted backup offer, still technically for
     # sale) confirmed live, 2026-08-27, as a real status Compass returns.
     assert is_active_status("Active / Backup") is True
+
+
+def test_listing_hoa_annual_defaults_to_none_for_backward_compatible_construction():
+    """Store files written before hoa_annual existed must still load, and a
+    listing with no HOA information must read as unknown (None), never as
+    0.0 -- 0.0 means "confirmed no HOA" and scores differently."""
+    listing = Listing(
+        listing_id="abc123",
+        address="1 Test St",
+        city="Testville",
+        state="CO",
+        zip_code="80020",
+        price="$500,000",
+        beds=3,
+        baths=2.0,
+        sqft=1800,
+        lot_sqft=7000,
+        parking_spaces=2,
+        year_built=1990,
+        description="A home.",
+        amenities=[],
+        photo_urls=[],
+        listing_url="https://example.com/1",
+    )
+    assert listing.hoa_annual is None

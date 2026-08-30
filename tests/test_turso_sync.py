@@ -107,12 +107,14 @@ def test_ensure_schema_migrates_a_mirror_created_before_a_column_existed():
     cols_before = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
     assert "property_type" not in cols_before
     assert "localized_status" not in cols_before
+    assert "hoa_annual" not in cols_before
 
     ensure_schema(conn)
 
     cols_after = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
     assert "property_type" in cols_after
     assert "localized_status" in cols_after
+    assert "hoa_annual" in cols_after
 
     source = _connect()
     source.executescript(_SCHEMA)
@@ -209,7 +211,13 @@ def test_upsert_rows_replaces_on_conflict_like_upsert_row_did():
     source = _connect()
     source.executescript(_SCHEMA)
     source.execute(
-        "INSERT INTO scores VALUES ('a', 1, 1, 1, 1, 1, 1, 10, 1, 0, 't1')"
+        """
+        INSERT INTO scores (
+            listing_id, commute_score, sqft_score, condition_score, outdoor_score,
+            room_count_score, parking_score, hoa_score, composite, passes_filters,
+            has_incomplete_data, computed_at
+        ) VALUES ('a', 1, 1, 1, 1, 1, 1, 1, 10, 1, 0, 't1')
+        """
     )
     dest = _connect()
     ensure_schema(dest)
