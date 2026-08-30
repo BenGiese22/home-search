@@ -9,7 +9,7 @@ import turso_serverless
 from dotenv import dotenv_values
 
 from src.db import get_connection, query_listings
-from src.turso_sync import ensure_schema, replace_listing_rows, upsert_row
+from src.turso_sync import ensure_schema, replace_listing_rows, upsert_rows
 from src.blob_upload import upload_photo
 
 DATA_DIR = Path("data")
@@ -20,6 +20,9 @@ PHOTOS_DIR = DATA_DIR / "photos"
 # upsert_row. amenities/photo_urls are handled separately (Step 6 below)
 # since they have no primary key of their own.
 KEYED_TABLES = ["listings", "commute", "scores", "visual_scores"]
+
+# Mirrors src.turso_sync.BATCH_CHUNK -- how many rows go in one statement.
+TURSO_BATCH_CHUNK = 50
 
 # Photo uploads shell out to the Vercel CLI, which costs ~0.6s of Node
 # startup per photo. At ~3000 photos that is ~30 minutes of pure process
@@ -50,13 +53,19 @@ def _sync_keyed_tables(local_conn, turso_conn) -> tuple[int, int]:
     synced = 0
     failed = 0
     for table in KEYED_TABLES:
-        for row in local_conn.execute(f"SELECT * FROM {table}"):
+        # Batched: each round-trip to hosted Turso is ~240ms, so one
+        # statement per row made a full sync take ~22 minutes. A failure now
+        # costs its whole chunk rather than a single row -- an acceptable
+        # trade at this scale, and the run still continues to the next chunk.
+        rows = local_conn.execute(f"SELECT * FROM {table}").fetchall()
+        for start in range(0, len(rows), TURSO_BATCH_CHUNK):
+            chunk = rows[start:start + TURSO_BATCH_CHUNK]
             try:
-                upsert_row(turso_conn, table, row)
-                synced += 1
+                upsert_rows(turso_conn, table, chunk)
+                synced += len(chunk)
             except Exception as exc:
-                failed += 1
-                print(f"  {table}/{row['listing_id']}: row sync failed ({exc})")
+                failed += len(chunk)
+                print(f"  {table}: batch of {len(chunk)} row(s) failed ({exc})")
                 continue
     return synced, failed
 

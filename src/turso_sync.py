@@ -121,12 +121,48 @@ def upsert_row(conn, table: str, row: sqlite3.Row) -> None:
         conn.commit()
 
 
+# Each conn.execute() against hosted Turso is an HTTP round-trip, measured
+# at ~240ms. A full sync writes ~5400 rows (photo_urls alone is ~3000), so
+# one-statement-per-row costs ~22 minutes. Batching them into multi-row
+# INSERTs collapses that to a few dozen round-trips. Chunked rather than one
+# giant statement to stay well inside SQLite's variable limit (999 by
+# default): CHUNK * columns must remain under it, and 50 x 16 columns is the
+# widest mirrored table's worst case.
+BATCH_CHUNK = 50
+
+
+def upsert_rows(conn, table: str, rows: list[sqlite3.Row]) -> None:
+    """Inserts or replaces many rows in as few round-trips as possible.
+
+    Same semantics as calling upsert_row() per row -- INSERT OR REPLACE keyed
+    on each table's own primary key -- but issues one multi-row statement per
+    chunk instead of one per row. Rows are assumed to share a column set,
+    which holds because they come from a single SELECT * on one table."""
+    if not rows:
+        return
+    columns = list(rows[0].keys())
+    col_list = ", ".join(columns)
+    one = "(" + ", ".join("?" for _ in columns) + ")"
+
+    for start in range(0, len(rows), BATCH_CHUNK):
+        chunk = rows[start:start + BATCH_CHUNK]
+        values: list[object] = []
+        for row in chunk:
+            values.extend(row[c] for c in columns)
+        conn.execute(
+            f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES "
+            + ", ".join(one for _ in chunk),
+            tuple(values),
+        )
+    if hasattr(conn, "commit"):
+        conn.commit()
+
+
 def replace_listing_rows(conn, table: str, listing_id: str, rows: list[sqlite3.Row]) -> None:
     """For tables with no per-row primary key (amenities, photo_urls):
     deletes every existing row for this listing_id, then inserts the
     current set. Avoids duplicate accumulation across reruns."""
     conn.execute(f"DELETE FROM {table} WHERE listing_id = ?", (listing_id,))
-    for row in rows:
-        upsert_row(conn, table, row)
+    upsert_rows(conn, table, rows)
     if hasattr(conn, "commit"):
         conn.commit()
