@@ -306,16 +306,55 @@ def get_amenities(conn: sqlite3.Connection, listing_id: str) -> list[str]:
 
 def delete_listing(conn: sqlite3.Connection, listing_id: str) -> None:
     """Permanently removes a listing and every child row referencing it
-    (amenities, photo_urls, commute, scores). Used when a listing drops out
-    of the live Compass collection — delisted listings are hard-deleted,
-    not archived, since they're never expected to be referenced again.
-    Safe to call for a listing_id that doesn't exist."""
+    (amenities, photo_urls, commute, scores, visual_scores). Used when a
+    listing drops out of the live Compass collection — delisted listings are
+    hard-deleted, not archived, since they're never expected to be referenced
+    again. Safe to call for a listing_id that doesn't exist.
+
+    Keep this list in step with _SCHEMA: visual_scores was added to the schema
+    long after this function and went unnoticed here for months, orphaning one
+    row per delisting."""
     with conn:
         conn.execute("DELETE FROM amenities WHERE listing_id = ?", (listing_id,))
         conn.execute("DELETE FROM photo_urls WHERE listing_id = ?", (listing_id,))
         conn.execute("DELETE FROM commute WHERE listing_id = ?", (listing_id,))
         conn.execute("DELETE FROM scores WHERE listing_id = ?", (listing_id,))
+        conn.execute("DELETE FROM visual_scores WHERE listing_id = ?", (listing_id,))
         conn.execute("DELETE FROM listings WHERE listing_id = ?", (listing_id,))
+
+
+def delete_orphaned_rows(conn: sqlite3.Connection) -> dict[str, int]:
+    """Removes child rows whose listing no longer exists, and reports how many
+    went from each table.
+
+    Cleanup for orphans that accumulated before delete_listing handled every
+    child table -- 67 visual_scores rows had built up, one per delisting.
+    Turso enforces the foreign keys the local database only declares, so each
+    orphan failed to sync to the hosted viewer on every run.
+
+    Discovers child tables from the schema rather than a hardcoded list, for
+    the same reason delete_listing's hardcoded list is what went stale."""
+    child_tables = [
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name != 'listings'"
+        )
+        if any(
+            info[1] == "listing_id"
+            for info in conn.execute(f"PRAGMA table_info({row[0]})")
+        )
+    ]
+
+    removed: dict[str, int] = {}
+    with conn:
+        for table in child_tables:
+            cursor = conn.execute(
+                f"DELETE FROM {table} WHERE listing_id NOT IN "
+                "(SELECT listing_id FROM listings)"
+            )
+            if cursor.rowcount:
+                removed[table] = cursor.rowcount
+    return removed
 
 
 def _bool_or_none_to_int(value: bool | None) -> int | None:

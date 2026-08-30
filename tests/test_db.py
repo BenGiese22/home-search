@@ -3,6 +3,7 @@ from pathlib import Path
 from src.commute import CommuteResult
 from src.db import (
     delete_listing,
+    delete_orphaned_rows,
     get_amenities,
     get_commute,
     get_connection,
@@ -356,6 +357,21 @@ def test_delete_listing_removes_row_and_all_children(tmp_path: Path):
     assert get_scores(conn) == []
 
 
+def test_delete_listing_also_removes_the_visual_score(tmp_path: Path):
+    """visual_scores was added to the schema after delete_listing was written
+    and never wired into it, leaving an orphan row behind on every delisting.
+    67 had accumulated in the real database, and Turso enforces the foreign
+    key, so each one failed to sync to the hosted viewer on every run."""
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    upsert_visual_score(conn, "abc123", VISUAL_SCORE_SAMPLE)
+    assert get_visual_score(conn, "abc123") is not None
+
+    delete_listing(conn, "abc123")
+
+    assert get_visual_score(conn, "abc123") is None
+
+
 def test_delete_listing_does_not_touch_other_listings(tmp_path: Path):
     conn = get_connection(_db_path(tmp_path))
     upsert_listing(conn, SAMPLE)
@@ -486,3 +502,80 @@ def test_get_listing_ids_missing_visual_score(tmp_path: Path):
     upsert_visual_score(conn, "abc123", VISUAL_SCORE_SAMPLE)
 
     assert get_listing_ids_missing_visual_score(conn) == ["other456"]
+
+
+def test_delete_listing_cleans_every_table_that_references_listings(tmp_path: Path):
+    """Derived from the schema rather than a hardcoded list, because a
+    hardcoded list is exactly what failed: visual_scores was added to _SCHEMA
+    and never added to delete_listing. This fails automatically the next time
+    a child table is introduced without wiring it in."""
+    conn = get_connection(_db_path(tmp_path))
+
+    child_tables = [
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name != 'listings'"
+        )
+        if any(
+            info[1] == "listing_id"
+            for info in conn.execute(f"PRAGMA table_info({row[0]})")
+        )
+    ]
+    assert "visual_scores" in child_tables, "sanity: the table this bug was about"
+
+    conn.execute(
+        "INSERT INTO listings (listing_id, address, city, state, zip_code, price, "
+        "beds, baths, sqft, lot_sqft, parking_spaces, year_built, description, "
+        "listing_url) VALUES ('orphan-probe','a','c','CO','1','$1',1,1,1,1,1,2000,'d','u')"
+    )
+    for table in child_tables:
+        cols = [i[1] for i in conn.execute(f"PRAGMA table_info({table})")]
+        notnull = {
+            i[1]: i[4]
+            for i in conn.execute(f"PRAGMA table_info({table})")
+            if i[3] and i[4] is None and i[1] != "listing_id"
+        }
+        insert_cols = ["listing_id"] + list(notnull)
+        placeholders = ", ".join("?" for _ in insert_cols)
+        conn.execute(
+            f"INSERT INTO {table} ({', '.join(insert_cols)}) VALUES ({placeholders})",
+            tuple(["orphan-probe"] + ["0"] * len(notnull)),
+        )
+    conn.commit()
+
+    delete_listing(conn, "orphan-probe")
+
+    leftovers = {
+        table: conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE listing_id = 'orphan-probe'"
+        ).fetchone()[0]
+        for table in child_tables
+    }
+    assert all(n == 0 for n in leftovers.values()), (
+        f"delete_listing left orphans behind: "
+        f"{ {t: n for t, n in leftovers.items() if n} }"
+    )
+
+
+def test_delete_orphaned_rows_removes_children_with_no_listing(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    upsert_visual_score(conn, "abc123", VISUAL_SCORE_SAMPLE)
+    upsert_visual_score(conn, "ghost", VISUAL_SCORE_SAMPLE)
+    conn.commit()
+
+    removed = delete_orphaned_rows(conn)
+
+    assert removed == {"visual_scores": 1}
+    assert get_visual_score(conn, "abc123") is not None, "the live listing must survive"
+    assert get_visual_score(conn, "ghost") is None
+
+
+def test_delete_orphaned_rows_is_a_no_op_on_a_clean_database(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    upsert_visual_score(conn, "abc123", VISUAL_SCORE_SAMPLE)
+    conn.commit()
+
+    assert delete_orphaned_rows(conn) == {}
+    assert get_visual_score(conn, "abc123") is not None
