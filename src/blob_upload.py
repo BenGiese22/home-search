@@ -49,7 +49,17 @@ def upload_photo(
             f"{exc.stderr}"
         ) from exc
 
-    match = _BLOB_URL_RE.search(result.stdout)
-    if match:
-        return match.group(0)
-    return result.stdout.strip()
+    # The CLI prints "> Success! <url>" on STDERR, not stdout -- stdout comes
+    # back empty. Found on the first real sync, which recorded ~200 photos
+    # with a blank blob_url before anyone noticed. Search both streams, and
+    # refuse to return an empty string: a blank URL silently yields broken
+    # images instead of a visible failure.
+    for stream in (getattr(result, "stdout", ""), getattr(result, "stderr", "")):
+        match = _BLOB_URL_RE.search(stream or "")
+        if match:
+            return match.group(0)
+    raise RuntimeError(
+        f"vercel blob put reported success for {local_path} but no blob URL "
+        f"appeared in its output (stdout={result.stdout!r} "
+        f"stderr={(getattr(result, 'stderr', '') or '')[-200:]!r})"
+    )

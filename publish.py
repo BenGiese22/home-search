@@ -9,7 +9,7 @@ import turso_serverless
 from dotenv import dotenv_values
 
 from src.db import get_connection, query_listings
-from src.turso_sync import ensure_schema, replace_listing_rows, upsert_rows
+from src.turso_sync import BatchRowErrors, ensure_schema, replace_listing_rows, upsert_rows
 from src.blob_upload import upload_photo
 
 DATA_DIR = Path("data")
@@ -63,6 +63,13 @@ def _sync_keyed_tables(local_conn, turso_conn) -> tuple[int, int]:
             try:
                 upsert_rows(turso_conn, table, chunk)
                 synced += len(chunk)
+            except BatchRowErrors as exc:
+                # upsert_rows already retried each row individually, so only
+                # genuinely bad rows are in exc.rows -- the rest landed.
+                failed += len(exc.rows)
+                synced += len(chunk) - len(exc.rows)
+                for row in exc.rows:
+                    print(f"  {table}/{row['listing_id']}: row sync failed")
             except Exception as exc:
                 failed += len(chunk)
                 print(f"  {table}: batch of {len(chunk)} row(s) failed ({exc})")

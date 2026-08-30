@@ -128,6 +128,17 @@ def upsert_row(conn, table: str, row: sqlite3.Row) -> None:
 # giant statement to stay well inside SQLite's variable limit (999 by
 # default): CHUNK * columns must remain under it, and 50 x 16 columns is the
 # widest mirrored table's worst case.
+class BatchRowErrors(Exception):
+    """Raised when some rows in a batched write could not be inserted, after
+    each was retried individually. Carries the failed rows so the caller can
+    count and report them without losing the ones that succeeded."""
+
+    def __init__(self, table: str, rows: list):
+        self.table = table
+        self.rows = rows
+        super().__init__(f"{len(rows)} row(s) failed to sync into {table}")
+
+
 BATCH_CHUNK = 50
 
 
@@ -143,19 +154,34 @@ def upsert_rows(conn, table: str, rows: list[sqlite3.Row]) -> None:
     columns = list(rows[0].keys())
     col_list = ", ".join(columns)
     one = "(" + ", ".join("?" for _ in columns) + ")"
+    failed_rows: list = []
 
     for start in range(0, len(rows), BATCH_CHUNK):
         chunk = rows[start:start + BATCH_CHUNK]
         values: list[object] = []
         for row in chunk:
             values.extend(row[c] for c in columns)
-        conn.execute(
-            f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES "
-            + ", ".join(one for _ in chunk),
-            tuple(values),
-        )
+        try:
+            conn.execute(
+                f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES "
+                + ", ".join(one for _ in chunk),
+                tuple(values),
+            )
+        except Exception:
+            # One bad row would otherwise take its whole chunk with it.
+            # Seen for real: visual_scores holds orphan rows whose listing no
+            # longer exists, and Turso enforces the foreign key -- so a batch
+            # of 50 lost 49 good rows to 1 bad one. Retry row by row so only
+            # genuinely bad rows fail.
+            for row in chunk:
+                try:
+                    upsert_row(conn, table, row)
+                except Exception:
+                    failed_rows.append(row)
     if hasattr(conn, "commit"):
         conn.commit()
+    if failed_rows:
+        raise BatchRowErrors(table, failed_rows)
 
 
 def replace_listing_rows(conn, table: str, listing_id: str, rows: list[sqlite3.Row]) -> None:

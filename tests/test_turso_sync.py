@@ -1,7 +1,9 @@
 import sqlite3
 
+import pytest
+
 from src.db import _SCHEMA
-from src.turso_sync import BATCH_CHUNK, ensure_schema, upsert_row, upsert_rows, replace_listing_rows
+from src.turso_sync import BATCH_CHUNK, BatchRowErrors, ensure_schema, upsert_row, upsert_rows, replace_listing_rows
 
 
 def _connect() -> sqlite3.Connection:
@@ -238,3 +240,36 @@ def _parse_cols(table: str) -> list[str]:
     conn = _connect()
     conn.executescript(_SCHEMA)
     return [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+
+
+def test_one_bad_row_does_not_take_its_whole_batch_down():
+    """Observed for real against Turso: visual_scores holds orphan rows whose
+    listing no longer exists, and Turso enforces the foreign key. Without a
+    per-row retry, a batch of 50 lost 49 good rows to 1 bad one."""
+    dest = _connect()
+    ensure_schema(dest)
+    dest.execute("PRAGMA foreign_keys = ON")
+    dest.execute(
+        "INSERT INTO listings (listing_id, address, city, state, zip_code, price, "
+        "beds, baths, sqft, lot_sqft, parking_spaces, year_built, description, "
+        "listing_url) VALUES ('real','a','c','CO','80002','$1',1,1,1,1,1,2000,'d','u')"
+    )
+    dest.commit()
+
+    source = _connect()
+    source.executescript(_SCHEMA)
+    for lid in ("real", "orphan"):
+        source.execute(
+            "INSERT INTO visual_scores (listing_id, has_layout_plan, "
+            "watermarked_staging_detected, suspected_unwatermarked_staging, "
+            "photo_score_unavailable, computed_at) VALUES (?, 0, 0, 0, 0, 't')",
+            (lid,),
+        )
+    rows = source.execute("SELECT * FROM visual_scores ORDER BY listing_id").fetchall()
+
+    with pytest.raises(BatchRowErrors) as caught:
+        upsert_rows(dest, "visual_scores", rows)
+
+    assert [r["listing_id"] for r in caught.value.rows] == ["orphan"]
+    survived = [r[0] for r in dest.execute("SELECT listing_id FROM visual_scores")]
+    assert survived == ["real"], "the good row must survive its batchmate failing"
