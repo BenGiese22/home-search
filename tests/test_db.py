@@ -274,6 +274,7 @@ def test_get_listing_ids_missing_commute(tmp_path: Path):
 
 
 SCORE_SAMPLE = ScoreResult(
+    hoa_score=52.5,
     commute_score=80.0, sqft_score=50.0, condition_score=90.0,
     outdoor_score=100.0, room_count_score=70.0, parking_score=100.0, composite=79.5,
     passes_filters=True, has_incomplete_data=False,
@@ -627,3 +628,33 @@ def test_init_db_migrates_existing_listings_table_missing_hoa_annual_column(tmp_
     conn = get_connection(db_path)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
     assert "hoa_annual" in columns
+
+
+def test_upsert_score_then_get_scores_includes_hoa_score(tmp_path: Path):
+    conn = get_connection(tmp_path / "t.db")
+    upsert_listing(conn, SAMPLE)
+    upsert_score(conn, "abc123", ScoreResult(**{**SCORE_SAMPLE.__dict__, "hoa_score": 12.0}))
+    rows = get_scores(conn)
+    assert rows[0]["hoa_score"] == 12.0
+
+
+def test_init_db_migrates_existing_scores_table_missing_hoa_score_column(tmp_path: Path):
+    db_path = tmp_path / "oldscores.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE scores (
+            listing_id TEXT PRIMARY KEY, commute_score REAL NOT NULL,
+            sqft_score REAL NOT NULL, condition_score REAL NOT NULL,
+            outdoor_score REAL NOT NULL, parking_score REAL NOT NULL,
+            composite REAL NOT NULL, passes_filters INTEGER NOT NULL,
+            computed_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    conn = get_connection(db_path)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(scores)")}
+    assert "hoa_score" in columns

@@ -209,7 +209,13 @@ def test_upsert_rows_replaces_on_conflict_like_upsert_row_did():
     source = _connect()
     source.executescript(_SCHEMA)
     source.execute(
-        "INSERT INTO scores VALUES ('a', 1, 1, 1, 1, 1, 1, 10, 1, 0, 't1')"
+        """
+        INSERT INTO scores (
+            listing_id, commute_score, sqft_score, condition_score, outdoor_score,
+            room_count_score, parking_score, hoa_score, composite, passes_filters,
+            has_incomplete_data, computed_at
+        ) VALUES ('a', 1, 1, 1, 1, 1, 1, 1, 10, 1, 0, 't1')
+        """
     )
     dest = _connect()
     ensure_schema(dest)

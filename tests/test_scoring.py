@@ -4,7 +4,11 @@ from src.models import Listing
 from src.scoring import (
     CONDITION_KEYWORD_WEIGHT,
     CONDITION_YEAR_WEIGHT,
+    HOA_HALF_PENALTY_AT,
+    HOA_MAX_PENALTY,
+    NEUTRAL_SCORE,
     CollectionStats,
+    WEIGHT_HOA,
     WEIGHT_COMMUTE,
     WEIGHT_CONDITION,
     WEIGHT_OUTDOOR,
@@ -17,6 +21,7 @@ from src.scoring import (
     passes_filters,
     score_commute,
     score_condition,
+    score_hoa,
     score_listing,
     score_outdoor,
     score_parking,
@@ -41,6 +46,11 @@ LISTING = Listing(
     amenities=["Garage"],
     photo_urls=[],
     listing_url="https://example.com/listing/abc123",
+    hoa_annual=0.0,
+)
+
+STATS = CollectionStats(
+    sqft_min=1000, sqft_max=3000, denver_minutes_min=10.0, denver_minutes_max=30.0
 )
 
 
@@ -200,6 +210,7 @@ def test_score_listing_combines_sub_scores_with_named_weights():
         + WEIGHT_OUTDOOR * result.outdoor_score
         + WEIGHT_ROOM_COUNT * result.room_count_score
         + WEIGHT_PARKING * result.parking_score
+        + WEIGHT_HOA * result.hoa_score
     )
     assert result.composite == expected
 
@@ -298,3 +309,71 @@ def test_score_listing_passes_visual_scores_through():
     assert with_visual.room_count_score == without_visual.room_count_score
     assert with_visual.parking_score == without_visual.parking_score
     assert with_visual.has_incomplete_data == without_visual.has_incomplete_data
+
+
+def test_score_hoa_unknown_is_neutral():
+    """Unknown must not be penalized -- most listings never mention HOA."""
+    assert score_hoa(None) == 50.0
+
+
+def test_score_hoa_no_fee_is_slightly_above_neutral():
+    assert score_hoa(0.0) == 52.5
+
+
+def test_score_hoa_low_fee_is_slightly_below_neutral():
+    assert score_hoa(1200) == pytest.approx(47.7, abs=0.1)
+
+
+def test_score_hoa_high_fee_penalty_is_much_larger_than_low_fee_penalty():
+    assert (50 - score_hoa(6000)) > 5 * (50 - score_hoa(1200))
+
+
+def test_score_hoa_curve_accelerates_rather_than_scaling_linearly():
+    first_step = (50 - score_hoa(1200)) - (50 - score_hoa(0.01))
+    second_step = (50 - score_hoa(2400)) - (50 - score_hoa(1200))
+    assert second_step > first_step
+
+
+def test_score_hoa_never_reaches_zero_for_any_finite_fee():
+    """The saturating curve approaches HOA_MAX_PENALTY without reaching it,
+    so HOA stays a factor rather than becoming a veto."""
+    assert score_hoa(50_000) > 0
+    assert score_hoa(1_000_000) > 0
+
+
+def test_score_hoa_keeps_discriminating_above_the_expensive_band():
+    """Regression test for a hard-cap design that went flat above ~$6,800,
+    scoring a $6,800 and a $20,000 HOA identically."""
+    assert score_hoa(9600) > score_hoa(20000)
+
+
+def test_score_hoa_half_penalty_constant_behaves_as_documented():
+    assert score_hoa(HOA_HALF_PENALTY_AT) == pytest.approx(NEUTRAL_SCORE - HOA_MAX_PENALTY / 2)
+
+
+def test_score_hoa_cheap_fee_stays_negligible_while_expensive_fee_bites():
+    """Encodes the product intent directly so a future retune that makes
+    cheap HOAs meaningfully costly fails loudly instead of drifting."""
+    assert (50 - score_hoa(1200)) < 3
+    assert (50 - score_hoa(6000)) > 30
+
+
+def test_score_hoa_monotonically_decreases_as_fee_increases():
+    fees = [0, 600, 1200, 2400, 3600, 6000, 9600, 12000, 20000]
+    scores = [score_hoa(f) for f in fees]
+    assert all(a > b for a, b in zip(scores, scores[1:]))
+
+
+def test_score_listing_flags_incomplete_data_when_hoa_unknown():
+    listing = LISTING.__class__(**{**LISTING.__dict__, "hoa_annual": None})
+    result = score_listing(listing, 15.0, 30.0, STATS)
+    assert result.has_incomplete_data is True
+
+
+def test_score_listing_has_incomplete_data_false_when_hoa_confirmed_zero():
+    """0.0 is real, complete data -- unlike every other zero-as-sentinel
+    field on Listing. This is the single most important regression test
+    for the None-vs-0.0 design."""
+    listing = LISTING.__class__(**{**LISTING.__dict__, "hoa_annual": 0.0})
+    result = score_listing(listing, 15.0, 30.0, STATS)
+    assert result.has_incomplete_data is False
