@@ -1,6 +1,7 @@
 import os
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import requests
@@ -19,6 +20,13 @@ PHOTOS_DIR = DATA_DIR / "photos"
 # upsert_row. amenities/photo_urls are handled separately (Step 6 below)
 # since they have no primary key of their own.
 KEYED_TABLES = ["listings", "commute", "scores", "visual_scores"]
+
+# Photo uploads shell out to the Vercel CLI, which costs ~0.6s of Node
+# startup per photo. At ~3000 photos that is ~30 minutes of pure process
+# spawn, serially. The uploads are independent -- each writes its own
+# pathname -- so they parallelize cleanly. Kept modest: this is a personal
+# sync, not a load test, and every worker is a real `vercel` process.
+PHOTO_UPLOAD_WORKERS = 8
 
 # Every table pruning must consider: the keyed tables above, plus the
 # per-listing tables and the Turso-only hosted_photos table. This is the
@@ -111,9 +119,11 @@ def _prune_deleted_listings(turso_conn, listing_ids: list[str]) -> int:
     return pruned
 
 
-def _upload_new_photos(turso_conn, listing_ids: list[str], rw_token: str) -> tuple[int, int]:
-    uploaded = 0
-    failed = 0
+def _collect_pending_photos(turso_conn, listing_ids: list[str]) -> list[tuple[str, int, Path]]:
+    """Walks the local photo directories and returns the photos that still
+    need uploading. Runs on the main thread because already_uploaded() reads
+    the shared Turso connection, which is not safe to use from workers."""
+    pending: list[tuple[str, int, Path]] = []
     for listing_id in listing_ids:
         photo_dir = PHOTOS_DIR / listing_id
         if not photo_dir.exists():
@@ -123,10 +133,46 @@ def _upload_new_photos(turso_conn, listing_ids: list[str], rw_token: str) -> tup
                 position = int(photo_path.stem)
                 if already_uploaded(turso_conn, listing_id, position):
                     continue
-                url = upload_photo(photo_path, listing_id, position, rw_token)
             except Exception as exc:
+                print(f"  {listing_id}/{photo_path.name}: skipped ({exc})")
+                continue
+            pending.append((listing_id, position, photo_path))
+    return pending
+
+
+def _upload_new_photos(turso_conn, listing_ids: list[str], rw_token: str) -> tuple[int, int]:
+    """Uploads every not-yet-hosted photo and records its URL.
+
+    Three phases, deliberately: the pending list is built on the main thread
+    (it reads Turso), the uploads run in parallel (they only touch the CLI
+    and the filesystem), and the hosted_photos writes happen back on the main
+    thread. The shared Turso connection is therefore never touched from a
+    worker. A photo whose upload fails records no hosted_photos row, so a
+    rerun retries it -- the same idempotency the serial version had."""
+    pending = _collect_pending_photos(turso_conn, listing_ids)
+    if not pending:
+        return 0, 0
+
+    print(f"uploading {len(pending)} new photo(s) with {PHOTO_UPLOAD_WORKERS} workers")
+
+    def _do_upload(item: tuple[str, int, Path]) -> tuple[tuple[str, int, Path], str | None, Exception | None]:
+        listing_id, position, photo_path = item
+        try:
+            return item, upload_photo(photo_path, listing_id, position, rw_token), None
+        except Exception as exc:
+            return item, None, exc
+
+    uploaded = 0
+    failed = 0
+    with ThreadPoolExecutor(max_workers=PHOTO_UPLOAD_WORKERS) as pool:
+        # Results are consumed in submission order rather than completion
+        # order so the printed failures stay grouped by listing, and so the
+        # hosted_photos writes happen one at a time on this thread.
+        for item, url, exc in pool.map(_do_upload, pending):
+            listing_id, position, photo_path = item
+            if exc is not None:
                 failed += 1
-                print(f"  {listing_id}/{photo_path.name}: photo processing failed ({exc})")
+                print(f"  {listing_id}/{photo_path.name}: upload failed ({exc})")
                 continue
             try:
                 turso_conn.execute(
@@ -135,9 +181,9 @@ def _upload_new_photos(turso_conn, listing_ids: list[str], rw_token: str) -> tup
                     (listing_id, position, url),
                 )
                 turso_conn.commit()
-            except Exception as exc:
+            except Exception as record_exc:
                 failed += 1
-                print(f"  {listing_id}/{photo_path.name}: hosted_photos record failed ({exc})")
+                print(f"  {listing_id}/{photo_path.name}: hosted_photos record failed ({record_exc})")
                 continue
             uploaded += 1
     return uploaded, failed
