@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 from src.commute import CommuteResult
@@ -579,3 +580,50 @@ def test_delete_orphaned_rows_is_a_no_op_on_a_clean_database(tmp_path: Path):
 
     assert delete_orphaned_rows(conn) == {}
     assert get_visual_score(conn, "abc123") is not None
+
+
+def test_upsert_listing_roundtrips_hoa_annual_unknown(tmp_path: Path):
+    """None must survive as None, not collapse to 0 -- 0.0 means confirmed
+    no HOA and is scored as a small positive."""
+    conn = get_connection(tmp_path / "t.db")
+    upsert_listing(conn, SAMPLE)
+    row = conn.execute("SELECT hoa_annual FROM listings").fetchone()
+    assert row["hoa_annual"] is None
+
+
+def test_upsert_listing_roundtrips_hoa_annual_confirmed_zero(tmp_path: Path):
+    conn = get_connection(tmp_path / "t.db")
+    upsert_listing(conn, SAMPLE.__class__(**{**SAMPLE.__dict__, "hoa_annual": 0.0}))
+    row = conn.execute("SELECT hoa_annual FROM listings").fetchone()
+    assert row["hoa_annual"] == 0.0
+    assert row["hoa_annual"] is not None
+
+
+def test_upsert_listing_roundtrips_hoa_annual_known_value(tmp_path: Path):
+    conn = get_connection(tmp_path / "t.db")
+    upsert_listing(conn, SAMPLE.__class__(**{**SAMPLE.__dict__, "hoa_annual": 1200.0}))
+    row = conn.execute("SELECT hoa_annual FROM listings").fetchone()
+    assert row["hoa_annual"] == 1200.0
+
+
+def test_init_db_migrates_existing_listings_table_missing_hoa_annual_column(tmp_path: Path):
+    db_path = tmp_path / "old.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE listings (
+            listing_id TEXT PRIMARY KEY, address TEXT NOT NULL, city TEXT NOT NULL,
+            state TEXT NOT NULL, zip_code TEXT NOT NULL, price TEXT NOT NULL,
+            price_numeric REAL, beds INTEGER NOT NULL, baths REAL NOT NULL,
+            sqft INTEGER NOT NULL, lot_sqft INTEGER NOT NULL,
+            parking_spaces INTEGER NOT NULL, year_built INTEGER NOT NULL,
+            description TEXT NOT NULL, listing_url TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    conn = get_connection(db_path)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
+    assert "hoa_annual" in columns
