@@ -31,6 +31,15 @@ TURSO_BATCH_CHUNK = 50
 # sync, not a load test, and every worker is a real `vercel` process.
 PHOTO_UPLOAD_WORKERS = 8
 
+# Vercel bills every upload as an "Advanced Operation" and the Hobby tier
+# includes only 2,000 per month. Backfilling all ~3,000 local photos costs
+# more than the whole monthly budget in one run -- and with the CLI's
+# multipart default it cost 11,000. The list view needs one photo per
+# listing and the detail gallery is comfortable with a handful, so cap what
+# gets hosted. 85 listings x 8 = ~680 operations, which fits the free tier
+# with room to spare. Raise it (or set it to 0 for no cap) on a paid plan.
+MAX_PHOTOS_PER_LISTING = int(os.environ.get("MAX_PHOTOS_PER_LISTING", "8"))
+
 # Every table pruning must consider: the keyed tables above, plus the
 # per-listing tables and the Turso-only hosted_photos table. This is the
 # only source of table names _prune_deleted_listings uses -- it is a fixed
@@ -153,7 +162,10 @@ def _collect_pending_photos(turso_conn, listing_ids: list[str]) -> list[tuple[st
         photo_dir = PHOTOS_DIR / listing_id
         if not photo_dir.exists():
             continue
-        for photo_path in sorted(photo_dir.glob("*.jpg")):
+        photo_paths = sorted(photo_dir.glob("*.jpg"))
+        if MAX_PHOTOS_PER_LISTING > 0:
+            photo_paths = photo_paths[:MAX_PHOTOS_PER_LISTING]
+        for photo_path in photo_paths:
             try:
                 position = int(photo_path.stem)
             except ValueError:

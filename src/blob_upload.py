@@ -37,6 +37,14 @@ def upload_photo(
                 "--pathname", pathname,
                 "--access", "public",
                 "--allow-overwrite", "true",
+                # The CLI defaults --multipart to true, which splits every
+                # upload into start + one-per-part + complete. Vercel bills
+                # EACH of those as an Advanced Operation, so ~250KB listing
+                # photos cost 3+ operations apiece instead of 1. That is what
+                # burned 11K operations against a 2K free-tier budget on the
+                # first real sync. Multipart is meant for files over ~100MB;
+                # these are a quarter megabyte.
+                "--multipart", "false",
                 "--rw-token", rw_token,
             ],
             capture_output=True,
