@@ -81,3 +81,26 @@ def test_parse_listing_object_property_type_defaults_empty_when_global_list_empt
     }
     listing = parse_listing_object(obj, listing_url="https://example.com/1")
     assert listing.property_type == ""
+
+
+def test_parse_listing_object_sets_hoa_annual_none_when_description_is_silent():
+    listing = parse_listing_object(
+        {"description": "Charming ranch with a large backyard."}, "https://example.com/1"
+    )
+    assert listing.hoa_annual is None
+
+
+def test_parse_listing_object_sets_hoa_annual_zero_from_no_hoa_description():
+    listing = parse_listing_object(
+        {"description": "With no HOA, friendly neighbors and greenbelt trails."},
+        "https://example.com/1",
+    )
+    assert listing.hoa_annual == 0.0
+
+
+def test_parse_listing_object_sets_hoa_annual_from_dollar_amount_in_description():
+    listing = parse_listing_object(
+        {"description": "HOA dues are $150/month and cover the pool."},
+        "https://example.com/1",
+    )
+    assert listing.hoa_annual == 1800.0
