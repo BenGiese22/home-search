@@ -19,6 +19,7 @@ FIELDNAMES = [
     "description",
     "amenities",
     "listing_url",
+    "hoa_annual",
     "photo_dir",
 ]
 
@@ -46,6 +47,9 @@ def write_csv(listings: list[Listing], photos_root: Path, path: Path) -> None:
                     "description": listing.description,
                     "amenities": "; ".join(listing.amenities),
                     "listing_url": listing.listing_url,
+                    # Blank rather than 0 when unknown, so the CSV keeps the
+                    # same unknown-vs-confirmed-no-HOA distinction the db does.
+                    "hoa_annual": "" if listing.hoa_annual is None else listing.hoa_annual,
                     "photo_dir": str(photos_root / listing.listing_id),
                 }
             )

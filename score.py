@@ -76,6 +76,7 @@ def _row_to_listing(row, amenities: list[str]) -> Listing:
         amenities=amenities,
         photo_urls=[],
         listing_url=row["listing_url"],
+        hoa_annual=row["hoa_annual"],
     )
 
 

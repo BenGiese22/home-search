@@ -107,12 +107,14 @@ def test_ensure_schema_migrates_a_mirror_created_before_a_column_existed():
     cols_before = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
     assert "property_type" not in cols_before
     assert "localized_status" not in cols_before
+    assert "hoa_annual" not in cols_before
 
     ensure_schema(conn)
 
     cols_after = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
     assert "property_type" in cols_after
     assert "localized_status" in cols_after
+    assert "hoa_annual" in cols_after
 
     source = _connect()
     source.executescript(_SCHEMA)

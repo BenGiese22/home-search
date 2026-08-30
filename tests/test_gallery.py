@@ -55,3 +55,23 @@ def test_write_gallery_writes_file(tmp_path: Path):
 
     assert gallery_path.exists()
     assert "1 Test St" in gallery_path.read_text()
+
+
+def _render_one(listing, tmp_path):
+    return render_gallery([listing], tmp_path / "photos", tmp_path)
+
+
+def test_render_gallery_shows_no_hoa_when_confirmed_absent(tmp_path: Path):
+    listing = LISTING.__class__(**{**LISTING.__dict__, "hoa_annual": 0.0})
+    assert "No HOA" in _render_one(listing, tmp_path)
+
+
+def test_render_gallery_shows_annual_hoa_when_known(tmp_path: Path):
+    listing = LISTING.__class__(**{**LISTING.__dict__, "hoa_annual": 1200.0})
+    assert "HOA $1,200/yr" in _render_one(listing, tmp_path)
+
+
+def test_render_gallery_omits_hoa_line_when_unknown(tmp_path: Path):
+    listing = LISTING.__class__(**{**LISTING.__dict__, "hoa_annual": None})
+    html_out = _render_one(listing, tmp_path)
+    assert "HOA" not in html_out

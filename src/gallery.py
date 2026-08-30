@@ -21,6 +21,15 @@ def render_gallery(listings: list[Listing], photos_root: Path, gallery_dir: Path
         description = html.escape(listing.description)
         amenities = html.escape(", ".join(listing.amenities))
         listing_url = html.escape(listing.listing_url)
+        # Omitted entirely when unknown -- showing "HOA: unknown" on ~95%
+        # of listings would be noise, but a confirmed absence is worth
+        # calling out since it's a genuine positive.
+        if listing.hoa_annual is None:
+            hoa_html = ""
+        elif listing.hoa_annual == 0:
+            hoa_html = "\n          <p>No HOA</p>"
+        else:
+            hoa_html = f"\n          <p>HOA ${listing.hoa_annual:,.0f}/yr</p>"
 
         sections.append(
             f"""
@@ -28,7 +37,7 @@ def render_gallery(listings: list[Listing], photos_root: Path, gallery_dir: Path
           <h2>{address}, {city}, {state} {zip_code}</h2>
           <p>{price} &middot; {listing.beds} bd &middot; {listing.baths} ba &middot; {listing.sqft} sqft &middot; {listing.lot_sqft} lot sqft &middot; {listing.parking_spaces} parking</p>
           <p>{description}</p>
-          <p>Amenities: {amenities}</p>
+          <p>Amenities: {amenities}</p>{hoa_html}
           <p><a href="{listing_url}">View on Compass</a></p>
           <div class="photos">{photos_html}</div>
         </section>"""
