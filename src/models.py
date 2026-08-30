@@ -28,6 +28,13 @@ class Listing:
     # "Sold", etc.) -- see is_active_status() below.
     property_type: str = ""
     localized_status: str = ""
+    # Annual HOA dues in dollars, normalized from whatever cadence the
+    # listing quoted. Three distinct states, unlike the other numeric
+    # fields on this dataclass: None means unknown/not disclosed, 0.0
+    # means confirmed no HOA, and a positive value is a known annual fee.
+    # 0.0 is real data here, not a missing-value sentinel -- src.scoring
+    # rewards it and treats None as neutral, so the two must not collide.
+    hoa_annual: float | None = None
 
 
 def is_active_status(localized_status: str) -> bool:
