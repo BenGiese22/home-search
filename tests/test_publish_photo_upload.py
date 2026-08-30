@@ -137,3 +137,38 @@ def test_no_pending_photos_is_a_clean_no_op(tmp_path, monkeypatch):
     monkeypatch.setattr(publish, "upload_photo", lambda *a: pytest.fail("should not upload"))
 
     assert publish._upload_new_photos(_conn(), ["missing"], "tok") == (0, 0)
+
+
+def test_pending_list_costs_one_query_not_one_per_photo(photos):
+    """The reason _collect_pending_photos exists in this shape. Against
+    hosted Turso each query is a ~240ms HTTP round-trip, so a per-photo
+    already_uploaded() check cost ~12 minutes on ~3000 photos before the
+    first upload could start. This asserts we read hosted_photos once."""
+    conn = _conn()
+    queries = []
+    inner_execute = conn.execute
+
+    class CountingConn:
+        def execute(self, sql, *args, **kwargs):
+            queries.append(sql)
+            return inner_execute(sql, *args, **kwargs)
+
+        def commit(self, *a, **k):
+            return conn.commit(*a, **k)
+
+    pending = publish._collect_pending_photos(CountingConn(), ["aaa", "bbb"])
+
+    assert len(pending) == 3
+    hosted_reads = [q for q in queries if "hosted_photos" in q]
+    assert len(hosted_reads) == 1, f"expected 1 hosted_photos read, got {len(hosted_reads)}"
+
+
+def test_a_photo_named_oddly_is_skipped_not_fatal(tmp_path, monkeypatch):
+    d = tmp_path / "aaa"; d.mkdir()
+    (d / "01.jpg").write_bytes(b"x")
+    (d / "cover.jpg").write_bytes(b"x")
+    monkeypatch.setattr(publish, "PHOTOS_DIR", tmp_path)
+
+    pending = publish._collect_pending_photos(_conn(), ["aaa"])
+
+    assert [(lid, pos) for lid, pos, _ in pending] == [("aaa", 1)]
