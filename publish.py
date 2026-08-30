@@ -9,7 +9,7 @@ import turso_serverless
 from dotenv import dotenv_values
 
 from src.db import get_connection, query_listings
-from src.turso_sync import ensure_schema, replace_listing_rows, upsert_row
+from src.turso_sync import BatchRowErrors, ensure_schema, replace_listing_rows, upsert_rows
 from src.blob_upload import upload_photo
 
 DATA_DIR = Path("data")
@@ -21,12 +21,24 @@ PHOTOS_DIR = DATA_DIR / "photos"
 # since they have no primary key of their own.
 KEYED_TABLES = ["listings", "commute", "scores", "visual_scores"]
 
+# Mirrors src.turso_sync.BATCH_CHUNK -- how many rows go in one statement.
+TURSO_BATCH_CHUNK = 50
+
 # Photo uploads shell out to the Vercel CLI, which costs ~0.6s of Node
 # startup per photo. At ~3000 photos that is ~30 minutes of pure process
 # spawn, serially. The uploads are independent -- each writes its own
 # pathname -- so they parallelize cleanly. Kept modest: this is a personal
 # sync, not a load test, and every worker is a real `vercel` process.
 PHOTO_UPLOAD_WORKERS = 8
+
+# Vercel bills every upload as an "Advanced Operation" and the Hobby tier
+# includes only 2,000 per month. Backfilling all ~3,000 local photos costs
+# more than the whole monthly budget in one run -- and with the CLI's
+# multipart default it cost 11,000. The list view needs one photo per
+# listing and the detail gallery is comfortable with a handful, so cap what
+# gets hosted. 85 listings x 8 = ~680 operations, which fits the free tier
+# with room to spare. Raise it (or set it to 0 for no cap) on a paid plan.
+MAX_PHOTOS_PER_LISTING = int(os.environ.get("MAX_PHOTOS_PER_LISTING", "8"))
 
 # Every table pruning must consider: the keyed tables above, plus the
 # per-listing tables and the Turso-only hosted_photos table. This is the
@@ -50,13 +62,26 @@ def _sync_keyed_tables(local_conn, turso_conn) -> tuple[int, int]:
     synced = 0
     failed = 0
     for table in KEYED_TABLES:
-        for row in local_conn.execute(f"SELECT * FROM {table}"):
+        # Batched: each round-trip to hosted Turso is ~240ms, so one
+        # statement per row made a full sync take ~22 minutes. A failure now
+        # costs its whole chunk rather than a single row -- an acceptable
+        # trade at this scale, and the run still continues to the next chunk.
+        rows = local_conn.execute(f"SELECT * FROM {table}").fetchall()
+        for start in range(0, len(rows), TURSO_BATCH_CHUNK):
+            chunk = rows[start:start + TURSO_BATCH_CHUNK]
             try:
-                upsert_row(turso_conn, table, row)
-                synced += 1
+                upsert_rows(turso_conn, table, chunk)
+                synced += len(chunk)
+            except BatchRowErrors as exc:
+                # upsert_rows already retried each row individually, so only
+                # genuinely bad rows are in exc.rows -- the rest landed.
+                failed += len(exc.rows)
+                synced += len(chunk) - len(exc.rows)
+                for row in exc.rows:
+                    print(f"  {table}/{row['listing_id']}: row sync failed")
             except Exception as exc:
-                failed += 1
-                print(f"  {table}/{row['listing_id']}: row sync failed ({exc})")
+                failed += len(chunk)
+                print(f"  {table}: batch of {len(chunk)} row(s) failed ({exc})")
                 continue
     return synced, failed
 
@@ -137,7 +162,10 @@ def _collect_pending_photos(turso_conn, listing_ids: list[str]) -> list[tuple[st
         photo_dir = PHOTOS_DIR / listing_id
         if not photo_dir.exists():
             continue
-        for photo_path in sorted(photo_dir.glob("*.jpg")):
+        photo_paths = sorted(photo_dir.glob("*.jpg"))
+        if MAX_PHOTOS_PER_LISTING > 0:
+            photo_paths = photo_paths[:MAX_PHOTOS_PER_LISTING]
+        for photo_path in photo_paths:
             try:
                 position = int(photo_path.stem)
             except ValueError:

@@ -1,7 +1,9 @@
 import sqlite3
 
+import pytest
+
 from src.db import _SCHEMA
-from src.turso_sync import ensure_schema, upsert_row, replace_listing_rows
+from src.turso_sync import BATCH_CHUNK, BatchRowErrors, ensure_schema, upsert_row, upsert_rows, replace_listing_rows
 
 
 def _connect() -> sqlite3.Connection:
@@ -157,3 +159,117 @@ def test_replace_listing_rows_drops_stale_rows_not_in_the_new_set():
         for r in dest.execute("SELECT * FROM amenities WHERE listing_id = 'abc'")
     ]
     assert result == ["New roof"]
+
+
+def test_upsert_rows_writes_every_row():
+    source = _connect()
+    source.executescript(_SCHEMA)
+    for i in range(120):
+        source.execute(
+            "INSERT INTO amenities (listing_id, amenity) VALUES (?, ?)", (f"L{i}", f"Feature {i}")
+        )
+    rows = source.execute("SELECT * FROM amenities").fetchall()
+
+    dest = _connect()
+    ensure_schema(dest)
+    upsert_rows(dest, "amenities", rows)
+
+    assert dest.execute("SELECT COUNT(*) FROM amenities").fetchone()[0] == 120
+
+
+def test_upsert_rows_costs_one_statement_per_chunk_not_one_per_row():
+    """The reason this function exists. Each statement against hosted Turso
+    is a ~240ms HTTP round-trip; one-per-row made a full sync take ~22 min."""
+    source = _connect()
+    source.executescript(_SCHEMA)
+    for i in range(120):
+        source.execute("INSERT INTO amenities (listing_id, amenity) VALUES (?, ?)", (f"L{i}", "x"))
+    rows = source.execute("SELECT * FROM amenities").fetchall()
+
+    dest = _connect()
+    ensure_schema(dest)
+    statements = []
+    inner = dest.execute
+
+    class Counting:
+        def execute(self, sql, *a, **k):
+            statements.append(sql)
+            return inner(sql, *a, **k)
+
+        def commit(self, *a, **k):
+            return dest.commit(*a, **k)
+
+    upsert_rows(Counting(), "amenities", rows)
+
+    inserts = [s for s in statements if s.lstrip().upper().startswith("INSERT")]
+    assert len(inserts) == 3, f"120 rows at chunk 50 should be 3 statements, got {len(inserts)}"
+
+
+def test_upsert_rows_replaces_on_conflict_like_upsert_row_did():
+    source = _connect()
+    source.executescript(_SCHEMA)
+    source.execute(
+        "INSERT INTO scores VALUES ('a', 1, 1, 1, 1, 1, 1, 10, 1, 0, 't1')"
+    )
+    dest = _connect()
+    ensure_schema(dest)
+    upsert_rows(dest, "scores", source.execute("SELECT * FROM scores").fetchall())
+
+    source.execute("UPDATE scores SET composite = 99 WHERE listing_id = 'a'")
+    upsert_rows(dest, "scores", source.execute("SELECT * FROM scores").fetchall())
+
+    rows = dest.execute("SELECT composite FROM scores WHERE listing_id = 'a'").fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == 99
+
+
+def test_upsert_rows_on_an_empty_list_is_a_no_op():
+    dest = _connect()
+    ensure_schema(dest)
+    upsert_rows(dest, "amenities", [])
+    assert dest.execute("SELECT COUNT(*) FROM amenities").fetchone()[0] == 0
+
+
+def test_batch_chunk_stays_inside_sqlites_variable_limit():
+    """CHUNK * widest column count must stay under SQLite's 999 default."""
+    widest = max(len(_parse_cols(t)) for t in ("listings", "scores", "visual_scores"))
+    assert BATCH_CHUNK * widest < 999, f"{BATCH_CHUNK} x {widest} exceeds the variable limit"
+
+
+def _parse_cols(table: str) -> list[str]:
+    conn = _connect()
+    conn.executescript(_SCHEMA)
+    return [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+
+
+def test_one_bad_row_does_not_take_its_whole_batch_down():
+    """Observed for real against Turso: visual_scores holds orphan rows whose
+    listing no longer exists, and Turso enforces the foreign key. Without a
+    per-row retry, a batch of 50 lost 49 good rows to 1 bad one."""
+    dest = _connect()
+    ensure_schema(dest)
+    dest.execute("PRAGMA foreign_keys = ON")
+    dest.execute(
+        "INSERT INTO listings (listing_id, address, city, state, zip_code, price, "
+        "beds, baths, sqft, lot_sqft, parking_spaces, year_built, description, "
+        "listing_url) VALUES ('real','a','c','CO','80002','$1',1,1,1,1,1,2000,'d','u')"
+    )
+    dest.commit()
+
+    source = _connect()
+    source.executescript(_SCHEMA)
+    for lid in ("real", "orphan"):
+        source.execute(
+            "INSERT INTO visual_scores (listing_id, has_layout_plan, "
+            "watermarked_staging_detected, suspected_unwatermarked_staging, "
+            "photo_score_unavailable, computed_at) VALUES (?, 0, 0, 0, 0, 't')",
+            (lid,),
+        )
+    rows = source.execute("SELECT * FROM visual_scores ORDER BY listing_id").fetchall()
+
+    with pytest.raises(BatchRowErrors) as caught:
+        upsert_rows(dest, "visual_scores", rows)
+
+    assert [r["listing_id"] for r in caught.value.rows] == ["orphan"]
+    survived = [r[0] for r in dest.execute("SELECT listing_id FROM visual_scores")]
+    assert survived == ["real"], "the good row must survive its batchmate failing"

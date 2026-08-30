@@ -172,3 +172,30 @@ def test_a_photo_named_oddly_is_skipped_not_fatal(tmp_path, monkeypatch):
     pending = publish._collect_pending_photos(_conn(), ["aaa"])
 
     assert [(lid, pos) for lid, pos, _ in pending] == [("aaa", 1)]
+
+
+def test_photo_count_is_capped_per_listing(tmp_path, monkeypatch):
+    """Vercel bills each upload as an Advanced Operation, and the Hobby tier
+    includes 2,000/month. Backfilling every local photo blew that budget on
+    the first real sync, so only the first N per listing get hosted."""
+    d = tmp_path / "aaa"
+    d.mkdir()
+    for i in range(1, 21):
+        (d / f"{i:02d}.jpg").write_bytes(b"x")
+    monkeypatch.setattr(publish, "PHOTOS_DIR", tmp_path)
+    monkeypatch.setattr(publish, "MAX_PHOTOS_PER_LISTING", 8)
+
+    pending = publish._collect_pending_photos(_conn(), ["aaa"])
+
+    assert [pos for _, pos, _ in pending] == list(range(1, 9))
+
+
+def test_a_cap_of_zero_means_no_cap(tmp_path, monkeypatch):
+    d = tmp_path / "aaa"
+    d.mkdir()
+    for i in range(1, 13):
+        (d / f"{i:02d}.jpg").write_bytes(b"x")
+    monkeypatch.setattr(publish, "PHOTOS_DIR", tmp_path)
+    monkeypatch.setattr(publish, "MAX_PHOTOS_PER_LISTING", 0)
+
+    assert len(publish._collect_pending_photos(_conn(), ["aaa"])) == 12
