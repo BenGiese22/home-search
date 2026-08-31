@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 import publish
-from src.turso_sync import ensure_schema
+from src.turso_db import ensure_schema
 
 
 def _conn() -> sqlite3.Connection:

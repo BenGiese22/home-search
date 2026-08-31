@@ -431,7 +431,7 @@ def upsert_score(conn: sqlite3.Connection, listing_id: str, result: ScoreResult)
 
 # Rows per batched INSERT. scores has 12 columns, so 30 rows is 360 bound
 # variables -- well inside SQLite's 999-variable default, with room to spare
-# if the table grows. Mirrors src.turso_sync.BATCH_CHUNK and exists for the
+# if the table grows. Mirrors src.turso_db.BATCH_CHUNK and exists for the
 # same reason: one statement per row is a ~240ms round-trip per row once the
 # connection is Turso rather than a local file.
 SCORE_BATCH_CHUNK = 30

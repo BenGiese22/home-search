@@ -1,5 +1,61 @@
+"""Hosted Turso: the connection factory and the batched write path.
+
+This module was `src/turso_sync.py`, whose job was mirroring a local SQLite
+database into Turso. Under the single-source-of-truth architecture there is
+nothing to mirror -- these writes ARE the write path, so the module is named
+for the database rather than for the copying it used to do.
+
+Standing rule for everything in here: no per-row round-trips and no
+check-then-act loops. Every statement against hosted Turso is an HTTP
+round-trip measured at ~240ms, and this project has already paid for
+forgetting that twice -- a one-statement-per-row sync that took 22 minutes,
+and a per-photo existence check that burned 12 minutes before the first
+upload started.
+"""
 import re
 import sqlite3
+from collections.abc import Mapping
+from typing import Callable
+
+import turso_serverless
+
+from src.config import load_env
+
+# A turso_serverless connection defaults row_factory to None, which makes
+# conn.execute(...).fetchone() return a bare tuple. Every caller in src/db.py
+# reads columns by name (row["listing_id"]), so without this the cutover
+# breaks everywhere at once with TypeError: tuple indices must be integers.
+# turso_serverless.Row is otherwise a faithful sqlite3.Row: same access by
+# name and by index, same keys(), same dict()/iteration behaviour. The single
+# documented difference is the exception for an unknown column -- sqlite3.Row
+# raises IndexError, this raises KeyError -- which is pinned by a test rather
+# than normalised, because nothing here indexes a column it did not SELECT.
+ROW_FACTORY = turso_serverless.Row
+
+REQUIRED_ENV_VARS = ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN")
+
+
+def connect(
+    env: Mapping[str, str] | None = None,
+    connect_fn: Callable = turso_serverless.connect,
+):
+    """Opens the hosted Turso connection the stages read and write.
+
+    One place remembers to set the row factory, so no stage has to. `env`
+    defaults to the merged .env/process-environment lookup; `connect_fn` is
+    injected so tests never open a real session.
+    """
+    env = load_env() if env is None else env
+    missing = [key for key in REQUIRED_ENV_VARS if not env.get(key)]
+    if missing:
+        raise RuntimeError(
+            "cannot connect to Turso: missing "
+            + ", ".join(missing)
+            + " (set them in .env -- see .env.example)"
+        )
+    conn = connect_fn(env["TURSO_DATABASE_URL"], auth_token=env["TURSO_AUTH_TOKEN"])
+    conn.row_factory = ROW_FACTORY
+    return conn
 
 TURSO_SCHEMA_EXTRA = """
 CREATE TABLE IF NOT EXISTS hosted_photos (
