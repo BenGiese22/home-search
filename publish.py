@@ -8,7 +8,7 @@ import requests
 import turso_serverless
 from dotenv import dotenv_values
 
-from src.db import get_connection, query_listings
+from src.db import get_connection, query_listings, tables_child_first
 from src.turso_sync import BatchRowErrors, ensure_schema, replace_listing_rows, upsert_rows
 from src.blob_upload import upload_photo
 
@@ -45,21 +45,11 @@ MAX_PHOTOS_PER_LISTING = int(os.environ.get("MAX_PHOTOS_PER_LISTING", "8"))
 # only source of table names _prune_deleted_listings uses -- it is a fixed
 # internal list, never derived from external input, so interpolating a name
 # from it into SQL cannot become an injection path.
-# Child tables FIRST, `listings` LAST. Every other mirrored table has a
-# `REFERENCES listings(listing_id)` foreign key, and Turso enforces foreign
-# keys even though local SQLite leaves them off by default -- deleting the
-# parent row first fails with "FOREIGN KEY constraint failed" and aborts the
-# publish before the revalidate call. This is the reverse of KEYED_TABLES,
-# which syncs parent-first for the same reason.
-PRUNABLE_TABLES = [
-    "commute",
-    "scores",
-    "visual_scores",
-    "amenities",
-    "photo_urls",
-    "hosted_photos",
-    "listings",
-]
+# Derived from the schema rather than hand-listed: children first, listings
+# last. Turso enforces the foreign keys that local SQLite ignores, so pruning
+# a parent before its children aborts the publish. hosted_photos is passed in
+# because it exists only in the mirror, not in src.db._SCHEMA.
+PRUNABLE_TABLES = tables_child_first(extra_tables=("hosted_photos",))
 
 # Config publish.py needs from the environment. Checked up front so a
 # missing var fails with a readable message instead of a bare KeyError.
