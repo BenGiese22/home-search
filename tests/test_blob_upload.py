@@ -28,7 +28,7 @@ from src.blob_upload import (
     already_uploaded,
     upload_photo,
 )
-from src.turso_sync import ensure_schema
+from src.turso_db import ensure_schema
 
 TOKEN = "vercel_blob_rw_str12345_secretpart"
 STORE_ID = "str12345"

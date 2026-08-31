@@ -7,7 +7,7 @@ import turso_serverless
 
 from src.config import load_env
 from src.db import get_connection, query_listings, tables_child_first
-from src.turso_sync import BatchRowErrors, ensure_schema, replace_listing_rows, upsert_rows
+from src.turso_db import BatchRowErrors, ensure_schema, replace_listing_rows, upsert_rows
 from src.blob_upload import upload_photo
 
 DATA_DIR = Path("data")
@@ -19,7 +19,7 @@ PHOTOS_DIR = DATA_DIR / "photos"
 # since they have no primary key of their own.
 KEYED_TABLES = ["listings", "commute", "scores", "visual_scores"]
 
-# Mirrors src.turso_sync.BATCH_CHUNK -- how many rows go in one statement.
+# Mirrors src.turso_db.BATCH_CHUNK -- how many rows go in one statement.
 TURSO_BATCH_CHUNK = 30
 
 # Photo uploads are independent -- each writes its own pathname -- so they

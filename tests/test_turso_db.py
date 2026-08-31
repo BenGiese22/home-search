@@ -1,10 +1,14 @@
 import math
 import sqlite3
+from pathlib import Path
 
 import pytest
+import turso_serverless
+from turso_serverless.dbapi import Row as TursoRow
 
+import src.turso_db as turso_db
 from src.db import _SCHEMA
-from src.turso_sync import BATCH_CHUNK, BatchRowErrors, ensure_schema, upsert_row, upsert_rows, replace_listing_rows
+from src.turso_db import BATCH_CHUNK, BatchRowErrors, ensure_schema, upsert_row, upsert_rows, replace_listing_rows
 
 
 def _connect() -> sqlite3.Connection:
@@ -289,3 +293,155 @@ def test_one_bad_row_does_not_take_its_whole_batch_down():
     assert [r["listing_id"] for r in caught.value.rows] == ["orphan"]
     survived = [r[0] for r in dest.execute("SELECT listing_id FROM visual_scores")]
     assert survived == ["real"], "the good row must survive its batchmate failing"
+
+
+# =========================================================================
+# Connection factory and row-compat layer (issue #19)
+# =========================================================================
+
+class _StubCursor:
+    """Stands in for a turso_serverless Cursor. Only `description` is read
+    when a Row is built, which is what makes these tests network-free."""
+
+    def __init__(self, columns):
+        self.description = tuple(
+            (name, None, None, None, None, None, None) for name in columns
+        )
+
+
+def _turso_row(columns, values):
+    """A real turso_serverless.Row, built without a connection."""
+    return TursoRow(_StubCursor(columns), values)
+
+
+def test_a_turso_row_supports_access_by_name_like_sqlite3_row():
+    row = _turso_row(("listing_id", "price"), ("abc", "$650,000"))
+
+    assert row["listing_id"] == "abc"
+    assert row["price"] == "$650,000"
+
+
+def test_a_turso_row_supports_access_by_index_like_sqlite3_row():
+    row = _turso_row(("listing_id", "price"), ("abc", "$650,000"))
+
+    assert row[0] == "abc"
+    assert row[1] == "$650,000"
+
+
+def test_a_turso_row_matches_sqlite3_row_on_every_access_pattern_the_code_uses():
+    """src/db.py and the stages read rows by name, by index, via .keys(),
+    via dict(), and by iterating. All five must behave identically or the
+    cutover breaks somewhere far from here."""
+    sqlite_conn = _connect()
+    sqlite_conn.row_factory = sqlite3.Row
+    sqlite_conn.execute("CREATE TABLE t (listing_id TEXT, price TEXT)")
+    sqlite_conn.execute("INSERT INTO t VALUES ('abc', '$650,000')")
+    sqlite_row = sqlite_conn.execute("SELECT listing_id, price FROM t").fetchone()
+
+    turso_row = _turso_row(("listing_id", "price"), ("abc", "$650,000"))
+
+    assert turso_row["listing_id"] == sqlite_row["listing_id"]
+    assert turso_row[0] == sqlite_row[0]
+    assert list(turso_row.keys()) == list(sqlite_row.keys())
+    assert dict(turso_row) == dict(sqlite_row)
+    assert list(turso_row) == list(sqlite_row)
+    assert len(turso_row) == len(sqlite_row)
+
+
+def test_the_one_row_shape_difference_is_the_missing_key_exception():
+    """Documented rather than papered over: sqlite3.Row raises IndexError for
+    an unknown column, turso_serverless.Row raises KeyError. Nothing in this
+    codebase indexes a column it did not SELECT, so this is pinned as a known
+    difference rather than normalised -- if that assumption ever stops
+    holding, this test is where to look."""
+    sqlite_conn = _connect()
+    sqlite_conn.row_factory = sqlite3.Row
+    sqlite_conn.execute("CREATE TABLE t (a TEXT)")
+    sqlite_conn.execute("INSERT INTO t VALUES ('x')")
+    sqlite_row = sqlite_conn.execute("SELECT a FROM t").fetchone()
+
+    with pytest.raises(IndexError):
+        sqlite_row["nope"]
+    with pytest.raises(KeyError):
+        _turso_row(("a",), ("x",))["nope"]
+
+
+def test_connect_passes_the_url_and_auth_token_through():
+    captured = {}
+
+    def fake_connect(url, auth_token=None):
+        captured["url"] = url
+        captured["auth_token"] = auth_token
+        return _FakeTursoConnection()
+
+    turso_db.connect(
+        {"TURSO_DATABASE_URL": "libsql://db.example", "TURSO_AUTH_TOKEN": "tok"},
+        connect_fn=fake_connect,
+    )
+
+    assert captured == {"url": "libsql://db.example", "auth_token": "tok"}
+
+
+def test_connect_sets_a_row_factory_so_rows_are_not_bare_tuples():
+    """The quirk that would otherwise break every stage at once. A
+    turso_serverless connection defaults row_factory to None, so
+    conn.execute(...).fetchone() hands back a plain tuple -- and every
+    row["listing_id"] in src/db.py raises TypeError. The factory is the one
+    place that has to remember."""
+    conn = turso_db.connect(
+        {"TURSO_DATABASE_URL": "libsql://db", "TURSO_AUTH_TOKEN": "t"},
+        connect_fn=lambda url, auth_token=None: _FakeTursoConnection(),
+    )
+
+    assert conn.row_factory is TursoRow
+
+
+def test_connect_reports_missing_configuration_clearly():
+    for env in ({}, {"TURSO_DATABASE_URL": "libsql://db"}, {"TURSO_AUTH_TOKEN": "t"}):
+        with pytest.raises(RuntimeError, match="TURSO_"):
+            turso_db.connect(env, connect_fn=lambda *a, **k: _FakeTursoConnection())
+
+
+def test_connect_falls_back_to_the_merged_env(monkeypatch):
+    monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://from-process")
+    monkeypatch.setenv("TURSO_AUTH_TOKEN", "tok-from-process")
+    captured = {}
+
+    def fake_connect(url, auth_token=None):
+        captured["url"] = url
+        return _FakeTursoConnection()
+
+    turso_db.connect(connect_fn=fake_connect)
+
+    assert captured["url"] == "libsql://from-process"
+
+
+class _FakeTursoConnection:
+    """Mimics the attribute surface the factory touches."""
+
+    def __init__(self):
+        self.row_factory = None
+
+
+def test_the_default_connect_fn_is_the_real_driver():
+    """The injected seam exists so the suite never opens a live session, but
+    production must get the real thing by default -- an injected-only seam
+    that nobody wires up in production is worse than none."""
+    import inspect
+
+    default = inspect.signature(turso_db.connect).parameters["connect_fn"].default
+    assert default is turso_serverless.connect
+
+
+def test_missing_config_fails_before_any_connection_is_attempted():
+    """Fail on configuration, not on a half-open session."""
+    attempts = []
+
+    def should_not_run(*args, **kwargs):
+        attempts.append(args)
+        return _FakeTursoConnection()
+
+    with pytest.raises(RuntimeError):
+        turso_db.connect({}, connect_fn=should_not_run)
+
+    assert attempts == []
