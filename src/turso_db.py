@@ -161,6 +161,28 @@ def ensure_schema(conn) -> None:
         conn.commit()
 
 
+def stage_connection(
+    env: Mapping[str, str] | None = None,
+    connect_fn: Callable = turso_serverless.connect,
+):
+    """The database every stage reads and writes.
+
+    This is the cutover in one function. Before it, each stage opened
+    data/listings.db and publish.py mirrored the result up to Turso; now the
+    stages talk to Turso directly and there is no second database to drift.
+
+    ensure_schema() runs on every connect. It costs ~14 statements (~3.4s)
+    per stage -- real, but small against a run measured in minutes, and it is
+    what stops a new _SCHEMA column from silently never existing in the only
+    database there is. The visual_scores orphan incident is what schema drift
+    looks like when it goes unnoticed; three seconds a stage to make that
+    structurally impossible is the right trade.
+    """
+    conn = connect(env, connect_fn)
+    ensure_schema(conn)
+    return conn
+
+
 def upsert_row(conn, table: str, row: sqlite3.Row) -> None:
     """Inserts or replaces one row using its own column names -- works for
     every mirrored table that has a real primary key (listings, commute,

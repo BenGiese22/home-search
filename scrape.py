@@ -7,11 +7,10 @@ from playwright.sync_api import Page
 
 from src.auth import launch_authenticated_page
 from src.config import load_config, load_env
-from src.turso_db import connect as turso_connect
+from src.turso_db import stage_connection
 from src.csv_writer import write_csv
 from src.db import (
     bulk_upsert_listings,
-    get_connection,
     get_pinned_listing_ids,
     get_price_snapshot,
     query_listings,
@@ -36,7 +35,6 @@ STORE_DIR = DATA_DIR / "listings"
 AUTH_STATE_PATH = DATA_DIR / ".auth" / "compass_state.json"
 CSV_PATH = DATA_DIR / "listings.csv"
 GALLERY_PATH = DATA_DIR / "gallery.html"
-DB_PATH = DATA_DIR / "listings.db"
 LOGIN_URL = "https://www.compass.com/login/"
 
 # Randomized pause between photo downloads so a listing's ~20-35 photos
@@ -133,9 +131,10 @@ def _upload_photos_for(db_conn) -> None:
     upload failed or was interrupted on an earlier run gets picked up rather
     than being stranded forever.
 
-    hosted_photos lives only in Turso, so this opens its own connection. A
-    configuration or upload problem must not fail the scrape -- the listings
-    and photos are already safely on disk, and the next run retries.
+    hosted_photos lives in the same database the stage already holds open, so
+    this reuses that connection rather than opening a second one. An upload
+    problem must not fail the scrape -- the listings and photos are already
+    safely written, and the next run retries.
     """
     env = load_env()
     if not env.get("BLOB_READ_WRITE_TOKEN"):
@@ -144,24 +143,16 @@ def _upload_photos_for(db_conn) -> None:
     listing_ids = [row["listing_id"] for row in query_listings(db_conn)]
     if not listing_ids:
         return
-    try:
-        blob_conn = turso_connect(env)
-    except Exception as exc:
-        print(f"skipping photo upload: {exc}")
-        return
-    try:
-        uploaded, failed = upload_photos(
-            blob_conn, PHOTOS_DIR, listing_ids,
-            env["BLOB_READ_WRITE_TOKEN"],
-            max_per_listing=MAX_PHOTOS_PER_LISTING,
-        )
-        if uploaded or failed:
-            summary = f"uploaded {uploaded} new photo(s)"
-            if failed:
-                summary += f" ({failed} failed -- a rerun retries them)"
-            print(summary)
-    finally:
-        blob_conn.close()
+    uploaded, failed = upload_photos(
+        db_conn, PHOTOS_DIR, listing_ids,
+        env["BLOB_READ_WRITE_TOKEN"],
+        max_per_listing=MAX_PHOTOS_PER_LISTING,
+    )
+    if uploaded or failed:
+        summary = f"uploaded {uploaded} new photo(s)"
+        if failed:
+            summary += f" ({failed} failed -- a rerun retries them)"
+        print(summary)
 
 
 def _parse_limit(argv: list[str]) -> int | None:
@@ -182,7 +173,7 @@ def main() -> None:
     # photo download and store rewrite for listings that already have the data.
     backfill_missing = "--backfill-missing" in sys.argv
     config = load_config(load_env())
-    db_conn = get_connection(DB_PATH)
+    db_conn = stage_connection()
     # Snapshot BEFORE any upserts this run touch the DB -- including the
     # explicit-URL loop below -- so a genuine price change on a listing
     # that's both pinned and collection-fetched is still detected. Taking
@@ -343,7 +334,7 @@ def main() -> None:
     write_csv(all_listings, PHOTOS_DIR, CSV_PATH)
     write_gallery(all_listings, PHOTOS_DIR, GALLERY_PATH)
 
-    print(f"\nWrote {len(all_listings)} listings to {CSV_PATH}, {GALLERY_PATH}, and {DB_PATH}")
+    print(f"\nWrote {len(all_listings)} listings to {CSV_PATH}, {GALLERY_PATH}, and Turso")
 
 
 if __name__ == "__main__":

@@ -456,3 +456,39 @@ def test_missing_config_fails_before_any_connection_is_attempted():
         turso_db.connect({}, connect_fn=should_not_run)
 
     assert attempts == []
+
+
+def test_stage_connection_ensures_the_schema_and_sets_the_row_factory():
+    """The cutover in one function: stages get a Turso connection whose rows
+    behave like sqlite3.Row, on a database guaranteed to have the current
+    schema."""
+    import sqlite3
+
+    backing = sqlite3.connect(":memory:")
+    backing.row_factory = sqlite3.Row
+
+    class _Conn:
+        """A sqlite3 connection that accepts a row_factory assignment the way
+        a turso_serverless one does."""
+
+        def __init__(self):
+            self.row_factory = None
+
+        def execute(self, *a, **k):
+            return backing.execute(*a, **k)
+
+        def commit(self):
+            return backing.commit()
+
+    conn = turso_db.stage_connection(
+        {"TURSO_DATABASE_URL": "libsql://db", "TURSO_AUTH_TOKEN": "t"},
+        connect_fn=lambda url, auth_token=None: _Conn(),
+    )
+
+    assert conn.row_factory is TursoRow
+    tables = {
+        row[0]
+        for row in backing.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    assert {"listings", "amenities", "photo_urls", "commute", "scores",
+            "visual_scores", "hosted_photos"} <= tables

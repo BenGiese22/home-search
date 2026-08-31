@@ -1,10 +1,9 @@
-"""Run the five pipeline stages in order.
+"""Run the four pipeline stages in order.
 
     python pipeline.py                      # full refresh
     python pipeline.py --dry-run            # print the commands, run nothing
     python pipeline.py --from=score         # resume after a partial failure
-    python pipeline.py --only=publish       # one stage
-    python pipeline.py --skip-publish       # local iteration
+    python pipeline.py --only=score         # one stage
     python pipeline.py --max-age=6h         # skip if data is already fresh
     python pipeline.py --limit=5 --new-listing   # scrape flags pass through
 
@@ -26,8 +25,8 @@ a run shortly after the machine comes up -- when the data is staleest and
 someone is most likely to look at the viewer -- without doing the work three
 times on a day it stays on.
 
-Only a full run records success. A partial run (--only/--from/--skip-publish)
-deliberately does not reset the clock, since it did not refresh everything.
+Only a full run records success. A partial run (--only/--from) deliberately
+does not reset the clock, since it did not refresh everything.
 """
 
 import fcntl
@@ -39,6 +38,9 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+from src.config import load_env
+from src.revalidate import revalidate
 
 DATA_DIR = Path("data")
 LOG_DIR = DATA_DIR / "logs"
@@ -55,12 +57,14 @@ class Stage:
     takes_scrape_flags: bool = False
 
 
+# publish.py is gone: the stages write Turso directly, so there is nothing
+# to mirror. The one part of it that had to survive -- telling the viewer its
+# data changed -- is the revalidate POST at the end of run_pipeline().
 STAGES: tuple[Stage, ...] = (
     Stage("scrape", "scrape.py", takes_scrape_flags=True),
     Stage("commutes", "compute_commutes.py"),
     Stage("score-photos", "score_photos.py"),
     Stage("score", "score.py"),
-    Stage("publish", "publish.py"),
 )
 STAGE_NAMES = [s.name for s in STAGES]
 
@@ -69,7 +73,7 @@ class Skipped(Exception):
     """Raised when a run is a no-op because the data is already fresh."""
 
 
-def build_plan(only=None, start_from=None, skip_publish=False) -> list[Stage]:
+def build_plan(only=None, start_from=None) -> list[Stage]:
     for requested in (only, start_from):
         if requested is not None and requested not in STAGE_NAMES:
             raise ValueError(f"unknown stage {requested!r}; expected one of {STAGE_NAMES}")
@@ -78,8 +82,6 @@ def build_plan(only=None, start_from=None, skip_publish=False) -> list[Stage]:
     stages = list(STAGES)
     if start_from:
         stages = stages[STAGE_NAMES.index(start_from):]
-    if skip_publish:
-        stages = [s for s in stages if s.name != "publish"]
     return stages
 
 
@@ -111,6 +113,23 @@ def _default_runner(argv, log_handle=None):
     return process.returncode
 
 
+def _default_revalidate() -> bool:
+    """Tell the hosted viewer its data changed.
+
+    short-list caches its reads behind cacheTag('listings'), so its whole
+    contract with this project is "the Turso database you read is fresh, and
+    someone POSTs revalidate after writing". The stages now keep the first
+    half directly; this is the second, and the only surviving line of
+    publish.py.
+    """
+    env = load_env()
+    missing = [k for k in ("SHORT_LIST_URL", "REVALIDATE_SECRET") if not env.get(k)]
+    if missing:
+        print(f"skipping revalidate: {', '.join(missing)} not set", flush=True)
+        return False
+    return revalidate(env["SHORT_LIST_URL"], env["REVALIDATE_SECRET"])
+
+
 def run_pipeline(
     stages,
     runner=_default_runner,
@@ -119,7 +138,13 @@ def run_pipeline(
     marker=None,
     max_age_hours=0.0,
     log_handle=None,
+    revalidate_fn=None,
 ) -> int:
+    # Late-bound rather than a default argument so tests (and any caller)
+    # can substitute it by patching the module attribute.
+    if revalidate_fn is None:
+        revalidate_fn = _default_revalidate
+
     if marker is not None and is_fresh(marker, max_age_hours):
         raise Skipped(f"last successful run was under {max_age_hours}h ago")
 
@@ -146,6 +171,13 @@ def run_pipeline(
             # publish results computed from half-updated data.
             return code
         print(f"[{stage.name}] ok in {elapsed:.0f}s", flush=True)
+
+    # Every stage wrote straight to the database the viewer reads, so any
+    # successful run -- full or partial -- has changed what it should serve.
+    # A failed revalidate is deliberately not a failed run: the writes all
+    # landed and the cache expires on its own.
+    if stages:
+        revalidate_fn()
 
     if marker is not None and list(stages) == list(STAGES):
         record_success(marker)
@@ -177,7 +209,6 @@ def main() -> int:
         stages = build_plan(
             only=_parse_value(argv, "--only="),
             start_from=_parse_value(argv, "--from="),
-            skip_publish="--skip-publish" in argv,
         )
     except ValueError as exc:
         print(f"pipeline: {exc}")

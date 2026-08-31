@@ -316,3 +316,45 @@ def test_bulk_delete_chunks_a_listing_id_list_past_the_variable_limit(tmp_path):
     ids = [f"L{n:04d}" for n in range(MAX_SQL_VARIABLES + 50)]
 
     bulk_delete_listings(conn, ids)  # must not raise
+
+
+# --- hosted_photos must be pruned too (issue #22) ------------------------
+
+def _turso_shaped_conn() -> sqlite3.Connection:
+    """A connection with the full Turso schema, including hosted_photos --
+    which exists only there and has no foreign key back to listings."""
+    from src.turso_db import ensure_schema
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_schema(conn)
+    return conn
+
+
+def test_delisting_prunes_hosted_photos(tmp_path):
+    """hosted_photos declares no foreign key, so nothing makes this fail
+    loudly -- the rows just linger. publish.py pruned them via its own
+    PRUNABLE_TABLES; when it was deleted that had to move here or every
+    delisting would orphan rows and strand their blobs forever.
+    """
+    conn = _turso_shaped_conn()
+    bulk_upsert_listings(conn, [_listing(1), _listing(2)])
+    conn.execute("INSERT INTO hosted_photos VALUES ('L0001', 1, 'https://blob/a.jpg')")
+    conn.execute("INSERT INTO hosted_photos VALUES ('L0002', 1, 'https://blob/b.jpg')")
+    conn.commit()
+
+    bulk_delete_listings(conn, ["L0001"])
+
+    remaining = [r["listing_id"] for r in conn.execute("SELECT * FROM hosted_photos")]
+    assert remaining == ["L0002"], "delisted listing left orphaned hosted_photos rows"
+
+
+def test_delisting_still_works_without_a_hosted_photos_table(tmp_path):
+    """The local schema has no hosted_photos. Deleting from a table that does
+    not exist must not blow up the delisting path."""
+    conn = get_connection(tmp_path / "db.sqlite")
+    bulk_upsert_listings(conn, [_listing(1)])
+
+    bulk_delete_listings(conn, ["L0001"])  # must not raise
+
+    assert query_listings(conn) == []

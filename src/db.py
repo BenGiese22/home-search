@@ -412,12 +412,27 @@ def bulk_delete_listings(conn, listing_ids: list[str]) -> None:
     listings row before its children aborts the whole delete. That exact
     ordering bug shipped twice here before the order was derived rather than
     hand-maintained.
+
+    hosted_photos is included explicitly. It lives only in the hosted schema
+    and declares no foreign key, so orphaning it fails silently: the rows
+    linger, their blobs are never reclaimed, and the upload skip set goes on
+    believing those photos are hosted. publish.py pruned it via its own
+    PRUNABLE_TABLES, and that behaviour had to survive publish.py's deletion.
+
+    Tables are filtered to the ones that actually exist, so the local schema
+    (which has no hosted_photos) still works -- one extra read, on a path
+    that runs only when listings actually drop out of the collection.
     """
     if not listing_ids:
         return
+    existing = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
     with conn:
-        for table in tables_child_first():
-            _delete_where_listing_in(conn, table, listing_ids)
+        for table in tables_child_first(extra_tables=("hosted_photos",)):
+            if table in existing:
+                _delete_where_listing_in(conn, table, listing_ids)
 
 
 def get_pinned_listing_ids(conn: sqlite3.Connection) -> frozenset[str]:

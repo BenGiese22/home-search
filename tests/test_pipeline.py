@@ -4,6 +4,12 @@ from pathlib import Path
 
 import pytest
 
+import pipeline
+
+# Captured before the autouse fixture replaces it, for the two tests that
+# exercise the real function rather than stubbing it out.
+_REAL_DEFAULT_REVALIDATE = pipeline._default_revalidate
+
 from pipeline import (
     STAGE_NAMES,
     Skipped,
@@ -30,23 +36,42 @@ class Runner:
         return [argv[1] for argv in self.calls]
 
 
+@pytest.fixture(autouse=True)
+def never_revalidate_for_real(monkeypatch):
+    """run_pipeline ends with a POST to the live viewer. No test may make it.
+
+    Caught the hard way: these tests called run_pipeline() without injecting
+    a revalidate, which fired real POSTs at the deployed site.
+    """
+    calls = []
+    monkeypatch.setattr(
+        pipeline, "_default_revalidate", lambda: calls.append(True) or True
+    )
+    return calls
+
+
 def test_stages_run_in_dependency_order():
     plan = build_plan()
-    assert [s.name for s in plan] == [
-        "scrape", "commutes", "score-photos", "score", "publish"
-    ]
+    assert [s.name for s in plan] == ["scrape", "commutes", "score-photos", "score"]
+
+
+def test_publish_is_no_longer_a_stage():
+    """The stages write Turso directly, so there is nothing to mirror. What
+    publish.py did that still matters -- the revalidate POST -- moved to the
+    end of run_pipeline()."""
+    assert "publish" not in [s.name for s in build_plan()]
+    with pytest.raises(ValueError, match="publish"):
+        build_plan(only="publish")
 
 
 def test_only_runs_a_single_stage():
-    assert [s.name for s in build_plan(only="publish")] == ["publish"]
+    assert [s.name for s in build_plan(only="score")] == ["score"]
 
 
 def test_from_resumes_at_a_stage_and_continues():
-    assert [s.name for s in build_plan(start_from="score")] == ["score", "publish"]
-
-
-def test_skip_publish_drops_the_last_stage():
-    assert "publish" not in [s.name for s in build_plan(skip_publish=True)]
+    assert [s.name for s in build_plan(start_from="score-photos")] == [
+        "score-photos", "score"
+    ]
 
 
 def test_unknown_stage_name_is_rejected():
@@ -139,7 +164,67 @@ def test_a_failed_run_does_not_count_as_fresh(tmp_path: Path):
 
 
 def test_partial_run_does_not_record_success(tmp_path: Path):
-    """--only publish is not a full refresh and must not reset the clock."""
+    """--only score is not a full refresh and must not reset the clock."""
     marker = tmp_path / "last.json"
-    run_pipeline(build_plan(only="publish"), runner=Runner(), marker=marker)
+    run_pipeline(build_plan(only="score"), runner=Runner(), marker=marker)
     assert is_fresh(marker, max_age_hours=6) is False
+
+
+# --- the revalidate ending (issue #22) -----------------------------------
+
+def test_a_successful_run_ends_with_the_revalidate_post(never_revalidate_for_real):
+    run_pipeline(build_plan(), runner=Runner())
+
+    assert never_revalidate_for_real == [True], "a successful run must revalidate"
+
+
+def test_a_failed_stage_does_not_revalidate(never_revalidate_for_real):
+    """The viewer must not be told to re-read a half-updated database."""
+    run_pipeline(build_plan(), runner=Runner(exit_codes={"score.py": 1}))
+
+    assert never_revalidate_for_real == []
+
+
+def test_a_dry_run_does_not_revalidate(never_revalidate_for_real):
+    run_pipeline(build_plan(), runner=Runner(), dry_run=True)
+
+    assert never_revalidate_for_real == []
+
+
+def test_a_partial_run_still_revalidates(never_revalidate_for_real):
+    """Every stage writes straight to the database the viewer reads, so even
+    --only=score changes what it should be serving."""
+    run_pipeline(build_plan(only="score"), runner=Runner())
+
+    assert never_revalidate_for_real == [True]
+
+
+def test_a_failing_revalidate_does_not_fail_the_run(monkeypatch):
+    """Every write already landed; the cache expires on its own. Failing the
+    run here would report failure for a run that succeeded."""
+    monkeypatch.setattr(pipeline, "_default_revalidate", lambda: False)
+
+    assert run_pipeline(build_plan(), runner=Runner()) == 0
+
+
+def test_revalidate_is_skipped_when_it_is_not_configured(monkeypatch, capsys):
+    monkeypatch.setattr(pipeline, "load_env", lambda: {})
+
+    assert _REAL_DEFAULT_REVALIDATE() is False
+    out = capsys.readouterr().out
+    assert "SHORT_LIST_URL" in out and "REVALIDATE_SECRET" in out
+
+
+def test_revalidate_is_called_with_the_configured_url_and_secret(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(pipeline, "load_env", lambda: {
+        "SHORT_LIST_URL": "https://short-list.example",
+        "REVALIDATE_SECRET": "s3cret",
+    })
+    monkeypatch.setattr(
+        pipeline, "revalidate",
+        lambda url, secret: captured.update(url=url, secret=secret) or True,
+    )
+
+    assert _REAL_DEFAULT_REVALIDATE() is True
+    assert captured == {"url": "https://short-list.example", "secret": "s3cret"}

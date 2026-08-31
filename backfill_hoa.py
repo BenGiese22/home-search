@@ -13,13 +13,13 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from src.db import get_connection, get_pinned_listing_ids, upsert_listing
+from src.turso_db import stage_connection
+from src.db import get_pinned_listing_ids, upsert_listing
 from src.hoa import parse_hoa_from_description
 from src.store import load_all_listings, save_listing
 
 DATA_DIR = Path("data")
 STORE_DIR = DATA_DIR / "listings"
-DB_PATH = DATA_DIR / "listings.db"
 
 
 def main() -> None:
@@ -48,7 +48,7 @@ def main() -> None:
         print("Dry run -- nothing written.")
         return
 
-    conn = get_connection(DB_PATH)
+    conn = stage_connection()
     pinned_ids = get_pinned_listing_ids(conn)
     for listing in changed:
         save_listing(STORE_DIR, listing)
@@ -57,7 +57,7 @@ def main() -> None:
         # row, same caveat as backfill_db.py.
         upsert_listing(conn, listing, is_pinned=listing.listing_id in pinned_ids)
     conn.close()
-    print(f"Wrote {len(changed)} store files and re-upserted {len(listings)} rows into {DB_PATH}")
+    print(f"Wrote {len(changed)} store files and re-upserted {len(listings)} rows into Turso")
 
 
 if __name__ == "__main__":

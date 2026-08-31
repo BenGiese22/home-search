@@ -3,10 +3,10 @@ import json
 import sys
 from pathlib import Path
 
+from src.turso_db import stage_connection
 from src.db import (
     get_amenities_by_listing,
     get_commutes_by_listing,
-    get_connection,
     get_visual_scores_by_listing,
     query_listings,
     upsert_scores,
@@ -15,7 +15,6 @@ from src.models import Listing
 from src.scoring import compute_collection_stats, finished_sqft, score_listing
 
 DATA_DIR = Path("data")
-DB_PATH = DATA_DIR / "listings.db"
 RANKED_CSV_PATH = DATA_DIR / "ranked_report.csv"
 
 # Points of composite score per $100k of price -- lets a $500k listing
@@ -96,7 +95,7 @@ def _row_to_listing(row, amenities: list[str]) -> Listing:
 def main() -> None:
     sort_by_value = "--sort-by-value" in sys.argv
 
-    conn = get_connection(DB_PATH)
+    conn = stage_connection()
     rows = query_listings(conn)
     # Three set-at-a-time reads rather than three per listing. Against local
     # SQLite the difference is invisible; against Turso each statement is a
@@ -173,7 +172,7 @@ def main() -> None:
 
     write_ranked_csv(ranked, RANKED_CSV_PATH)
 
-    print(f"\nScored {len(ranked)} listings into {DB_PATH}")
+    print(f"\nScored {len(ranked)} listings into Turso")
     print(f"Wrote ranked report to {RANKED_CSV_PATH}")
     if not sort_by_value:
         print("(sorted by composite; rerun with --sort-by-value to sort by score per $100k)")
