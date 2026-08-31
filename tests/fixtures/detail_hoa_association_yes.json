@@ -1,0 +1,1887 @@
+{
+  "listingIdSHA": "2146461770754841641",
+  "compassPropertyId": 59329177401810450,
+  "feedListingId": "2146461770754841641",
+  "listingType": 2,
+  "sourceFilters": [
+    3
+  ],
+  "location": {
+    "prettyAddress": "10191 Zenobia Circle",
+    "streetNumber": "10191",
+    "street": "Zenobia",
+    "streetType": "Cir",
+    "neighborhood": "Hyland Greens",
+    "subNeighborhoods": [
+      "Hyland Greens",
+      "Central Westminster",
+      "Westminster",
+      "Adams County"
+    ],
+    "mlsNeighborhoods": [
+      "First Hyland Greens"
+    ],
+    "city": "Westminster",
+    "state": "CO",
+    "zipCode": "80031",
+    "longitude": -105.052682,
+    "latitude": 39.8809992,
+    "geoId": "denver",
+    "timezone": "America/Denver",
+    "locationEntities": [
+      {
+        "type": 4,
+        "id": 16813,
+        "name": "Adams County",
+        "seoId": "adams-county-co",
+        "hidden": true
+      },
+      {
+        "type": 1,
+        "id": 16236,
+        "name": "Westminster",
+        "seoId": "westminster-co"
+      },
+      {
+        "type": 0,
+        "id": 50947,
+        "name": "80031",
+        "seoId": "westminster-co-80031"
+      },
+      {
+        "type": 5,
+        "id": 192320,
+        "name": "CO",
+        "seoId": "colorado"
+      },
+      {
+        "type": 2,
+        "id": 448562,
+        "name": "Hyland Greens",
+        "seoId": "hyland-greens-westminster-co"
+      }
+    ],
+    "schoolDistricts": [
+      {
+        "id": 195639,
+        "name": "Westminster 50 School District",
+        "externalId": "0807230"
+      }
+    ],
+    "countyFipsCode": "08001",
+    "subdivisionNames": [
+      "First Hyland Greens"
+    ],
+    "county": "Adams County"
+  },
+  "size": {
+    "bedrooms": 4,
+    "fullBathrooms": 1,
+    "oneQuarterBathrooms": 0,
+    "halfBathrooms": 1,
+    "threeQuarterBathrooms": 2,
+    "totalBathrooms": 4,
+    "bathrooms": 4,
+    "squareFeet": 2668,
+    "lotSizeInSquareFeet": 9000,
+    "formattedLotSize": "0.21 AC / 9,000 SF",
+    "levelsOrStories": "Levels: Two",
+    "aboveGradeTotalAreaSquareFeet": 1862,
+    "belowGradeTotalAreaSquareFeet": 725
+  },
+  "description": "Move-in ready and filled with warmth, this fantastic Westminster home offers an abundance of space, beautiful natural light, and the perfect blend of formal and informal living areas. Charming wood beam accents add character, while tasteful updates throughout provide modern comfort and style. Unwind year-round in the inviting sunroom or gather around the cozy fireplace in the family room. The spacious eat-in kitchen is designed for everyday living and entertaining, featuring new stainless steel appliances, granite countertops, warm wood cabinetry with decorative glass-front accents, and generous prep and storage space. Upstairs, you'll find four spacious bedrooms, including a welcoming primary suite with vaulted ceilings, ample closet space, an updated en-suite bath, and pretty mountain views from the bedroom window. The finished basement expands the living space with an additional family room, bathroom, and a second laundry area\u2014ideal for guests, multi-generational living, or added convenience. Step outside to enjoy a peaceful, private backyard shaded by mature trees and lush landscaping. The large patio is perfect for outdoor entertaining, while the fire pit, raised garden beds, and adorable dog house create a backyard everyone\u2014including Fido\u2014will love. Just two blocks to community pool, tennis courts, parks, and walking trails. Recent improvements include a fully updated sprinkler system for both the front and back yards and a new PVC main sewer line installed in 2024, offering added peace of mind. Ideally located with quick access to US-36 and I-25, you'll enjoy an easy commute along with convenient access to abundant shopping, dining, and everyday amenities. This move-in-ready gem truly has it all.",
+  "status": 0,
+  "localizedStatus": "Active",
+  "price": {
+    "lastKnown": 625000,
+    "listed": 675000,
+    "charges": [
+      {
+        "chargeAmount": 4253,
+        "paymentFrequentType": 3,
+        "chargeType": 0
+      },
+      {
+        "chargeAmount": 1000,
+        "paymentFrequentType": 3,
+        "chargeType": 2
+      }
+    ],
+    "perSquareFoot": 234.25787106446776,
+    "monthlySalesCharges": 83.33333333333333,
+    "monthlySalesChargesInclTaxes": 437.75,
+    "formatted": "$625,000",
+    "lastPropertyClosePrice": 510000
+  },
+  "date": {
+    "listed": 1783663200000,
+    "updated": 1787787076972,
+    "daysOnMarket": 51,
+    "lastPropertyCloseDate": 1582786800000
+  },
+  "latestTransaction": true,
+  "buildingInfo": {
+    "buildingIdSHA": "a59e27d675df13da76754ad761813df6f9416dbf",
+    "buildingAddress": "10191 Zenobia Cir",
+    "buildingYearOpened": 1974,
+    "buildingKeyDetails": [
+      {
+        "key": "Stories",
+        "value": "-"
+      },
+      {
+        "key": "Year Built",
+        "value": "1974"
+      },
+      {
+        "key": "Building Size",
+        "value": "-"
+      },
+      {
+        "key": "Lot Size",
+        "value": "0.21 AC / 9,000 SF"
+      }
+    ]
+  },
+  "detailedInfo": {
+    "amenities": [
+      "Air Conditioning",
+      "Attached Garage",
+      "Back Yard",
+      "Basement",
+      "Breakfast Bar",
+      "Cable Included",
+      "Carpet Floors",
+      "Central AC",
+      "Common Outdoor Space",
+      "Communal Pool",
+      "Communal Tennis Court",
+      "Cooktop",
+      "Dishwasher",
+      "Dual Pane Windows",
+      "Eat-in Kitchen",
+      "Electricity Included",
+      "Fireplace",
+      "Forced Air",
+      "Garage",
+      "Gas Heat",
+      "Granite Kitchen Counter",
+      "Internet Included",
+      "Laundry",
+      "Microwave",
+      "Mountain Views",
+      "Patio",
+      "Pet Friendly",
+      "Playground",
+      "Private Outdoor Space",
+      "Private Yard",
+      "Refrigerator",
+      "Stainless Steel Appliances",
+      "Tennis Court",
+      "Tile Floors"
+    ],
+    "propertyType": {
+      "masterType": {
+        "GLOBAL": [
+          "Single Family"
+        ],
+        "LOCAL_1": [
+          "Residential"
+        ],
+        "LOCAL_2": [
+          "Single Family Residence"
+        ]
+      },
+      "feedTypes": {
+        "denver_ires_grid": "",
+        "denver_recolorado_grid": ""
+      },
+      "feedDisplayNames": {
+        "IRES": "Residential - Single Family Residence",
+        "RECOLORADO": "Residential - Single Family Residence"
+      }
+    },
+    "outdoorSpace": [
+      "Back Yard",
+      "Common Outdoor Space",
+      "Patio",
+      "Playground",
+      "Private Outdoor Space",
+      "Private Yard"
+    ],
+    "petPolicy": 3,
+    "keyDetails": [
+      {
+        "key": "Status",
+        "value": "Active"
+      },
+      {
+        "key": "MLS #",
+        "value": "5321898"
+      },
+      {
+        "key": "Days on Compass",
+        "value": "51"
+      },
+      {
+        "key": "Taxes",
+        "value": "$4,253 / year"
+      },
+      {
+        "key": "HOA Fees",
+        "value": "$1,000 / year"
+      },
+      {
+        "key": "Condo/Co-op Fees",
+        "value": "-"
+      },
+      {
+        "key": "Property Type",
+        "value": "Single Family"
+      },
+      {
+        "key": "MLS Type",
+        "value": "Residential / Single Family Residence"
+      },
+      {
+        "key": "Year Built",
+        "value": "1974"
+      },
+      {
+        "key": "Lot Size",
+        "value": "0.21 AC / 9,000 SF"
+      },
+      {
+        "key": "County",
+        "value": "Adams County"
+      }
+    ],
+    "regionalKeyDetails": [
+      {
+        "key": "Structure Type",
+        "value": "House"
+      },
+      {
+        "key": "Architectural Style",
+        "value": "Paved, Cathedral Ceiling(s), Open Floorplan, 3/4 Primary Bath"
+      },
+      {
+        "key": "Levels",
+        "value": "Two"
+      },
+      {
+        "key": "Subdivision Name",
+        "value": "First Hyland Greens"
+      },
+      {
+        "key": "Association",
+        "value": "Yes"
+      },
+      {
+        "key": "Multiple Associations",
+        "value": "No"
+      },
+      {
+        "key": "Basement",
+        "value": "Yes"
+      }
+    ],
+    "listingDetails": [
+      {
+        "name": "Key Details",
+        "subCategories": [
+          {
+            "name": "Key Details",
+            "fields": [
+              {
+                "key": "Structure Type",
+                "values": [
+                  "House"
+                ]
+              },
+              {
+                "key": "Architectural Style",
+                "values": [
+                  "Paved",
+                  "Cathedral Ceiling(s)",
+                  "Open Floorplan",
+                  "3/4 Primary Bath"
+                ]
+              },
+              {
+                "key": "Levels",
+                "values": [
+                  "Two"
+                ]
+              },
+              {
+                "key": "Subdivision Name",
+                "values": [
+                  "First Hyland Greens"
+                ]
+              },
+              {
+                "key": "Association",
+                "values": [
+                  "Yes"
+                ]
+              },
+              {
+                "key": "Multiple Associations",
+                "values": [
+                  "No"
+                ]
+              },
+              {
+                "key": "Basement",
+                "values": [
+                  "Yes"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Interior Area & SqFt",
+        "subCategories": [
+          {
+            "name": "Interior Area & SqFt",
+            "fields": [
+              {
+                "key": "Building Area Total (SqFt Total)",
+                "values": [
+                  "2668"
+                ]
+              },
+              {
+                "key": "Sqft Total",
+                "values": [
+                  "2668"
+                ]
+              },
+              {
+                "key": "Living Area (SqFt Finished)",
+                "values": [
+                  "2587"
+                ]
+              },
+              {
+                "key": "Above Grade Finished Area",
+                "values": [
+                  "1862"
+                ]
+              },
+              {
+                "key": "Living SqFt",
+                "values": [
+                  "1862"
+                ]
+              },
+              {
+                "key": "Sq Ft Apx",
+                "values": [
+                  "725"
+                ]
+              },
+              {
+                "key": "Below Grade Unfinished Area",
+                "values": [
+                  "81"
+                ]
+              },
+              {
+                "key": "Area Source",
+                "values": [
+                  "Public Records"
+                ]
+              },
+              {
+                "key": "PSF Total",
+                "values": [
+                  "234"
+                ]
+              },
+              {
+                "key": "PSF Above Grade",
+                "values": [
+                  "336"
+                ]
+              },
+              {
+                "key": "PSF Finished",
+                "values": [
+                  "242"
+                ]
+              },
+              {
+                "key": "Master on Main",
+                "values": [
+                  "No"
+                ]
+              },
+              {
+                "key": "Room and Floor",
+                "values": [
+                  "Living Room-Main-1",
+                  "Dining Room-Main-1",
+                  "Family Room-Main-1",
+                  "Sun Room-Main-1",
+                  "Kitchen-Main-1",
+                  "Bathroom Half-Main-1",
+                  "Master Bedroom-Upper-1",
+                  "Bathroom Three Quarter-Upper-1",
+                  "Bedroom-Upper-1",
+                  "Bedroom-Upper-2",
+                  "Bedroom-Upper-3",
+                  "Bathroom Full-Upper-1",
+                  "Family Room-Basement-1",
+                  "Bathroom Three Quarter-Basement-1"
+                ]
+              },
+              {
+                "key": "Room Count",
+                "values": [
+                  "14"
+                ]
+              },
+              {
+                "key": "Basement",
+                "values": [
+                  "Finished",
+                  "Interior Entry"
+                ]
+              },
+              {
+                "key": "Fireplaces Total",
+                "values": [
+                  "1"
+                ]
+              },
+              {
+                "key": "Fireplace Features",
+                "values": [
+                  "Family Room",
+                  "Wood Burning"
+                ]
+              },
+              {
+                "key": "Heating",
+                "values": [
+                  "Forced Air",
+                  "Natural Gas",
+                  "Wood"
+                ]
+              },
+              {
+                "key": "Cooling",
+                "values": [
+                  "Central Air"
+                ]
+              },
+              {
+                "key": "Interior Features",
+                "values": [
+                  "Breakfast Bar",
+                  "Granite Counters",
+                  "High Speed Internet",
+                  "Open Floorplan",
+                  "Smart Thermostat",
+                  "Smoke Free",
+                  "Vaulted Ceiling(s)"
+                ]
+              },
+              {
+                "key": "Security Features",
+                "values": [
+                  "Carbon Monoxide Detector(s)",
+                  "Smart Locks",
+                  "Smoke Detector(s)"
+                ]
+              },
+              {
+                "key": "Flooring",
+                "values": [
+                  "Carpet",
+                  "Tile"
+                ]
+              },
+              {
+                "key": "Window Features",
+                "values": [
+                  "Double Pane Windows"
+                ]
+              },
+              {
+                "key": "Appliances",
+                "values": [
+                  "Cooktop",
+                  "Dishwasher",
+                  "Microwave",
+                  "Refrigerator",
+                  "Self Cleaning Oven",
+                  "Smart Appliance(s)"
+                ]
+              },
+              {
+                "key": "Laundry Features",
+                "values": [
+                  "Self Cleaning Oven",
+                  "Dishwasher",
+                  "Refrigerator",
+                  "Microwave",
+                  "Fire Alarm"
+                ]
+              },
+              {
+                "key": "Other Equipment",
+                "values": [
+                  "Satellite Dish"
+                ]
+              },
+              {
+                "key": "Virtual Tour URL Unbranded",
+                "values": [
+                  "https://my.matterport.com/show/?m=DhKxY3GgJpx&mls=1"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Financials & Expenses",
+        "subCategories": [
+          {
+            "name": "Fees & Restrictions",
+            "fields": [
+              {
+                "key": "Pets Allowed",
+                "values": [
+                  "Yes"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Bed & Bath Summary",
+        "subCategories": [
+          {
+            "name": "Bedrooms",
+            "fields": [
+              {
+                "key": "Bedrooms Total",
+                "values": [
+                  "4"
+                ]
+              },
+              {
+                "key": "Upper Level Bedrooms",
+                "values": [
+                  "4"
+                ]
+              },
+              {
+                "key": "Main Level Bedrooms",
+                "values": [
+                  "0"
+                ]
+              },
+              {
+                "key": "Lower Level Bedrooms",
+                "values": [
+                  "0"
+                ]
+              },
+              {
+                "key": "Basement Level Bedrooms",
+                "values": [
+                  "0"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Bathrooms",
+            "fields": [
+              {
+                "key": "Bathrooms Total",
+                "values": [
+                  "4"
+                ]
+              },
+              {
+                "key": "Upper Level Bathrooms",
+                "values": [
+                  "2"
+                ]
+              },
+              {
+                "key": "Main Level Bathrooms",
+                "values": [
+                  "1"
+                ]
+              },
+              {
+                "key": "Lower Level Bathrooms",
+                "values": [
+                  "0"
+                ]
+              },
+              {
+                "key": "Basement Level Bathrooms",
+                "values": [
+                  "1"
+                ]
+              },
+              {
+                "key": "Bathrooms Full",
+                "values": [
+                  "1"
+                ]
+              },
+              {
+                "key": "Bathrooms Three Quarter",
+                "values": [
+                  "2"
+                ]
+              },
+              {
+                "key": "Bathrooms Half",
+                "values": [
+                  "1"
+                ]
+              },
+              {
+                "key": "Bathrooms One Quarter",
+                "values": [
+                  "0"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Detailed Room Info",
+        "subCategories": [
+          {
+            "name": "Room 1",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Living Room"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Main"
+                ]
+              },
+              {
+                "key": "Room Description",
+                "values": [
+                  "Formal, 2-story vaulted ceilings, open to dining room"
+                ]
+              },
+              {
+                "key": "Room Length",
+                "values": [
+                  "12"
+                ]
+              },
+              {
+                "key": "Room Width",
+                "values": [
+                  "16"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 2",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Dining Room"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Main"
+                ]
+              },
+              {
+                "key": "Room Description",
+                "values": [
+                  "Formal, open to living room"
+                ]
+              },
+              {
+                "key": "Room Length",
+                "values": [
+                  "12"
+                ]
+              },
+              {
+                "key": "Room Width",
+                "values": [
+                  "10"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 3",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Family Room"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Main"
+                ]
+              },
+              {
+                "key": "Room Description",
+                "values": [
+                  "Fireplace, door to sun room"
+                ]
+              },
+              {
+                "key": "Room Length",
+                "values": [
+                  "21"
+                ]
+              },
+              {
+                "key": "Room Width",
+                "values": [
+                  "14"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 4",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Sun Room"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Main"
+                ]
+              },
+              {
+                "key": "Room Description",
+                "values": [
+                  "Two doors to backyard, ceiling fan"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 5",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Kitchen"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Main"
+                ]
+              },
+              {
+                "key": "Room Description",
+                "values": [
+                  "Stainless appliances, granite countertops, dining nook with ceiling fan"
+                ]
+              },
+              {
+                "key": "Room Length",
+                "values": [
+                  "22"
+                ]
+              },
+              {
+                "key": "Room Width",
+                "values": [
+                  "10"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 6",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Bathroom Half"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Main"
+                ]
+              },
+              {
+                "key": "Room Description",
+                "values": [
+                  "Pedestal sink"
+                ]
+              },
+              {
+                "key": "Room Length",
+                "values": [
+                  "5"
+                ]
+              },
+              {
+                "key": "Room Width",
+                "values": [
+                  "6"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 7",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Bedroom"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Upper"
+                ]
+              },
+              {
+                "key": "Room Description",
+                "values": [
+                  "Vaulted ceilings, carpet floors, en-suite bath"
+                ]
+              },
+              {
+                "key": "Room Length",
+                "values": [
+                  "13"
+                ]
+              },
+              {
+                "key": "Room Width",
+                "values": [
+                  "12"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 8",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Bathroom Three Quarter"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Upper"
+                ]
+              },
+              {
+                "key": "Room Description",
+                "values": [
+                  "Vessel sink with vanity, walk-in shower, mirrored closets"
+                ]
+              },
+              {
+                "key": "Room Length",
+                "values": [
+                  "8"
+                ]
+              },
+              {
+                "key": "Room Width",
+                "values": [
+                  "5"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 9",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Bedroom"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Upper"
+                ]
+              },
+              {
+                "key": "Room Description",
+                "values": [
+                  "Carpet floors, ceiling fan"
+                ]
+              },
+              {
+                "key": "Room Length",
+                "values": [
+                  "10"
+                ]
+              },
+              {
+                "key": "Room Width",
+                "values": [
+                  "11"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 10",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Bathroom Full"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Upper"
+                ]
+              },
+              {
+                "key": "Room Description",
+                "values": [
+                  "Single sink with vanity, tub/shower combination"
+                ]
+              },
+              {
+                "key": "Room Length",
+                "values": [
+                  "10"
+                ]
+              },
+              {
+                "key": "Room Width",
+                "values": [
+                  "9"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 11",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Bedroom"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Upper"
+                ]
+              },
+              {
+                "key": "Room Description",
+                "values": [
+                  "Carpet floors"
+                ]
+              },
+              {
+                "key": "Room Length",
+                "values": [
+                  "10"
+                ]
+              },
+              {
+                "key": "Room Width",
+                "values": [
+                  "15"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 12",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Bedroom"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Upper"
+                ]
+              },
+              {
+                "key": "Room Description",
+                "values": [
+                  "Carpet floors, ceiling fan"
+                ]
+              },
+              {
+                "key": "Room Length",
+                "values": [
+                  "11"
+                ]
+              },
+              {
+                "key": "Room Width",
+                "values": [
+                  "10"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 13",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Family Room"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Basement"
+                ]
+              },
+              {
+                "key": "Room Description",
+                "values": [
+                  "Carpet floors"
+                ]
+              },
+              {
+                "key": "Room Length",
+                "values": [
+                  "19"
+                ]
+              },
+              {
+                "key": "Room Width",
+                "values": [
+                  "28"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 14",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Bathroom Three Quarter"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Basement"
+                ]
+              },
+              {
+                "key": "Room Description",
+                "values": [
+                  "Stackable washer and dryer, sink with vanity, walk-in shower, tile floors"
+                ]
+              },
+              {
+                "key": "Room Length",
+                "values": [
+                  "11"
+                ]
+              },
+              {
+                "key": "Room Width",
+                "values": [
+                  "8"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Parking",
+        "subCategories": [
+          {
+            "name": "Parking",
+            "fields": [
+              {
+                "key": "Parking Features",
+                "values": [
+                  "220 Volts"
+                ]
+              },
+              {
+                "key": "Attached Garage",
+                "values": [
+                  "Yes"
+                ]
+              },
+              {
+                "key": "Parking Type",
+                "values": [
+                  "Garage (Attached)"
+                ]
+              },
+              {
+                "key": "Parking Description",
+                "values": [
+                  "Garage (Attached)-2"
+                ]
+              },
+              {
+                "key": "Parking Details",
+                "values": [
+                  "2"
+                ]
+              },
+              {
+                "key": "Parking Total",
+                "values": [
+                  "1"
+                ]
+              },
+              {
+                "key": "Garage Spaces",
+                "values": [
+                  "2"
+                ]
+              },
+              {
+                "key": "Offstreet Spaces",
+                "values": [
+                  "0"
+                ]
+              },
+              {
+                "key": "Parking Count",
+                "values": [
+                  "2"
+                ]
+              },
+              {
+                "key": "Carport Spaces",
+                "values": [
+                  "0"
+                ]
+              },
+              {
+                "key": "Reserved Spaces",
+                "values": [
+                  "0"
+                ]
+              },
+              {
+                "key": "RV Spaces",
+                "values": [
+                  "0"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Association Information",
+        "subCategories": [
+          {
+            "name": "Association 1",
+            "fields": [
+              {
+                "key": "Association Name",
+                "values": [
+                  "Hyland Greens"
+                ]
+              },
+              {
+                "key": "Association Management Type",
+                "values": [
+                  "Professionally Managed"
+                ]
+              },
+              {
+                "key": "Association Phone",
+                "values": [
+                  "(303) 221-1117"
+                ]
+              },
+              {
+                "key": "Association Fee",
+                "values": [
+                  "$250"
+                ]
+              },
+              {
+                "key": "Association Fee Frequency",
+                "values": [
+                  "Quarterly"
+                ]
+              },
+              {
+                "key": "Association Fee Annual",
+                "values": [
+                  "$1,000"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Association 2",
+            "fields": [
+              {
+                "key": "Association Fee Annual",
+                "values": [
+                  "$0"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Association 3",
+            "fields": [
+              {
+                "key": "Association Fee Annual",
+                "values": [
+                  "$0"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Association Information",
+            "fields": [
+              {
+                "key": "Association Fee Includes",
+                "values": [
+                  "Maintenance Grounds"
+                ]
+              },
+              {
+                "key": "Association Fee Total Annual",
+                "values": [
+                  "$1,000"
+                ]
+              },
+              {
+                "key": "Association Amenities",
+                "values": [
+                  "Garden Area",
+                  "Park",
+                  "Playground",
+                  "Pool",
+                  "Tennis Court(s)",
+                  "Trail(s)"
+                ]
+              },
+              {
+                "key": "Senior Community",
+                "values": [
+                  "No"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Site & Location Information",
+        "subCategories": [
+          {
+            "name": "School Information",
+            "fields": [
+              {
+                "key": "Elementary School",
+                "values": [
+                  "Sunset Ridge"
+                ]
+              },
+              {
+                "key": "Elementary School District",
+                "values": [
+                  "Westminster Public Schools"
+                ]
+              },
+              {
+                "key": "Middle Or Junior School",
+                "values": [
+                  "Shaw Heights"
+                ]
+              },
+              {
+                "key": "Middle Or Junior School District",
+                "values": [
+                  "Westminster Public Schools"
+                ]
+              },
+              {
+                "key": "High School",
+                "values": [
+                  "Westminster"
+                ]
+              },
+              {
+                "key": "High School District",
+                "values": [
+                  "Westminster Public Schools"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Site & Location Information",
+            "fields": [
+              {
+                "key": "Lot Size Acres",
+                "values": [
+                  ".21"
+                ]
+              },
+              {
+                "key": "Lot Size Square Feet",
+                "values": [
+                  "9000"
+                ]
+              },
+              {
+                "key": "Lot Features",
+                "values": [
+                  "Near Public Transit",
+                  "Sprinklers In Front",
+                  "Sprinklers In Rear"
+                ]
+              },
+              {
+                "key": "Fencing",
+                "values": [
+                  "Full"
+                ]
+              },
+              {
+                "key": "Accessibility Features",
+                "values": [
+                  "Paved"
+                ]
+              },
+              {
+                "key": "Road Surface Type",
+                "values": [
+                  "Paved"
+                ]
+              },
+              {
+                "key": "Parcel Number",
+                "values": [
+                  "R0046471"
+                ]
+              },
+              {
+                "key": "Property Exclusions",
+                "values": [
+                  "Seller's personal property."
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Building Information",
+        "subCategories": [
+          {
+            "name": "Green Features",
+            "fields": [
+              {
+                "key": "Green Verification Count",
+                "values": [
+                  "0"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Outbuildings",
+            "fields": [
+              {
+                "key": "Out Building Count",
+                "values": [
+                  "0"
+                ]
+              },
+              {
+                "key": "Horse",
+                "values": [
+                  "No"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Building Information",
+            "fields": [
+              {
+                "key": "Construction Materials",
+                "values": [
+                  "Brick",
+                  "Concrete",
+                  "Frame",
+                  "Vinyl Siding"
+                ]
+              },
+              {
+                "key": "Roof",
+                "values": [
+                  "Composition"
+                ]
+              },
+              {
+                "key": "Exterior Features",
+                "values": [
+                  "Private Yard"
+                ]
+              },
+              {
+                "key": "Patio And Porch Features",
+                "values": [
+                  "Covered",
+                  "Patio"
+                ]
+              },
+              {
+                "key": "Livable Structure Count",
+                "values": [
+                  "0"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Water & Utilities",
+        "subCategories": [
+          {
+            "name": "Water & Utilities",
+            "fields": [
+              {
+                "key": "Water Included",
+                "values": [
+                  "Yes"
+                ]
+              },
+              {
+                "key": "Water Source",
+                "values": [
+                  "Public"
+                ]
+              },
+              {
+                "key": "Utilities",
+                "values": [
+                  "Cable Available",
+                  "Electricity Connected",
+                  "Internet Access (Wired)"
+                ]
+              },
+              {
+                "key": "Sewer",
+                "values": [
+                  "Public Sewer"
+                ]
+              },
+              {
+                "key": "Electric",
+                "values": [
+                  "220 Volts"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "schools": [
+      {
+        "name": "Sunset Ridge Elementary School",
+        "distance": "1.5",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "PK-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 4,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 1,
+        "displayableSchool": true,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/westminster/1520-Sunset-Ridge-Elementary-School/"
+      },
+      {
+        "name": "Westminster High School",
+        "distance": "4.13",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "9-12",
+        "levels": [
+          2
+        ],
+        "greatSchoolsRating": 2,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 1,
+        "displayableSchool": true,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/westminster/1525-Westminster-High-School/"
+      },
+      {
+        "name": "John E. Flynn A Marzano Academy",
+        "distance": "2.03",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "PK-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 4,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": true,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/westminster/1526-Flynn-Elementary-School/"
+      },
+      {
+        "name": "Metropolitan Arts Academy",
+        "distance": "3.22",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "PK-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 7,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": true,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/denver/1508-Clara-E.-Metz-Elementary-School/"
+      },
+      {
+        "name": "Westminster Academy For International Studies",
+        "distance": "3.57",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "PK-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 4,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": true,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/westminster/5418-Westminster-Academy-For-International-Studies/"
+      },
+      {
+        "name": "Hidden Lake High School",
+        "distance": "3.79",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "6-12",
+        "levels": [
+          1,
+          2
+        ],
+        "greatSchoolsRating": 1,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": true,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/westminster/2435-Hidden-Lake-High-School/"
+      },
+      {
+        "name": "Hyland Christian School",
+        "distance": "0.39",
+        "types": [
+          "Private"
+        ],
+        "gradesOffered": "K-12",
+        "levels": [
+          0,
+          1,
+          2
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 1,
+        "schoolBoundarySource": 0,
+        "displayableSchool": true,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/westminster/1721-Hyland-Christian-School/"
+      },
+      {
+        "name": "Colorado STEM Academy",
+        "distance": "3.8",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "PK-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 7,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/westminster/5245-Colorado-Stem-Academy/"
+      }
+    ],
+    "schoolIds": [
+      "0801721",
+      "0801520",
+      "0801526",
+      "0801508",
+      "0805418",
+      "0802435",
+      "0805245",
+      "0801525"
+    ],
+    "assessorDetails": {
+      "assessorInfo": {
+        "title": "Assessor Information",
+        "propertyTax": {
+          "taxYear": "2025",
+          "tax": "$4,253",
+          "dateUpdated": 1764547200000,
+          "monthlyTax": "$354"
+        },
+        "assessment": {
+          "title": "Taxable Value",
+          "landValue": 10060,
+          "additionsValue": 35160,
+          "year": "2025",
+          "previousValue": "$41,560",
+          "dateUpdated": 1765065600000
+        },
+        "appraisal": {
+          "title": "Appraisal",
+          "landValue": 10060,
+          "additionsValue": 35160,
+          "year": "2025"
+        },
+        "market": {
+          "title": "Market",
+          "landValue": 665000,
+          "additionsValue": 517000
+        }
+      },
+      "categories": [
+        {
+          "name": "Home Facts",
+          "subCategories": [
+            {
+              "fields": [
+                {
+                  "key": "Beds",
+                  "value": "5"
+                },
+                {
+                  "key": "Baths",
+                  "value": "3.5"
+                },
+                {
+                  "key": "Total Finished SqFt",
+                  "value": "3,312 SqFt"
+                },
+                {
+                  "key": "Above Grade Finished SqFt",
+                  "value": "2,587 SqFt"
+                },
+                {
+                  "key": "Finished Basement SqFt",
+                  "value": "725 SqFt"
+                },
+                {
+                  "key": "Unfinished Basement SqFt",
+                  "value": "81 SqFt"
+                },
+                {
+                  "key": "Stories",
+                  "value": "2"
+                },
+                {
+                  "key": "Lot Size",
+                  "value": "9,000 SqFt"
+                },
+                {
+                  "key": "Style",
+                  "value": "Single Family Residence"
+                },
+                {
+                  "key": "Year Built",
+                  "value": "1974"
+                },
+                {
+                  "key": "Year Renovated",
+                  "value": "2016"
+                },
+                {
+                  "key": "County",
+                  "value": "ADAMS"
+                },
+                {
+                  "key": "APN",
+                  "value": "R0046471"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "totalParkingSpaces": 2,
+    "primaryBedroomOnMainLevel": false,
+    "waterfrontYN": false,
+    "seniorCommunityYN": false,
+    "view": [
+      "Views: Mountain(s)"
+    ],
+    "parkingFeatures": [
+      "220 Volts"
+    ],
+    "garageSpaces": 2
+  },
+  "media": [
+    {
+      "category": 0,
+      "thumbnailUrl": "https://www.compass.com/m/5252bcc4661345a54d29a22f6d40ae3fd1c9a3a609514031e30b9b6698c1f88e/165x165.jpg",
+      "originalUrl": "https://www.compass.com/m/5252bcc4661345a54d29a22f6d40ae3fd1c9a3a609514031e30b9b6698c1f88e/origin.jpg",
+      "width": 1600,
+      "height": 1066,
+      "aiTags": [
+        {
+          "model": 2,
+          "values": [
+            {
+              "tag": "a front view of a house with a garden and trees",
+              "score": 0.94238776
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "category": 0,
+      "thumbnailUrl": "https://www.compass.com/m/39452b337ed6fc9fd58b3d51e77727c6aad91a0dedcf6bf65dd076614fe49114/165x165.jpg",
+      "originalUrl": "https://www.compass.com/m/39452b337ed6fc9fd58b3d51e77727c6aad91a0dedcf6bf65dd076614fe49114/origin.jpg",
+      "width": 1600,
+      "height": 1066,
+      "aiTags": [
+        {
+          "model": 2,
+          "values": [
+            {
+              "tag": "a view of house with a yard",
+              "score": 0.89191467
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "visualAssets": [
+    {
+      "category": 3,
+      "thumbnailUrl": "https://www.compass.com/m/ace367a71577721c046ad769daa0017f4c834bad_vrt_0/165x165.jpg",
+      "originalUrl": "https://my.matterport.com/show/?m=DhKxY3GgJpx&play=1",
+      "internalSource": "media-pipeline"
+    }
+  ],
+  "isConsumerSearchable": true,
+  "isOffMLS": false,
+  "hasManualPatch": false,
+  "parcelNumber": "R0046471",
+  "externalId": "5321898",
+  "badges": {
+    "cornerBadges": [
+      {
+        "badgeType": 14,
+        "displayText": "Virtual Tour"
+      }
+    ]
+  },
+  "databaseSource": {
+    "externalSourceName": "denver_recolorado_grid",
+    "sourceDisplayName": "RECOLORADO",
+    "contributingDatasetList": [
+      "denver_recolorado_grid",
+      "denver_ires_grid"
+    ]
+  },
+  "pageLink": "/homedetails/10191-Zenobia-Cir-Westminster-CO-80031/2146461770754841641_lid/",
+  "pageLinkSlug": "10191-Zenobia-Cir-Westminster-CO-80031",
+  "propertyLinkSlug": "10191-Zenobia-Cir-Westminster-CO-80031",
+  "propertyPageLink": "/homedetails/10191-Zenobia-Cir-Westminster-CO-80031/12XHZW_pid/",
+  "navigationPageLink": "/homedetails/10191-Zenobia-Cir-Westminster-CO-80031/12XHZW_pid/",
+  "canonicalPageLink": "/homedetails/10191-Zenobia-Cir-Westminster-CO-80031/12XHZW_pid/",
+  "editable": true,
+  "cloneable": true,
+  "mlsStatus": "Active"
+}
