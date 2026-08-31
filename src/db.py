@@ -1,12 +1,17 @@
 import json
 import re
 import sqlite3
+from collections.abc import Collection
 from datetime import datetime, timezone
 from pathlib import Path
 
 from src.commute import CommuteResult
 from src.models import Listing
 from src.scoring import ScoreResult
+# chunk_size lives with the rest of the batched-write machinery in
+# turso_db. That module's import of src.db is function-local, so this is
+# not a cycle.
+from src.turso_db import chunk_size
 from src.vision import VisualScoreResult
 
 _SCHEMA = """
@@ -273,6 +278,146 @@ def upsert_listing(conn: sqlite3.Connection, listing: Listing, is_pinned: bool =
             "INSERT INTO photo_urls (listing_id, position, url) VALUES (?, ?, ?)",
             [(listing.listing_id, i, url) for i, url in enumerate(listing.photo_urls)],
         )
+
+
+_LISTING_COLUMNS = (
+    "listing_id", "address", "city", "state", "zip_code", "price",
+    "price_numeric", "beds", "baths", "sqft", "lot_sqft", "parking_spaces",
+    "year_built", "description", "listing_url", "is_pinned", "property_type",
+    "localized_status", "hoa_annual", "tax_annual", "sqft_above_grade",
+    "sqft_below_grade", "outdoor_spaces",
+)
+
+
+def _listing_values(listing: Listing, is_pinned: bool) -> tuple:
+    return (
+        listing.listing_id,
+        listing.address,
+        listing.city,
+        listing.state,
+        listing.zip_code,
+        listing.price,
+        parse_price(listing.price),
+        listing.beds,
+        listing.baths,
+        listing.sqft,
+        listing.lot_sqft,
+        listing.parking_spaces,
+        listing.year_built,
+        listing.description,
+        listing.listing_url,
+        int(is_pinned),
+        listing.property_type,
+        listing.localized_status,
+        listing.hoa_annual,
+        listing.tax_annual,
+        listing.sqft_above_grade,
+        listing.sqft_below_grade,
+        json.dumps(listing.outdoor_spaces),
+    )
+
+
+def _insert_in_chunks(conn, table: str, columns: tuple[str, ...], values: list[tuple]) -> None:
+    """One multi-row INSERT OR REPLACE per chunk, sized to the table's width.
+
+    Deliberately not executemany(): turso_serverless's executemany loops over
+    its parameter sets and issues one HTTP round-trip each, so it is a
+    per-row write wearing a batch-shaped API. That is what made a single
+    upsert_listing cost ~65 round-trips against Turso.
+    """
+    if not values:
+        return
+    col_list = ", ".join(columns)
+    one = "(" + ", ".join("?" for _ in columns) + ")"
+    per_statement = chunk_size(len(columns))
+    for start in range(0, len(values), per_statement):
+        chunk = values[start:start + per_statement]
+        flat: list[object] = []
+        for row in chunk:
+            flat.extend(row)
+        conn.execute(
+            f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES "
+            + ", ".join(one for _ in chunk),
+            tuple(flat),
+        )
+
+
+def _delete_where_listing_in(conn, table: str, listing_ids: list[str]) -> None:
+    """DELETE ... WHERE listing_id IN (...), chunked so a large id list never
+    exceeds SQLite's bound-variable limit."""
+    per_statement = chunk_size(1)
+    for start in range(0, len(listing_ids), per_statement):
+        chunk = listing_ids[start:start + per_statement]
+        placeholders = ", ".join("?" for _ in chunk)
+        conn.execute(
+            f"DELETE FROM {table} WHERE listing_id IN ({placeholders})", tuple(chunk)
+        )
+
+
+def bulk_upsert_listings(
+    conn, listings: list[Listing], pinned_ids: Collection[str] = ()
+) -> None:
+    """Insert or replace many listings and their children in a handful of
+    statements. The set-at-a-time counterpart of upsert_listing().
+
+    Against local SQLite the difference is invisible. Against Turso every
+    statement is a ~240ms HTTP round-trip, and upsert_listing costs about 65
+    of them per listing -- one for the row, one DELETE and one INSERT PER
+    AMENITY, the same per photo URL, plus BEGIN/COMMIT. Across the
+    129-listing corpus that is ~8,385 round-trips, roughly 33 minutes.
+
+    Order matters: listings first, then children. Turso enforces the foreign
+    keys local SQLite ignores, so writing an amenity before its listing row
+    aborts the whole write.
+
+    pinned_ids must carry the CURRENT pin status of every listing in the
+    batch, for the same reason upsert_listing takes is_pinned: this is a full
+    row replace, so a listing absent from pinned_ids is actively un-pinned.
+    """
+    if not listings:
+        return
+    pinned = set(pinned_ids)
+    listing_ids = [listing.listing_id for listing in listings]
+
+    with conn:
+        # Parents first.
+        _insert_in_chunks(
+            conn, "listings", _LISTING_COLUMNS,
+            [_listing_values(l, l.listing_id in pinned) for l in listings],
+        )
+        # Then children: clear the whole set in one statement per table
+        # rather than one per listing, then insert the current set.
+        _delete_where_listing_in(conn, "amenities", listing_ids)
+        _insert_in_chunks(
+            conn, "amenities", ("listing_id", "amenity"),
+            [(l.listing_id, amenity) for l in listings for amenity in l.amenities],
+        )
+        _delete_where_listing_in(conn, "photo_urls", listing_ids)
+        _insert_in_chunks(
+            conn, "photo_urls", ("listing_id", "position", "url"),
+            [
+                (l.listing_id, i, url)
+                for l in listings
+                for i, url in enumerate(l.photo_urls)
+            ],
+        )
+
+
+def bulk_delete_listings(conn, listing_ids: list[str]) -> None:
+    """Permanently remove many listings and every child row referencing
+    them, in one statement per table rather than one per table per listing.
+
+    Child-first, derived from the schema via tables_child_first() -- Turso
+    enforces the foreign keys local SQLite ignores, so deleting the parent
+    listings row before its children aborts the whole delete. That exact
+    ordering bug shipped twice here before the order was derived rather than
+    hand-maintained.
+    """
+    if not listing_ids:
+        return
+    with conn:
+        for table in tables_child_first():
+            _delete_where_listing_in(conn, table, listing_ids)
 
 
 def get_pinned_listing_ids(conn: sqlite3.Connection) -> frozenset[str]:

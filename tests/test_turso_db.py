@@ -8,7 +8,16 @@ from turso_serverless.dbapi import Row as TursoRow
 
 import src.turso_db as turso_db
 from src.db import _SCHEMA
-from src.turso_db import BATCH_CHUNK, BatchRowErrors, ensure_schema, upsert_row, upsert_rows, replace_listing_rows
+from src.turso_db import (
+    BATCH_CHUNK,
+    MAX_SQL_VARIABLES,
+    BatchRowErrors,
+    chunk_size,
+    ensure_schema,
+    replace_listing_rows,
+    upsert_row,
+    upsert_rows,
+)
 
 
 def _connect() -> sqlite3.Connection:
@@ -212,11 +221,13 @@ def test_upsert_rows_costs_one_statement_per_chunk_not_one_per_row():
     upsert_rows(Counting(), "amenities", rows)
 
     inserts = [s for s in statements if s.lstrip().upper().startswith("INSERT")]
-    expected = math.ceil(120 / BATCH_CHUNK)
+    expected = math.ceil(120 / chunk_size(2))  # amenities has 2 columns
     assert len(inserts) == expected, (
-        f"120 rows at chunk {BATCH_CHUNK} should be {expected} "
+        f"120 rows at chunk {chunk_size(2)} should be {expected} "
         f"statements, got {len(inserts)}"
     )
+    # The point of the function: nowhere near one statement per row.
+    assert len(inserts) < 120
 
 
 def test_upsert_rows_replaces_on_conflict_like_upsert_row_did():

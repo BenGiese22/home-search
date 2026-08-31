@@ -9,6 +9,7 @@ from src.auth import launch_authenticated_page
 from src.config import load_config, load_env
 from src.csv_writer import write_csv
 from src.db import (
+    bulk_upsert_listings,
     get_connection,
     get_pinned_listing_ids,
     get_price_snapshot,
@@ -219,11 +220,16 @@ def main() -> None:
             # `before`) and then drops out; a listing that shows up already
             # inactive and was never tracked before would otherwise get
             # written in here and then never be eligible for removal.
-            for listing in present_listings:
-                # Preserve pin status if this collection listing happens to
-                # also be individually pinned (via LISTING_URLS, this run
-                # or a prior one) -- upsert_listing fully replaces the row.
-                upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
+            # One batched write for the whole collection rather than one
+            # per listing. Against local SQLite the difference is invisible;
+            # against Turso, upsert_listing costs ~65 round-trips per listing
+            # (one per amenity and one per photo URL, because
+            # turso_serverless's executemany loops), which is ~8,385
+            # round-trips -- about 33 minutes -- across this corpus.
+            # pinned_ids carries the CURRENT pin status of every listing, for
+            # the same reason upsert_listing takes is_pinned: this is a full
+            # row replace, so a listing missing from it is actively un-pinned.
+            bulk_upsert_listings(db_conn, present_listings, pinned_ids=pinned_ids)
 
             # --limit caps how many listings this run downloads photos for
             # and saves to the JSON store -- e.g. for a first smoke test of
