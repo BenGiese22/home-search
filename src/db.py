@@ -348,6 +348,20 @@ def get_commute(conn: sqlite3.Connection, listing_id: str) -> sqlite3.Row | None
     ).fetchone()
 
 
+def get_commutes_by_listing(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
+    """Every listing's commute row in ONE statement, keyed by listing_id.
+
+    The per-listing get_commute() is correct but costs a statement each, and
+    a statement against Turso is a ~240ms HTTP round-trip -- 129 listings is
+    half a minute of latency for data that is one SELECT. Listings with no
+    commute row are simply absent, so callers use .get() and fall back
+    exactly as they did when get_commute() returned None."""
+    return {
+        row["listing_id"]: row
+        for row in conn.execute("SELECT * FROM commute")
+    }
+
+
 def get_listing_ids_missing_commute(
     conn: sqlite3.Connection, retry_failed: bool = True
 ) -> list[str]:
@@ -415,6 +429,61 @@ def upsert_score(conn: sqlite3.Connection, listing_id: str, result: ScoreResult)
         )
 
 
+# Rows per batched INSERT. scores has 12 columns, so 30 rows is 360 bound
+# variables -- well inside SQLite's 999-variable default, with room to spare
+# if the table grows. Mirrors src.turso_sync.BATCH_CHUNK and exists for the
+# same reason: one statement per row is a ~240ms round-trip per row once the
+# connection is Turso rather than a local file.
+SCORE_BATCH_CHUNK = 30
+
+_SCORE_COLUMNS = (
+    "listing_id", "commute_score", "sqft_score", "condition_score",
+    "outdoor_score", "room_count_score", "parking_score", "hoa_score",
+    "composite", "passes_filters", "has_incomplete_data", "computed_at",
+)
+
+
+def upsert_scores(
+    conn: sqlite3.Connection, results: list[tuple[str, ScoreResult]]
+) -> None:
+    """Insert or replace many score rows in a handful of statements.
+
+    Same semantics as calling upsert_score() per row, but score.py rewrites
+    every scores row on every run -- one statement per listing is exactly the
+    per-row pattern that made a full Turso sync take 22 minutes. Chunked
+    multi-row INSERT OR REPLACE keeps the statement count flat as the corpus
+    grows."""
+    if not results:
+        return
+    computed_at = datetime.now(timezone.utc).isoformat()
+    col_list = ", ".join(_SCORE_COLUMNS)
+    one = "(" + ", ".join("?" for _ in _SCORE_COLUMNS) + ")"
+    with conn:
+        for start in range(0, len(results), SCORE_BATCH_CHUNK):
+            chunk = results[start:start + SCORE_BATCH_CHUNK]
+            values: list[object] = []
+            for listing_id, result in chunk:
+                values.extend((
+                    listing_id,
+                    result.commute_score,
+                    result.sqft_score,
+                    result.condition_score,
+                    result.outdoor_score,
+                    result.room_count_score,
+                    result.parking_score,
+                    result.hoa_score,
+                    result.composite,
+                    int(result.passes_filters),
+                    int(result.has_incomplete_data),
+                    computed_at,
+                ))
+            conn.execute(
+                f"INSERT OR REPLACE INTO scores ({col_list}) VALUES "
+                + ", ".join(one for _ in chunk),
+                tuple(values),
+            )
+
+
 def get_scores(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM scores ORDER BY composite DESC").fetchall()
 
@@ -424,6 +493,28 @@ def get_amenities(conn: sqlite3.Connection, listing_id: str) -> list[str]:
         "SELECT amenity FROM amenities WHERE listing_id = ? ORDER BY amenity", (listing_id,)
     ).fetchall()
     return [row["amenity"] for row in rows]
+
+
+def get_amenities_by_listing(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    """Every listing's amenities in ONE statement, keyed by listing_id.
+
+    LEFT JOIN from listings rather than grouping amenities, so a listing with
+    no amenity rows still gets a key with an empty list -- callers index this
+    dict directly and a missing key would be a KeyError mid-scoring rather
+    than the empty list the per-listing get_amenities() returned."""
+    by_listing: dict[str, list[str]] = {}
+    for row in conn.execute(
+        """
+        SELECT l.listing_id AS listing_id, a.amenity AS amenity
+        FROM listings l
+        LEFT JOIN amenities a ON a.listing_id = l.listing_id
+        ORDER BY l.listing_id, a.amenity
+        """
+    ):
+        amenities = by_listing.setdefault(row["listing_id"], [])
+        if row["amenity"] is not None:
+            amenities.append(row["amenity"])
+    return by_listing
 
 
 def delete_listing(conn: sqlite3.Connection, listing_id: str) -> None:
@@ -524,6 +615,16 @@ def get_visual_score(conn: sqlite3.Connection, listing_id: str) -> sqlite3.Row |
     return conn.execute(
         "SELECT * FROM visual_scores WHERE listing_id = ?", (listing_id,)
     ).fetchone()
+
+
+def get_visual_scores_by_listing(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
+    """Every listing's visual_scores row in ONE statement, keyed by
+    listing_id. Listings never scored are absent, matching what the
+    per-listing get_visual_score() signalled by returning None."""
+    return {
+        row["listing_id"]: row
+        for row in conn.execute("SELECT * FROM visual_scores")
+    }
 
 
 def get_listing_ids_missing_visual_score(conn: sqlite3.Connection) -> list[str]:

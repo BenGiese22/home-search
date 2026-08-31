@@ -3,7 +3,14 @@ import json
 import sys
 from pathlib import Path
 
-from src.db import get_amenities, get_commute, get_connection, get_visual_score, query_listings, upsert_score
+from src.db import (
+    get_amenities_by_listing,
+    get_commutes_by_listing,
+    get_connection,
+    get_visual_scores_by_listing,
+    query_listings,
+    upsert_scores,
+)
 from src.models import Listing
 from src.scoring import compute_collection_stats, finished_sqft, score_listing
 
@@ -91,17 +98,24 @@ def main() -> None:
 
     conn = get_connection(DB_PATH)
     rows = query_listings(conn)
-    listings = [_row_to_listing(row, get_amenities(conn, row["listing_id"])) for row in rows]
+    # Three set-at-a-time reads rather than three per listing. Against local
+    # SQLite the difference is invisible; against Turso each statement is a
+    # ~240ms HTTP round-trip, so the per-listing shape cost ~93 seconds per
+    # run. tests/test_score_batching.py pins the statement count flat.
+    amenities_by_id = get_amenities_by_listing(conn)
+    commute_by_id = get_commutes_by_listing(conn)
+    visual_by_id = get_visual_scores_by_listing(conn)
+
+    listings = [_row_to_listing(row, amenities_by_id.get(row["listing_id"], [])) for row in rows]
     price_numeric_by_id = {row["listing_id"]: row["price_numeric"] for row in rows}
 
-    commute_by_id = {listing.listing_id: get_commute(conn, listing.listing_id) for listing in listings}
     # Normalize against finished area, matching what score_sqft now scores --
     # mixing a total-footprint min/max with finished-area inputs would skew
     # every listing's percentile.
     sqft_values = [finished_sqft(listing) for listing in listings if finished_sqft(listing)]
     denver_minutes_values = [
         commute["denver_minutes"]
-        for commute in commute_by_id.values()
+        for commute in (commute_by_id.get(listing.listing_id) for listing in listings)
         if commute is not None and commute["denver_minutes"] is not None
     ]
     room_count_values = [
@@ -110,12 +124,13 @@ def main() -> None:
     stats = compute_collection_stats(sqft_values, denver_minutes_values, room_count_values)
 
     ranked = []
+    score_rows = []
     for listing in listings:
-        commute = commute_by_id[listing.listing_id]
+        commute = commute_by_id.get(listing.listing_id)
         medtronic_minutes = commute["medtronic_minutes"] if commute else None
         denver_minutes = commute["denver_minutes"] if commute else None
 
-        visual_row = get_visual_score(conn, listing.listing_id)
+        visual_row = visual_by_id.get(listing.listing_id)
         visual_condition_score = None
         visual_outdoor_score = None
         if visual_row is not None and not visual_row["photo_score_unavailable"]:
@@ -127,10 +142,13 @@ def main() -> None:
             visual_condition_score=visual_condition_score,
             visual_outdoor_score=visual_outdoor_score,
         )
-        upsert_score(conn, listing.listing_id, result)
+        score_rows.append((listing.listing_id, result))
         value = value_score(result.composite, price_numeric_by_id[listing.listing_id])
         ranked.append((listing, result, value))
 
+    # One batched write rather than one INSERT per listing, for the same
+    # round-trip reason as the reads above.
+    upsert_scores(conn, score_rows)
     conn.close()
 
     if sort_by_value:
