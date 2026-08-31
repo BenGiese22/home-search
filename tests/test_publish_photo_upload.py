@@ -199,3 +199,46 @@ def test_a_cap_of_zero_means_no_cap(tmp_path, monkeypatch):
     monkeypatch.setattr(publish, "MAX_PHOTOS_PER_LISTING", 0)
 
     assert len(publish._collect_pending_photos(_conn(), ["aaa"])) == 12
+
+
+def test_prunable_tables_deletes_children_before_listings():
+    """Turso enforces foreign keys that local SQLite does not. Pruning the
+    parent row first aborts the whole publish, so `listings` must be last."""
+    from publish import PRUNABLE_TABLES
+
+    assert PRUNABLE_TABLES[-1] == "listings"
+    for child in ("commute", "scores", "visual_scores", "amenities", "photo_urls"):
+        assert PRUNABLE_TABLES.index(child) < PRUNABLE_TABLES.index("listings")
+
+
+def test_prune_deleted_listings_succeeds_with_foreign_keys_enforced():
+    """Regression: reproduces the live failure by turning FK enforcement on,
+    which is how Turso behaves and how local sqlite3 does not."""
+    import sqlite3
+
+    from publish import _prune_deleted_listings
+    from src.db import _SCHEMA
+
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    conn.executescript(
+        """CREATE TABLE IF NOT EXISTS hosted_photos (
+               listing_id TEXT NOT NULL, position INTEGER NOT NULL,
+               blob_url TEXT NOT NULL, PRIMARY KEY (listing_id, position));"""
+    )
+    conn.execute("PRAGMA foreign_keys = ON")
+    for lid in ("keep", "drop"):
+        conn.execute(
+            "INSERT INTO listings (listing_id, address, city, state, zip_code, price, "
+            "beds, baths, sqft, lot_sqft, parking_spaces, year_built, description, "
+            "listing_url) VALUES (?, 'a', 'b', 'CO', '80020', '$1', 1, 1, 1, 1, 1, 1, 'd', 'u')",
+            (lid,),
+        )
+        conn.execute("INSERT INTO amenities (listing_id, amenity) VALUES (?, 'Pool')", (lid,))
+    conn.commit()
+
+    pruned = _prune_deleted_listings(conn, ["keep"])
+
+    assert pruned == 2  # the dropped listing's own row plus its amenity
+    assert [r[0] for r in conn.execute("SELECT listing_id FROM listings")] == ["keep"]
+    assert [r[0] for r in conn.execute("SELECT listing_id FROM amenities")] == ["keep"]
