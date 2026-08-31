@@ -293,9 +293,13 @@ def test_upload_photo_returns_the_url_from_the_response(photo):
     assert url == "https://str12345.public.blob.vercel-storage.com/photos/abc/01.jpg"
 
 
-def test_publish_no_longer_fails_fast_on_a_missing_vercel_cli():
-    """Acceptance criterion for #15: the shutil.which("vercel") preflight is
-    gone, along with the systemd PATH workaround that existed only for it."""
-    source = Path("publish.py").read_text()
-    assert "shutil.which" not in source
-    assert 'which("vercel")' not in source
+def test_nothing_shells_out_to_the_vercel_cli_any_more():
+    """Acceptance criterion for #15: no entry point fails fast on a missing
+    `vercel` binary, and the systemd PATH workaround that existed only for
+    that is gone. publish.py, which held the original preflight, was deleted
+    with the Turso cutover."""
+    assert not Path("publish.py").exists()
+    for entry in ("scrape.py", "check.py", "pipeline.py"):
+        source = Path(entry).read_text()
+        assert "shutil.which" not in source
+        assert 'which("vercel")' not in source

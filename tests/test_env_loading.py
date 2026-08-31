@@ -20,7 +20,6 @@ ENTRY_POINTS = [
     "scrape.py",
     "score_photos.py",
     "check.py",
-    "publish.py",
     "backfill_photos.py",
     "assess_six_houses.py",
 ]
@@ -122,9 +121,11 @@ def test_entry_points_use_the_shared_loader(entry_point):
     assert "load_env" in source, f"{entry_point} does not use load_env()"
 
 
-def test_publish_photo_cap_honours_the_dotenv_file():
-    """The latent bug this unification fixes: MAX_PHOTOS_PER_LISTING was read
+def test_the_photo_cap_honours_the_dotenv_file():
+    """The latent bug this unification fixed: MAX_PHOTOS_PER_LISTING was read
     from os.environ alone, so the value sitting in .env was silently ignored
-    and the cap stayed at its default."""
-    source = Path("publish.py").read_text()
+    and the cap stayed at its default. The setting moved to scrape.py with
+    the upload itself when publish.py was deleted."""
+    source = Path("scrape.py").read_text()
     assert 'os.environ.get("MAX_PHOTOS_PER_LISTING"' not in source
+    assert "load_env()" in source
