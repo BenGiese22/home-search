@@ -1,9 +1,14 @@
+import pytest
 import json
 import sqlite3
 from pathlib import Path
 
 from src.commute import CommuteResult
 from src.db import (
+    _SCHEMA,
+    tables_child_first,
+    tables_parent_first,
+    delete_listing,
     delete_listing,
     delete_orphaned_rows,
     get_amenities,
@@ -562,6 +567,11 @@ def test_delete_listing_cleans_every_table_that_references_listings(tmp_path: Pa
 
 def test_delete_orphaned_rows_removes_children_with_no_listing(tmp_path: Path):
     conn = get_connection(_db_path(tmp_path))
+    # Foreign keys are enforced now (matching Turso), so an orphan can no
+    # longer be created through the normal path -- which is the point. This
+    # cleanup exists for rows that predate enforcement, so the test has to
+    # turn it off to manufacture one.
+    conn.execute("PRAGMA foreign_keys = OFF")
     upsert_listing(conn, SAMPLE)
     upsert_visual_score(conn, "abc123", VISUAL_SCORE_SAMPLE)
     upsert_visual_score(conn, "ghost", VISUAL_SCORE_SAMPLE)
@@ -703,3 +713,60 @@ def test_init_db_migrates_existing_listings_table_missing_structured_columns(tmp
     columns = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
     for col in ("tax_annual", "sqft_above_grade", "sqft_below_grade", "outdoor_spaces"):
         assert col in columns
+
+
+def test_get_connection_enforces_foreign_keys_like_turso(tmp_path: Path):
+    """The divergence that made FK bugs production-only: Turso enforces
+    foreign keys, local SQLite defaults them off."""
+    conn = get_connection(_db_path(tmp_path))
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+def test_inserting_a_child_without_its_listing_now_fails_locally(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    with pytest.raises(sqlite3.IntegrityError):
+        with conn:
+            conn.execute("INSERT INTO amenities (listing_id, amenity) VALUES ('ghost', 'Pool')")
+
+
+def test_tables_child_first_puts_listings_last():
+    order = tables_child_first()
+    assert order[-1] == "listings"
+    for child in ("amenities", "photo_urls", "commute", "scores", "visual_scores"):
+        assert order.index(child) < order.index("listings")
+
+
+def test_tables_parent_first_is_the_exact_reverse():
+    assert tables_parent_first() == list(reversed(tables_child_first()))
+
+
+def test_extra_tables_are_treated_as_children_of_listings():
+    order = tables_child_first(extra_tables=("hosted_photos",))
+    assert order.index("hosted_photos") < order.index("listings")
+
+
+def test_ordering_adapts_to_a_new_referencing_table():
+    """The point of deriving it: a new child sorts itself, with no list to
+    remember to update."""
+    schema = _SCHEMA + """
+    CREATE TABLE IF NOT EXISTS notes (
+        listing_id TEXT NOT NULL REFERENCES listings(listing_id),
+        body TEXT NOT NULL
+    );
+    """
+    order = tables_child_first(schema)
+    assert order.index("notes") < order.index("listings")
+
+
+def test_delete_listing_removes_children_under_fk_enforcement(tmp_path: Path):
+    """Regression for the publish.py prune bug, in the other delete path."""
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    upsert_visual_score(conn, "abc123", VISUAL_SCORE_SAMPLE)
+    conn.commit()
+
+    delete_listing(conn, "abc123")
+
+    assert conn.execute("SELECT COUNT(*) FROM listings").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM amenities").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM visual_scores").fetchone()[0] == 0

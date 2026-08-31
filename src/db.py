@@ -93,6 +93,58 @@ CREATE TABLE IF NOT EXISTS visual_scores (
 _PRICE_RE = re.compile(r"[\d.]+")
 
 
+_CREATE_TABLE_RE = re.compile(r"CREATE TABLE IF NOT EXISTS\s+(\w+)\s*\((.*?)\)\s*;", re.DOTALL)
+_REFERENCES_RE = re.compile(r"REFERENCES\s+(\w+)\s*\(", re.IGNORECASE)
+
+
+def tables_parent_first(schema_sql: str | None = None, extra_tables: tuple[str, ...] = ()) -> list[str]:
+    """Every table in the schema, ordered so a table always follows the
+    tables it references -- i.e. safe INSERT order (parents before children).
+
+    Reverse it for safe DELETE order; see tables_child_first().
+
+    Deleting rows for a listing means deleting children before the parent,
+    and inserting means the reverse. Both orders were previously hand-
+    maintained in three places, and one of them (publish.py's
+    PRUNABLE_TABLES) had it backwards -- silently, because local SQLite does
+    not check foreign keys. Deriving the order from the schema removes the
+    chance to get it wrong again: add a table with a REFERENCES clause and
+    it sorts itself.
+
+    extra_tables covers tables that exist only in the Turso mirror
+    (hosted_photos) and so are absent from this schema. They declare no
+    foreign keys of their own, but they are keyed by listing_id and must
+    still be pruned before listings, so they are treated as children of it.
+    """
+    schema_sql = _SCHEMA if schema_sql is None else schema_sql
+    dependencies: dict[str, set[str]] = {}
+    for match in _CREATE_TABLE_RE.finditer(schema_sql):
+        table, body = match.group(1), match.group(2)
+        dependencies[table] = {
+            ref for ref in _REFERENCES_RE.findall(body) if ref != table
+        }
+    for table in extra_tables:
+        dependencies.setdefault(table, {"listings"} if "listings" in dependencies else set())
+
+    ordered: list[str] = []
+    remaining = dict(dependencies)
+    while remaining:
+        free = sorted(t for t, deps in remaining.items() if not (deps & remaining.keys()))
+        if not free:  # a reference cycle; emit the rest deterministically
+            ordered.extend(sorted(remaining))
+            break
+        ordered.extend(free)
+        for table in free:
+            del remaining[table]
+    return ordered
+
+
+def tables_child_first(schema_sql: str | None = None, extra_tables: tuple[str, ...] = ()) -> list[str]:
+    """Safe DELETE order: a table always precedes the tables it references,
+    so children are removed before the parent row they point at."""
+    return list(reversed(tables_parent_first(schema_sql, extra_tables)))
+
+
 def parse_price(price: str) -> float | None:
     """Best-effort numeric price for range queries, e.g. "$650,000" -> 650000.0.
     Returns None for anything that doesn't contain a number (e.g. "Contact agent")
@@ -149,6 +201,13 @@ def init_db(conn: sqlite3.Connection) -> None:
 def get_connection(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    # Turso enforces foreign keys; local SQLite defaults them OFF. That
+    # divergence made FK bugs production-only -- publish.py pruned the
+    # parent listings row before its children for as long as that code
+    # existed, and every local run and test passed regardless, because the
+    # constraint simply was not checked. Enforcing here means the same
+    # mistake fails in dev. Verified against the real db: 0 violations.
+    conn.execute("PRAGMA foreign_keys = ON")
     conn.row_factory = sqlite3.Row
     init_db(conn)
     return conn
@@ -352,12 +411,10 @@ def delete_listing(conn: sqlite3.Connection, listing_id: str) -> None:
     long after this function and went unnoticed here for months, orphaning one
     row per delisting."""
     with conn:
-        conn.execute("DELETE FROM amenities WHERE listing_id = ?", (listing_id,))
-        conn.execute("DELETE FROM photo_urls WHERE listing_id = ?", (listing_id,))
-        conn.execute("DELETE FROM commute WHERE listing_id = ?", (listing_id,))
-        conn.execute("DELETE FROM scores WHERE listing_id = ?", (listing_id,))
-        conn.execute("DELETE FROM visual_scores WHERE listing_id = ?", (listing_id,))
-        conn.execute("DELETE FROM listings WHERE listing_id = ?", (listing_id,))
+        # Child-first, derived from the schema rather than hand-listed --
+        # see tables_child_first().
+        for table in tables_child_first():
+            conn.execute(f"DELETE FROM {table} WHERE listing_id = ?", (listing_id,))
 
 
 def delete_orphaned_rows(conn: sqlite3.Connection) -> dict[str, int]:
