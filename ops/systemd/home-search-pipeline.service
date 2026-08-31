@@ -1,5 +1,5 @@
 [Unit]
-Description=home-search pipeline (scrape, score, publish)
+Description=home-search pipeline (scrape, commutes, score, revalidate)
 Documentation=file:///home/bengi/code/home-search/ops/systemd/README.md
 # Every stage talks to the network; starting before DNS is up just wastes a run.
 After=network-online.target

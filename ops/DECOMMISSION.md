@@ -91,7 +91,7 @@ same database, stages can be split across homes:
 
 ```bash
 # Cloud cron runs everything except the failing stage, e.g.:
-python pipeline.py --skip-publish            # or a --skip=commutes equivalent
+python pipeline.py --from=commutes           # or a --skip=commutes equivalent
 
 # Laptop picks up the rest opportunistically:
 python pipeline.py --only=commutes
@@ -100,21 +100,34 @@ python pipeline.py --only=commutes
 This is worth reaching for before abandoning the cloud entirely. Log which
 stage failed and why in `docs/journal/decisions.md`.
 
-### B3. If the Turso cutover has NOT happened yet
+### B3. Reversing the Turso cutover
 
-Then local SQLite is still the source of truth and the above is all you
-need. If the cutover *did* happen and you want to reverse it too:
+The cutover happened on 2026-08-31. Turso is the source of truth; there is
+no local `data/listings.db` in the pipeline any more, and `publish.py` is
+gone. To reverse it:
 
 ```bash
-# Revert the cutover commits (connection flip + publish.py deletion)
-git revert <deletion-sha> <cutover-sha>
+# Revert the three cutover commits, newest first.
+# 89e833b  delete publish.py
+# e4b38d1  prune hosted_photos with the listing
+# 4e3cdc2  make Turso the source of truth
+git revert 89e833b e4b38d1 4e3cdc2
 
-# Restore the archived local database taken at cutover time
+# Restore the archived local database taken immediately before the flip.
+# Verified at archive time: 1,368,064 bytes, integrity_check ok, 8,190 rows
+# across all six tables, byte-identical to the live db (sha256 cd069c631d92df9e).
 cp data/archive/listings-pre-turso-cutover.db data/listings.db
 
-# Refresh it from Turso, which has been the live copy since the cutover
+# Bring it up to date from Turso, which has been the live copy since, then
+# re-mirror. publish.py exists again after the revert.
 python score.py && python publish.py
 ```
+
+The archive is a point-in-time copy from the cutover, so anything written to
+Turso *after* the cutover is not in it. `score.py` recomputes scores from the
+restored rows; genuinely new listings scraped after the cutover would need a
+`python scrape.py` to repopulate. Turso's schema never changes shape during
+the cutover, so the old two-database flow resumes immediately.
 
 Turso's schema never changes shape during the cutover, so the old two-database
 flow resumes immediately. `visual_scores.raw_response` lives in Turso
