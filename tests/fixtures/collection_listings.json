@@ -1,0 +1,534 @@
+{
+  "nohoa": {
+    "listingIdSHA": "2182238891223444129",
+    "compassPropertyId": 63758782130352528,
+    "feedListingId": "2182238891223444129",
+    "listingType": 2,
+    "sourceFilters": [
+      3
+    ],
+    "location": {
+      "prettyAddress": "7471 Wilson Court",
+      "streetNumber": "7471",
+      "street": "Wilson",
+      "streetType": "Ct",
+      "neighborhood": "Harris Park",
+      "subNeighborhoods": [
+        "Harris Park",
+        "Southeast Westminster",
+        "Westminster",
+        "Adams County"
+      ],
+      "mlsNeighborhoods": [
+        "Westminster Heights"
+      ],
+      "city": "Westminster",
+      "state": "CO",
+      "zipCode": "80030",
+      "longitude": -105.035628,
+      "latitude": 39.832187,
+      "geoId": "denver",
+      "timezone": "America/Denver",
+      "schoolDistricts": [
+        {
+          "id": 195639
+        }
+      ],
+      "countyFipsCode": "08001",
+      "subdivisionNames": [
+        "Westminster Heights"
+      ]
+    },
+    "size": {
+      "bedrooms": 4,
+      "fullBathrooms": 1,
+      "oneQuarterBathrooms": 0,
+      "halfBathrooms": 0,
+      "threeQuarterBathrooms": 2,
+      "totalBathrooms": 3,
+      "bathrooms": 3,
+      "squareFeet": 2268,
+      "lotSizeInSquareFeet": 6600,
+      "formattedLotSize": "0.15 AC / 6,600 SF",
+      "levelsOrStories": "Levels: One",
+      "aboveGradeTotalAreaSquareFeet": 1134,
+      "belowGradeTotalAreaSquareFeet": 1134
+    },
+    "status": 14,
+    "localizedStatus": "Coming Soon",
+    "price": {
+      "lastKnown": 640000,
+      "charges": [
+        {
+          "chargeAmount": 2066,
+          "chargeType": 0
+        }
+      ],
+      "perSquareFoot": 282.18694885361555,
+      "monthlySalesCharges": 0,
+      "monthlySalesChargesInclTaxes": 172.16666666666666,
+      "formatted": "$640,000",
+      "lastPropertyClosePrice": 330000
+    },
+    "date": {
+      "updated": 1787961739031,
+      "lastPropertyCloseDate": 1767096000000
+    },
+    "latestTransaction": true,
+    "buildingInfo": {
+      "buildingIdSHA": "fcd7d74c74c7e6be4e314f4be304f005221c4592",
+      "buildingAddress": "7471 Wilson Ct",
+      "buildingYearOpened": 1953
+    },
+    "detailedInfo": {
+      "amenities": [
+        "Basement",
+        "Carpet Floors",
+        "Central AC",
+        "Deck",
+        "Dishwasher",
+        "Dual Pane Windows",
+        "Forced Air",
+        "Full Basement",
+        "Hardwood Floors",
+        "Microwave",
+        "Patio",
+        "Private Yard",
+        "Range",
+        "Range Hood",
+        "Refrigerator",
+        "Stainless Steel Appliances",
+        "Tile Floors",
+        "Vinyl Floors",
+        "Walk-in Closet"
+      ],
+      "propertyType": {
+        "masterType": {
+          "GLOBAL": [
+            "Single Family"
+          ],
+          "LOCAL_1": [
+            "Residential"
+          ],
+          "LOCAL_2": [
+            "Single Family Residence"
+          ]
+        }
+      },
+      "outdoorSpace": [
+        "Deck",
+        "Patio",
+        "Private Yard"
+      ],
+      "assessorDetails": {
+        "assessorInfo": {
+          "title": "Assessor Information",
+          "propertyTax": {
+            "taxYear": "2025",
+            "tax": "$753",
+            "dateUpdated": 1764633600000,
+            "monthlyTax": "$63"
+          },
+          "assessment": {
+            "title": "Taxable Value",
+            "landValue": 4390,
+            "additionsValue": 15800,
+            "year": "2025",
+            "previousValue": "$30,150",
+            "dateUpdated": 1764633600000
+          },
+          "market": {
+            "title": "Market",
+            "landValue": 423000,
+            "additionsValue": 331000
+          }
+        },
+        "categories": [
+          {
+            "name": "Home Facts",
+            "subCategories": [
+              {
+                "fields": [
+                  {
+                    "key": "Beds",
+                    "value": "3"
+                  },
+                  {
+                    "key": "Total Finished SqFt",
+                    "value": "1,134 SqFt"
+                  },
+                  {
+                    "key": "Above Grade Finished SqFt",
+                    "value": "1,134 SqFt"
+                  },
+                  {
+                    "key": "Stories",
+                    "value": "1"
+                  },
+                  {
+                    "key": "Lot Size",
+                    "value": "6,534 SqFt"
+                  },
+                  {
+                    "key": "Style",
+                    "value": "Single Family Residence"
+                  },
+                  {
+                    "key": "Year Built",
+                    "value": "1953"
+                  },
+                  {
+                    "key": "County",
+                    "value": "ADAMS"
+                  },
+                  {
+                    "key": "APN",
+                    "value": "R0065317"
+                  },
+                  {
+                    "key": "Fireplace Type",
+                    "value": "Has Fireplace"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "totalParkingSpaces": 3,
+      "primaryBedroomOnMainLevel": true,
+      "waterfrontYN": false,
+      "seniorCommunityYN": false,
+      "waterfrontFeatures": [
+        "Landscaped",
+        "Sprinklers In Front",
+        "Sprinklers In Rear"
+      ],
+      "view": [
+        "None"
+      ],
+      "lotFeatures": [
+        "Irrigated",
+        "Landscaped",
+        "Sprinklers In Front",
+        "Sprinklers In Rear"
+      ],
+      "garageSpaces": 0
+    },
+    "media": [
+      {
+        "category": 0,
+        "thumbnailUrl": "https://www.compass.com/m/5fdbf0db41920b881cf5a87700ccb1ac15d3de49656cce85e24d82f84cf2e9b6/165x165.jpg",
+        "originalUrl": "https://www.compass.com/m/5fdbf0db41920b881cf5a87700ccb1ac15d3de49656cce85e24d82f84cf2e9b6/origin.jpg",
+        "width": 1600,
+        "height": 1066
+      },
+      {
+        "category": 0,
+        "thumbnailUrl": "https://www.compass.com/m/ce51114d6e9e524afd12d5c5610eaefb8743a592bc7988455265fe593044c81c/165x165.jpg",
+        "originalUrl": "https://www.compass.com/m/ce51114d6e9e524afd12d5c5610eaefb8743a592bc7988455265fe593044c81c/origin.jpg",
+        "width": 1600,
+        "height": 1066
+      }
+    ],
+    "isConsumerSearchable": true,
+    "isOffMLS": false,
+    "parcelNumber": "R0065317",
+    "externalId": "4401667",
+    "badges": {
+      "cornerBadges": [
+        {
+          "badgeType": 2,
+          "displayText": "Coming Soon"
+        }
+      ]
+    },
+    "databaseSource": {
+      "externalSourceName": "denver_recolorado_grid",
+      "sourceDisplayName": "RECOLORADO",
+      "contributingDatasetList": [
+        "denver_recolorado_grid",
+        "denver_ires_grid"
+      ]
+    },
+    "pageLink": "/homedetails/7471-Wilson-Ct-Westminster-CO-80030/2182238891223444129_lid/",
+    "propertyPageLink": "/homedetails/7471-Wilson-Ct-Westminster-CO-80030/12YKTO_pid/",
+    "navigationPageLink": "/homedetails/7471-Wilson-Ct-Westminster-CO-80030/12YKTO_pid/",
+    "canonicalPageLink": "/homedetails/7471-Wilson-Ct-Westminster-CO-80030/12YKTO_pid/",
+    "editable": true,
+    "cloneable": true,
+    "externalListingSha": "05c0bb6461388aef87e8039c8d7ff7b1b487e794"
+  },
+  "hoa": {
+    "listingIdSHA": "2177201739880128241",
+    "compassPropertyId": 63765906892065296,
+    "feedListingId": "2177201739880128241",
+    "listingType": 2,
+    "sourceFilters": [
+      3
+    ],
+    "location": {
+      "prettyAddress": "3123 West 105th Court",
+      "streetNumber": "3123",
+      "street": "105th",
+      "streetType": "Ct",
+      "neighborhood": "Central Westminster",
+      "subNeighborhoods": [
+        "Central Westminster",
+        "Westminster",
+        "Adams County"
+      ],
+      "mlsNeighborhoods": [
+        "Autmn Chase"
+      ],
+      "city": "Westminster",
+      "state": "CO",
+      "zipCode": "80031",
+      "longitude": -105.0281859,
+      "latitude": 39.8873608,
+      "geoId": "denver",
+      "timezone": "America/Denver",
+      "schoolDistricts": [
+        {
+          "id": 195626
+        }
+      ],
+      "countyFipsCode": "08001",
+      "subdivisionNames": [
+        "Autmn Chase"
+      ]
+    },
+    "size": {
+      "bedrooms": 4,
+      "fullBathrooms": 2,
+      "oneQuarterBathrooms": 0,
+      "halfBathrooms": 1,
+      "threeQuarterBathrooms": 0,
+      "totalBathrooms": 3,
+      "bathrooms": 3,
+      "squareFeet": 1789,
+      "lotSizeInSquareFeet": 7841,
+      "formattedLotSize": "0.18 AC / 7,841 SF",
+      "levelsOrStories": "Levels: Two",
+      "aboveGradeTotalAreaSquareFeet": 1789,
+      "belowGradeTotalAreaSquareFeet": 0
+    },
+    "status": 0,
+    "localizedStatus": "Active",
+    "price": {
+      "lastKnown": 599000,
+      "listed": 599000,
+      "charges": [
+        {
+          "chargeAmount": 4400,
+          "chargeType": 0
+        },
+        {
+          "chargeAmount": 65,
+          "chargeType": 2
+        }
+      ],
+      "perSquareFoot": 334.823923979877,
+      "monthlySalesCharges": 65.13,
+      "monthlySalesChargesInclTaxes": 431.7966666666667,
+      "formatted": "$599,000",
+      "negotiability": 0,
+      "lastPropertyClosePrice": 247000
+    },
+    "date": {
+      "listed": 1787292000000,
+      "updated": 1787355620147,
+      "daysOnMarket": 9,
+      "lastPropertyCloseDate": 1073563200000
+    },
+    "latestTransaction": true,
+    "buildingInfo": {
+      "buildingIdSHA": "b00127180688d407540397818a145ca86e1c7473",
+      "buildingAddress": "3123 W 105th Ct",
+      "buildingYearOpened": 1999
+    },
+    "detailedInfo": {
+      "amenities": [
+        "Attached Garage",
+        "Basement",
+        "Central AC",
+        "Cooktop",
+        "Corner Lot",
+        "Deck",
+        "Dishwasher",
+        "Disposal",
+        "Driveway",
+        "Electricity Included",
+        "Forced Air",
+        "Garage",
+        "Granite Kitchen Counter",
+        "Private Outdoor Space",
+        "Refrigerator",
+        "Traditional",
+        "Wine Cooler"
+      ],
+      "propertyType": {
+        "masterType": {
+          "GLOBAL": [
+            "Single Family"
+          ],
+          "LOCAL_1": [
+            "Residential"
+          ],
+          "LOCAL_2": [
+            "Single Family Residence"
+          ]
+        }
+      },
+      "outdoorSpace": [
+        "Deck",
+        "Private Outdoor Space"
+      ],
+      "apartmentLayout": "Corner Lot",
+      "assessorDetails": {
+        "assessorInfo": {
+          "title": "Assessor Information",
+          "propertyTax": {
+            "taxYear": "2025",
+            "tax": "$4,400",
+            "dateUpdated": 1764547200000,
+            "monthlyTax": "$367"
+          },
+          "assessment": {
+            "title": "Taxable Value",
+            "landValue": 9180,
+            "additionsValue": 31620,
+            "year": "2025",
+            "previousValue": "$37,500",
+            "dateUpdated": 1765152000000
+          },
+          "appraisal": {
+            "title": "Appraisal",
+            "landValue": 9180,
+            "additionsValue": 31620,
+            "year": "2025"
+          },
+          "market": {
+            "title": "Market",
+            "landValue": 600000,
+            "additionsValue": 465000
+          }
+        },
+        "categories": [
+          {
+            "name": "Home Facts",
+            "subCategories": [
+              {
+                "fields": [
+                  {
+                    "key": "Beds",
+                    "value": "4"
+                  },
+                  {
+                    "key": "Baths",
+                    "value": "2.5"
+                  },
+                  {
+                    "key": "Total Finished SqFt",
+                    "value": "1,789 SqFt"
+                  },
+                  {
+                    "key": "Above Grade Finished SqFt",
+                    "value": "1,789 SqFt"
+                  },
+                  {
+                    "key": "Stories",
+                    "value": "2"
+                  },
+                  {
+                    "key": "Lot Size",
+                    "value": "8,019 SqFt"
+                  },
+                  {
+                    "key": "Style",
+                    "value": "Single Family Residence"
+                  },
+                  {
+                    "key": "Year Built",
+                    "value": "1999"
+                  },
+                  {
+                    "key": "Year Renovated",
+                    "value": "1999"
+                  },
+                  {
+                    "key": "County",
+                    "value": "ADAMS"
+                  },
+                  {
+                    "key": "APN",
+                    "value": "R0113163"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "totalParkingSpaces": 2,
+      "waterfrontYN": false,
+      "seniorCommunityYN": false,
+      "waterfrontFeatures": [
+        "Corner Lot"
+      ],
+      "view": [
+        "None"
+      ],
+      "lotFeatures": [
+        "Corner Lot"
+      ],
+      "architecturalStyle": [
+        "Traditional"
+      ],
+      "garageSpaces": 2
+    },
+    "media": [
+      {
+        "category": 0,
+        "thumbnailUrl": "https://www.compass.com/m/6e58fac253ee06ad687d3a411ff92af8c2778dae4ecdcdcb6f21bbe851f55664/165x165.jpg",
+        "originalUrl": "https://www.compass.com/m/6e58fac253ee06ad687d3a411ff92af8c2778dae4ecdcdcb6f21bbe851f55664/origin.jpg",
+        "width": 1600,
+        "height": 899
+      },
+      {
+        "category": 0,
+        "thumbnailUrl": "https://www.compass.com/m/27706cbcadb4d4aebec72532413f716d68da817417943fefced5b9094657100e/165x165.jpg",
+        "originalUrl": "https://www.compass.com/m/27706cbcadb4d4aebec72532413f716d68da817417943fefced5b9094657100e/origin.jpg",
+        "width": 1600,
+        "height": 899
+      }
+    ],
+    "isConsumerSearchable": true,
+    "isOffMLS": false,
+    "parcelNumber": "R0113163",
+    "externalId": "3045774",
+    "changeInfos": [
+      {
+        "changeInfoType": 3,
+        "currentValue": "Active",
+        "changeTimestamp": 1787292000000,
+        "changeSubmittedTimestamp": 1787353872646
+      }
+    ],
+    "databaseSource": {
+      "externalSourceName": "denver_recolorado_grid",
+      "sourceDisplayName": "RECOLORADO",
+      "contributingDatasetList": [
+        "denver_recolorado_grid",
+        "denver_ires_grid"
+      ]
+    },
+    "pageLink": "/homedetails/3123-W-105th-Ct-Westminster-CO-80031/2177201739880128241_lid/",
+    "propertyPageLink": "/homedetails/3123-W-105th-Ct-Westminster-CO-80031/11Z3TR_pid/",
+    "navigationPageLink": "/homedetails/3123-W-105th-Ct-Westminster-CO-80031/11Z3TR_pid/",
+    "canonicalPageLink": "/homedetails/3123-W-105th-Ct-Westminster-CO-80031/11Z3TR_pid/",
+    "editable": true,
+    "cloneable": true,
+    "externalListingSha": "f939a21297983a279c4405577631a961a243aec2"
+  }
+}

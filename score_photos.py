@@ -142,7 +142,12 @@ INSTRUCTIONS = (
     "set suspected_unwatermarked_staging accordingly. If either flag is true, "
     "treat that as a reason for lower confidence in the affected room(s)' "
     "scores -- let it pull those room scores toward the middle rather than "
-    "taking staged photos at face value, and note what you saw."
+    "taking staged photos at face value, and note what you saw.\n\n"
+    "Grounding: where the listing context above states a fact -- whether a "
+    "basement exists, which outdoor features are present -- treat it as more "
+    'reliable than your read of the photos. Use it to choose between "omitted" '
+    'and "not_applicable", and note any contradiction rather than silently '
+    "overriding it."
 )
 
 
@@ -150,16 +155,55 @@ def read_bytes(path: Path) -> bytes:
     return path.read_bytes()
 
 
+def _optional(row, key):
+    """Row access that tolerates a pre-migration db (sqlite3.Row raises
+    IndexError rather than returning None for an unknown column)."""
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return None
+
+
 def build_listing_context(row, amenities: list[str]) -> str:
-    return (
-        f"Address: {row['address']}, {row['city']}, {row['state']} {row['zip_code']}\n"
-        f"Price: {row['price']}\n"
+    """Grounds the vision model in what the listing data already asserts.
+
+    Structured outdoor features and the basement split matter here because
+    the model is asked to judge exactly those things from photos: whether a
+    backyard is shown and how suitable it is for hosting, and whether a
+    basement exists at all (its "not_applicable" option). Description is
+    empty on 78 of 85 listings, so without these the model was being asked
+    those questions with almost no context.
+    """
+    lines = [
+        f"Address: {row['address']}, {row['city']}, {row['state']} {row['zip_code']}",
+        f"Price: {row['price']}",
         f"Beds: {row['beds']}, Baths: {row['baths']}, Sqft: {row['sqft']}, "
         f"Lot sqft: {row['lot_sqft']}, Parking spaces: {row['parking_spaces']}, "
-        f"Year built: {row['year_built']}\n"
-        f"Description: {row['description']}\n"
-        f"Amenities: {', '.join(amenities)}"
-    )
+        f"Year built: {row['year_built']}",
+    ]
+
+    above = _optional(row, "sqft_above_grade")
+    if above is not None:
+        below = _optional(row, "sqft_below_grade")
+        if below is None:
+            lines.append(
+                f"Finished area: {above:,} sqft above grade. "
+                f"The listing data reports NO BASEMENT."
+            )
+        else:
+            lines.append(
+                f"Finished area: {above:,} sqft above grade, {below:,} sqft finished "
+                f"below grade (a basement exists)."
+            )
+
+    outdoor_raw = _optional(row, "outdoor_spaces")
+    outdoor = json.loads(outdoor_raw) if outdoor_raw else []
+    if outdoor:
+        lines.append(f"Outdoor features per the listing data: {', '.join(outdoor)}")
+
+    lines.append(f"Description: {row['description']}")
+    lines.append(f"Amenities: {', '.join(amenities)}")
+    return "\n".join(lines)
 
 
 def build_batch_request(

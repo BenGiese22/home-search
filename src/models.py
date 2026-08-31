@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -35,6 +35,24 @@ class Listing:
     # 0.0 is real data here, not a missing-value sentinel -- src.scoring
     # rewards it and treats None as neutral, so the two must not collide.
     hoa_annual: float | None = None
+    # Annual property tax in dollars, or None when unknown. Captured for
+    # reference and display only -- deliberately NOT scored: it would
+    # double-count cost-of-ownership against hoa_annual and the value lens,
+    # and the figure is owner-contaminated (assessor and MLS disagree on
+    # 15/85 listings, consistent with exemptions that end at sale).
+    tax_annual: float | None = None
+    # Finished-area square footage split. above is present on 85/85.
+    # below is None when Compass omits the key, which happens on exactly
+    # the listings reporting Basement: No -- so None means "no basement",
+    # while 0 means "basement present, no finished area". Both are real
+    # data; squareFeet above is the MLS total footprint and is larger than
+    # above+below on 45/85 listings because it counts unfinished space.
+    sqft_above_grade: int | None = None
+    sqft_below_grade: int | None = None
+    # Structured outdoor features (e.g. ["Deck", "Patio"]). Kept because
+    # score_outdoor keyword-matches description prose that is empty on
+    # 78/85 listings, and because it grounds the photo-scoring prompt.
+    outdoor_spaces: list[str] = field(default_factory=list)
 
 
 def is_active_status(localized_status: str) -> bool:

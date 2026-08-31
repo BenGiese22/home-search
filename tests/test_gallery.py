@@ -75,3 +75,20 @@ def test_render_gallery_omits_hoa_line_when_unknown(tmp_path: Path):
     listing = LISTING.__class__(**{**LISTING.__dict__, "hoa_annual": None})
     html_out = _render_one(listing, tmp_path)
     assert "HOA" not in html_out
+
+
+def test_render_gallery_shows_taxes_and_finished_sqft(tmp_path: Path):
+    listing = LISTING.__class__(**{**LISTING.__dict__, "tax_annual": 4407.0,
+                                   "sqft_above_grade": 1862, "sqft_below_grade": 725,
+                                   "outdoor_spaces": ["Deck", "Patio"]})
+    out = _render_one(listing, tmp_path)
+    assert "Taxes $4,407/yr" in out
+    assert "2,587 sqft finished" in out
+    assert "725 finished below grade" in out
+    assert "Outdoor: Deck, Patio" in out
+
+
+def test_render_gallery_says_no_basement_when_below_grade_is_none(tmp_path: Path):
+    listing = LISTING.__class__(**{**LISTING.__dict__, "sqft_above_grade": 1867,
+                                   "sqft_below_grade": None})
+    assert "no basement" in _render_one(listing, tmp_path)

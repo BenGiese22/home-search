@@ -20,6 +20,7 @@ from src.scoring import (
     compute_collection_stats,
     passes_filters,
     score_commute,
+    finished_sqft,
     score_condition,
     score_hoa,
     score_listing,
@@ -377,3 +378,34 @@ def test_score_listing_has_incomplete_data_false_when_hoa_confirmed_zero():
     listing = LISTING.__class__(**{**LISTING.__dict__, "hoa_annual": 0.0})
     result = score_listing(listing, 15.0, 30.0, STATS)
     assert result.has_incomplete_data is False
+
+
+def _with(**kw):
+    return LISTING.__class__(**{**LISTING.__dict__, **kw})
+
+
+def test_finished_sqft_sums_above_and_below():
+    assert finished_sqft(_with(sqft=2668, sqft_above_grade=1862, sqft_below_grade=725)) == 2587
+
+
+def test_finished_sqft_treats_absent_below_grade_as_zero():
+    assert finished_sqft(_with(sqft=1867, sqft_above_grade=1867, sqft_below_grade=None)) == 1867
+
+
+def test_finished_sqft_ignores_unfinished_basement_space():
+    """945 Garnet: 2641 listed, 1739 above, 0 below -> ~902 sqft of
+    unfinished space that must not count as living area."""
+    assert finished_sqft(_with(sqft=2641, sqft_above_grade=1739, sqft_below_grade=0)) == 1739
+
+
+def test_finished_sqft_falls_back_to_total_sqft_when_above_grade_missing():
+    assert finished_sqft(_with(sqft=2000, sqft_above_grade=None)) == 2000
+
+
+def test_score_listing_scores_sqft_on_finished_area_not_total():
+    inflated = _with(sqft=3000, sqft_above_grade=1500, sqft_below_grade=0)
+    honest = _with(sqft=1500, sqft_above_grade=1500, sqft_below_grade=0)
+    stats = CollectionStats(sqft_min=1000, sqft_max=3000,
+                            denver_minutes_min=10.0, denver_minutes_max=30.0)
+    assert (score_listing(inflated, 15.0, 30.0, stats).sqft_score
+            == score_listing(honest, 15.0, 30.0, stats).sqft_score)

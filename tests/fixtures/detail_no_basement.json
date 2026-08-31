@@ -1,0 +1,2219 @@
+{
+  "listingIdSHA": "1018710630984637593",
+  "compassPropertyId": 59362511435757970,
+  "feedListingId": "1018710630984637593",
+  "listingType": 2,
+  "sourceFilters": [
+    3
+  ],
+  "location": {
+    "prettyAddress": "8221 West 93rd Way",
+    "streetNumber": "8221",
+    "street": "93rd",
+    "streetType": "Way",
+    "preDirection": "W",
+    "neighborhood": "Kings Mill",
+    "subNeighborhoods": [
+      "Kings Mill",
+      "West Westminster",
+      "Westminster",
+      "Boulevard Plaza",
+      "Jefferson County"
+    ],
+    "mlsNeighborhoods": [
+      "Kings Mill"
+    ],
+    "city": "Westminster",
+    "state": "CO",
+    "zipCode": "80021",
+    "longitude": -105.0894934,
+    "latitude": 39.8655595,
+    "geoId": "denver",
+    "timezone": "America/Denver",
+    "locationEntities": [
+      {
+        "type": 4,
+        "id": 17322,
+        "name": "Jefferson County",
+        "seoId": "jefferson-county-co",
+        "hidden": true
+      },
+      {
+        "type": 1,
+        "id": 16236,
+        "name": "Westminster",
+        "seoId": "westminster-co"
+      },
+      {
+        "type": 0,
+        "id": 50896,
+        "name": "80021",
+        "seoId": "broomfield-co-80021"
+      },
+      {
+        "type": 5,
+        "id": 192320,
+        "name": "CO",
+        "seoId": "colorado"
+      },
+      {
+        "type": 2,
+        "id": 16485,
+        "name": "Kings Mill",
+        "seoId": "kings-mill-broomfield-co"
+      }
+    ],
+    "schoolDistricts": [
+      {
+        "id": 195636,
+        "name": "Jeffco Public Schools",
+        "externalId": "0804800"
+      }
+    ],
+    "countyFipsCode": "08059",
+    "subdivisionNames": [
+      "Kings Mill"
+    ],
+    "county": "Jefferson County"
+  },
+  "size": {
+    "bedrooms": 3,
+    "fullBathrooms": 1,
+    "oneQuarterBathrooms": 0,
+    "halfBathrooms": 0,
+    "threeQuarterBathrooms": 1,
+    "totalBathrooms": 2,
+    "bathrooms": 2,
+    "squareFeet": 1867,
+    "lotSizeInSquareFeet": 8712,
+    "formattedLotSize": "0.20 AC / 8,712 SF",
+    "levelsOrStories": "Levels: Bi-Level",
+    "aboveGradeTotalAreaSquareFeet": 1867
+  },
+  "description": "Proudly introducing this absolute showstopper to the market! With over 1,800 square feet this bi-level floorplan flows generously into the 2 Living spaces, 3 spacious Bedrooms and 2 newly renovated Bathrooms! No detail has been overlooked, complete with new and upgraded flooring throughout, new fixtures, fresh paint, designer accent tile, new appliances, and new water heater. Retreat outside to your fenced-in living space and enjoy gorgeous views with the mature landscaping, a brand new Trex deck and extended paver patio, garden area and shed for extra storage! After a long day, enjoy a hot soak in your brand-new spa! The oversized 2 car garage and double driveway is perfect for overflow parking. This beauty is move-in ready with all the upgrades, both inside and outside of the home, having been completed for you. Located in a quaint neighborhood with great schools, just a short walk to Oakhurst Park and the trails to Standley Lake and fast access to Wadsworth and Hwy 36.",
+  "status": 10,
+  "localizedStatus": "Closed",
+  "price": {
+    "lastKnown": 675000,
+    "listed": 575000,
+    "preClose": 575000,
+    "closed": 675000,
+    "charges": [
+      {
+        "chargeAmount": 1791,
+        "paymentFrequentType": 3,
+        "chargeType": 0
+      }
+    ],
+    "perSquareFoot": 361.54258168184253,
+    "monthlySalesCharges": 0,
+    "monthlySalesChargesInclTaxes": 149.25,
+    "formatted": "$675,000",
+    "closedPriceVerification": "Verified by Public Record",
+    "lastPropertyClosePrice": 675000
+  },
+  "date": {
+    "listed": 1649224800000,
+    "contract": 1649570400000,
+    "closed": 1651644000000,
+    "updated": 1748812005400,
+    "daysOnMarket": 4,
+    "lastPropertyCloseDate": 1651665600000
+  },
+  "latestTransaction": false,
+  "buildingInfo": {
+    "buildingIdSHA": "e1c8c59cb72aaab00ffdd6fcf21dc818ec72c44a",
+    "buildingAddress": "8221 W 93rd Way",
+    "buildingYearOpened": 1977,
+    "buildingKeyDetails": [
+      {
+        "key": "Stories",
+        "value": "-"
+      },
+      {
+        "key": "Year Built",
+        "value": "1977"
+      },
+      {
+        "key": "Building Size",
+        "value": "-"
+      },
+      {
+        "key": "Lot Size",
+        "value": "0.20 AC / 8,712 SF"
+      }
+    ]
+  },
+  "detailedInfo": {
+    "amenities": [
+      "Attached Garage",
+      "Cable Included",
+      "Carpet Floors",
+      "Central AC",
+      "Cooktop",
+      "Deck",
+      "Dishwasher",
+      "Driveway",
+      "Dryer",
+      "Eat-in Kitchen",
+      "Forced Air",
+      "Garage",
+      "Island Kitchen",
+      "Laminate Floors",
+      "Microwave",
+      "Parking Included",
+      "Patio",
+      "Pet Friendly",
+      "Private Outdoor Space",
+      "Refrigerator",
+      "Spa",
+      "Unfurnished",
+      "Washer",
+      "Washer / Dryer in Unit"
+    ],
+    "propertyType": {
+      "masterType": {
+        "GLOBAL": [
+          "Single Family"
+        ],
+        "LOCAL_1": [
+          "Residential"
+        ],
+        "LOCAL_2": [
+          "Single Family Residence"
+        ]
+      },
+      "feedTypes": {
+        "denver_ires_grid": "",
+        "denver_recolorado_grid": ""
+      },
+      "feedDisplayNames": {
+        "IRES": "Residential - Single Family Residence",
+        "RECOLORADO": "Residential - Single Family Residence",
+        "realtytrac": "SINGLE FAMILY RESIDENCE"
+      }
+    },
+    "outdoorSpace": [
+      "Deck",
+      "Patio",
+      "Private Outdoor Space"
+    ],
+    "furnished": "Unfurnished",
+    "keyDetails": [
+      {
+        "key": "Status",
+        "value": "Closed"
+      },
+      {
+        "key": "MLS #",
+        "value": "6098122"
+      },
+      {
+        "key": "Days on Compass",
+        "value": "4"
+      },
+      {
+        "key": "Taxes",
+        "value": "$1,791 / year"
+      },
+      {
+        "key": "HOA Fees",
+        "value": "-"
+      },
+      {
+        "key": "Condo/Co-op Fees",
+        "value": "-"
+      },
+      {
+        "key": "Property Type",
+        "value": "Single Family"
+      },
+      {
+        "key": "MLS Type",
+        "value": "Residential / Single Family Residence"
+      },
+      {
+        "key": "Year Built",
+        "value": "1977"
+      },
+      {
+        "key": "Lot Size",
+        "value": "0.20 AC / 8,712 SF"
+      },
+      {
+        "key": "County",
+        "value": "Jefferson County"
+      }
+    ],
+    "regionalKeyDetails": [
+      {
+        "key": "Structure Type",
+        "value": "House"
+      },
+      {
+        "key": "Architectural Style",
+        "value": "Traditional"
+      },
+      {
+        "key": "Levels",
+        "value": "Bi-Level"
+      },
+      {
+        "key": "Subdivision Name",
+        "value": "Kings Mill"
+      },
+      {
+        "key": "Association",
+        "value": "No"
+      },
+      {
+        "key": "Basement",
+        "value": "No"
+      }
+    ],
+    "listingDetails": [
+      {
+        "name": "Key Details",
+        "subCategories": [
+          {
+            "name": "Key Details",
+            "fields": [
+              {
+                "key": "Structure Type",
+                "values": [
+                  "House"
+                ]
+              },
+              {
+                "key": "Architectural Style",
+                "values": [
+                  "Traditional"
+                ]
+              },
+              {
+                "key": "Levels",
+                "values": [
+                  "Bi-Level"
+                ]
+              },
+              {
+                "key": "Subdivision Name",
+                "values": [
+                  "Kings Mill"
+                ]
+              },
+              {
+                "key": "Association",
+                "values": [
+                  "No"
+                ]
+              },
+              {
+                "key": "Basement",
+                "values": [
+                  "No"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Interior Area & SqFt",
+        "subCategories": [
+          {
+            "name": "Interior Area & SqFt",
+            "fields": [
+              {
+                "key": "Building Area Total (SqFt Total)",
+                "values": [
+                  "1867"
+                ]
+              },
+              {
+                "key": "Sqft Total",
+                "values": [
+                  "1867"
+                ]
+              },
+              {
+                "key": "Living Area (SqFt Finished)",
+                "values": [
+                  "1867"
+                ]
+              },
+              {
+                "key": "Above Grade Finished Area",
+                "values": [
+                  "1867"
+                ]
+              },
+              {
+                "key": "Living SqFt",
+                "values": [
+                  "1867"
+                ]
+              },
+              {
+                "key": "Area Source",
+                "values": [
+                  "Public Records"
+                ]
+              },
+              {
+                "key": "PSF Total",
+                "values": [
+                  "362"
+                ]
+              },
+              {
+                "key": "PSF Above Grade",
+                "values": [
+                  "362"
+                ]
+              },
+              {
+                "key": "PSF Finished",
+                "values": [
+                  "362"
+                ]
+              },
+              {
+                "key": "Master on Main",
+                "values": [
+                  "No"
+                ]
+              },
+              {
+                "key": "Direction Faces",
+                "values": [
+                  "Southwest"
+                ]
+              },
+              {
+                "key": "Room and Floor",
+                "values": [
+                  "Bedroom-Upper-1",
+                  "Bedroom-Upper-2",
+                  "Bedroom-Lower-1",
+                  "Bathroom Full-Upper-1",
+                  "Bathroom Three Quarter-Lower-1",
+                  "Laundry-Lower-1",
+                  "Dining Room-Upper-1",
+                  "Living Room-Upper-1",
+                  "Family Room-Lower-1",
+                  "Kitchen-Upper-1"
+                ]
+              },
+              {
+                "key": "Room Count",
+                "values": [
+                  "10"
+                ]
+              },
+              {
+                "key": "Basement",
+                "values": [
+                  "Slab"
+                ]
+              },
+              {
+                "key": "Foundation Details",
+                "values": [
+                  "Slab"
+                ]
+              },
+              {
+                "key": "Fireplaces Total",
+                "values": [
+                  "1"
+                ]
+              },
+              {
+                "key": "Fireplace Features",
+                "values": [
+                  "Family Room"
+                ]
+              },
+              {
+                "key": "Heating",
+                "values": [
+                  "Forced Air"
+                ]
+              },
+              {
+                "key": "Cooling",
+                "values": [
+                  "Central Air",
+                  "Evaporative Cooling"
+                ]
+              },
+              {
+                "key": "Interior Features",
+                "values": [
+                  "Ceiling Fan(s)",
+                  "Eat-in Kitchen",
+                  "Kitchen Island",
+                  "Smoke Free"
+                ]
+              },
+              {
+                "key": "Security Features",
+                "values": [
+                  "Smoke Detector(s)"
+                ]
+              },
+              {
+                "key": "Flooring",
+                "values": [
+                  "Carpet",
+                  "Laminate",
+                  "Tile"
+                ]
+              },
+              {
+                "key": "Furnished",
+                "values": [
+                  "Unfurnished"
+                ]
+              },
+              {
+                "key": "Appliances",
+                "values": [
+                  "Cooktop",
+                  "Dishwasher",
+                  "Dryer",
+                  "Microwave",
+                  "Oven",
+                  "Refrigerator",
+                  "Washer"
+                ]
+              },
+              {
+                "key": "Laundry Features",
+                "values": [
+                  "In Unit"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Financials & Expenses",
+        "subCategories": [
+          {
+            "name": "Fees & Restrictions",
+            "fields": [
+              {
+                "key": "Pets Allowed",
+                "values": [
+                  "Cats OK",
+                  "Dogs OK"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Bed & Bath Summary",
+        "subCategories": [
+          {
+            "name": "Bedrooms",
+            "fields": [
+              {
+                "key": "Bedrooms Total",
+                "values": [
+                  "3"
+                ]
+              },
+              {
+                "key": "Upper Level Bedrooms",
+                "values": [
+                  "2"
+                ]
+              },
+              {
+                "key": "Main Level Bedrooms",
+                "values": [
+                  "0"
+                ]
+              },
+              {
+                "key": "Lower Level Bedrooms",
+                "values": [
+                  "1"
+                ]
+              },
+              {
+                "key": "Basement Level Bedrooms",
+                "values": [
+                  "0"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Bathrooms",
+            "fields": [
+              {
+                "key": "Bathrooms Total",
+                "values": [
+                  "2"
+                ]
+              },
+              {
+                "key": "Upper Level Bathrooms",
+                "values": [
+                  "1"
+                ]
+              },
+              {
+                "key": "Main Level Bathrooms",
+                "values": [
+                  "0"
+                ]
+              },
+              {
+                "key": "Lower Level Bathrooms",
+                "values": [
+                  "1"
+                ]
+              },
+              {
+                "key": "Basement Level Bathrooms",
+                "values": [
+                  "0"
+                ]
+              },
+              {
+                "key": "Bathrooms Full",
+                "values": [
+                  "1"
+                ]
+              },
+              {
+                "key": "Bathrooms Three Quarter",
+                "values": [
+                  "1"
+                ]
+              },
+              {
+                "key": "Bathrooms Half",
+                "values": [
+                  "0"
+                ]
+              },
+              {
+                "key": "Bathrooms One Quarter",
+                "values": [
+                  "0"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Detailed Room Info",
+        "subCategories": [
+          {
+            "name": "Room 1",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Bedroom"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Upper"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 2",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Bedroom"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Upper"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 3",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Bedroom"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Lower"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 4",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Bathroom Full"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Upper"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 5",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Bathroom Three Quarter"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Lower"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 6",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Laundry"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Lower"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 7",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Dining Room"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Upper"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 8",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Living Room"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Upper"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 9",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Family Room"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Lower"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Room 10",
+            "fields": [
+              {
+                "key": "Room Type",
+                "values": [
+                  "Kitchen"
+                ]
+              },
+              {
+                "key": "Room Level",
+                "values": [
+                  "Upper"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Parking",
+        "subCategories": [
+          {
+            "name": "Parking",
+            "fields": [
+              {
+                "key": "Parking Features",
+                "values": [
+                  "Concrete",
+                  "Oversized"
+                ]
+              },
+              {
+                "key": "Attached Garage",
+                "values": [
+                  "Yes"
+                ]
+              },
+              {
+                "key": "Parking Type",
+                "values": [
+                  "Garage (Attached)"
+                ]
+              },
+              {
+                "key": "Parking Description",
+                "values": [
+                  "Garage (Attached)-2"
+                ]
+              },
+              {
+                "key": "Parking Details",
+                "values": [
+                  "2"
+                ]
+              },
+              {
+                "key": "Parking Total",
+                "values": [
+                  "1"
+                ]
+              },
+              {
+                "key": "Garage Spaces",
+                "values": [
+                  "2"
+                ]
+              },
+              {
+                "key": "Offstreet Spaces",
+                "values": [
+                  "0"
+                ]
+              },
+              {
+                "key": "Parking Count",
+                "values": [
+                  "2"
+                ]
+              },
+              {
+                "key": "Carport Spaces",
+                "values": [
+                  "0"
+                ]
+              },
+              {
+                "key": "Reserved Spaces",
+                "values": [
+                  "0"
+                ]
+              },
+              {
+                "key": "RV Spaces",
+                "values": [
+                  "0"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Association Information",
+        "subCategories": [
+          {
+            "name": "Association 1",
+            "fields": [
+              {
+                "key": "Association Fee Annual",
+                "values": [
+                  "$0"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Association 2",
+            "fields": [
+              {
+                "key": "Association Fee Annual",
+                "values": [
+                  "$0"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Association 3",
+            "fields": [
+              {
+                "key": "Association Fee Annual",
+                "values": [
+                  "$0"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Association Information",
+            "fields": [
+              {
+                "key": "Association Fee Total Annual",
+                "values": [
+                  "$0"
+                ]
+              },
+              {
+                "key": "Senior Community",
+                "values": [
+                  "No"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Site & Location Information",
+        "subCategories": [
+          {
+            "name": "School Information",
+            "fields": [
+              {
+                "key": "Elementary School",
+                "values": [
+                  "Lukas"
+                ]
+              },
+              {
+                "key": "Elementary School District",
+                "values": [
+                  "Jefferson County R-1"
+                ]
+              },
+              {
+                "key": "Middle Or Junior School",
+                "values": [
+                  "Wayne Carle"
+                ]
+              },
+              {
+                "key": "Middle Or Junior School District",
+                "values": [
+                  "Jefferson County R-1"
+                ]
+              },
+              {
+                "key": "High School",
+                "values": [
+                  "Standley Lake"
+                ]
+              },
+              {
+                "key": "High School District",
+                "values": [
+                  "Jefferson County R-1"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Site & Location Information",
+            "fields": [
+              {
+                "key": "Lot Size Acres",
+                "values": [
+                  ".20"
+                ]
+              },
+              {
+                "key": "Lot Size Square Feet",
+                "values": [
+                  "8712"
+                ]
+              },
+              {
+                "key": "Lot Features",
+                "values": [
+                  "Landscaped",
+                  "Level",
+                  "Near Public Transit"
+                ]
+              },
+              {
+                "key": "Fencing",
+                "values": [
+                  "Full"
+                ]
+              },
+              {
+                "key": "Accessibility Features",
+                "values": [
+                  "Level",
+                  "Outbuildings",
+                  "House/Lot Faces SW",
+                  "Paved"
+                ]
+              },
+              {
+                "key": "Road Surface Type",
+                "values": [
+                  "Paved"
+                ]
+              },
+              {
+                "key": "Road Frontage Type",
+                "values": [
+                  "Public"
+                ]
+              },
+              {
+                "key": "Parcel Number",
+                "values": [
+                  "141333"
+                ]
+              },
+              {
+                "key": "Vegetation",
+                "values": [
+                  "Grassed"
+                ]
+              },
+              {
+                "key": "Road Responsibility",
+                "values": [
+                  "Public Maintained Road"
+                ]
+              },
+              {
+                "key": "Property Exclusions",
+                "values": [
+                  "Floating shelves throughout, TV's, Dyson vac mount, freezer in garage"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Building Information",
+        "subCategories": [
+          {
+            "name": "Green Features",
+            "fields": [
+              {
+                "key": "Green Verification Count",
+                "values": [
+                  "0"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Outbuildings",
+            "fields": [
+              {
+                "key": "Out Building Count",
+                "values": [
+                  "1"
+                ]
+              },
+              {
+                "key": "Horse",
+                "values": [
+                  "No"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Building Information",
+            "fields": [
+              {
+                "key": "Construction Materials",
+                "values": [
+                  "Frame"
+                ]
+              },
+              {
+                "key": "Property Condition",
+                "values": [
+                  "Updated/Remodeled"
+                ]
+              },
+              {
+                "key": "Roof",
+                "values": [
+                  "Composition"
+                ]
+              },
+              {
+                "key": "Common Walls",
+                "values": [
+                  "No Common Walls"
+                ]
+              },
+              {
+                "key": "Exterior Features",
+                "values": [
+                  "Private Yard",
+                  "Spa/Hot Tub"
+                ]
+              },
+              {
+                "key": "Patio And Porch Features",
+                "values": [
+                  "Covered",
+                  "Deck",
+                  "Patio"
+                ]
+              },
+              {
+                "key": "Livable Structure Count",
+                "values": [
+                  "0"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Water & Utilities",
+        "subCategories": [
+          {
+            "name": "Water & Utilities",
+            "fields": [
+              {
+                "key": "Water Included",
+                "values": [
+                  "Yes"
+                ]
+              },
+              {
+                "key": "Water Source",
+                "values": [
+                  "Public"
+                ]
+              },
+              {
+                "key": "Utilities",
+                "values": [
+                  "Cable Available"
+                ]
+              },
+              {
+                "key": "Sewer",
+                "values": [
+                  "Public Sewer"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "schools": [
+      {
+        "name": "Lukas Elementary School",
+        "distance": "0.86",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "K-5",
+        "levels": [
+          0
+        ],
+        "greatSchoolsRating": 7,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 1,
+        "displayableSchool": true,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/westminster/1024-Lukas-Elementary-School/"
+      },
+      {
+        "name": "Wayne Carle Middle School",
+        "distance": "1.45",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "6-8",
+        "levels": [
+          1
+        ],
+        "greatSchoolsRating": 7,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 1,
+        "displayableSchool": true,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/westminster/2512-Wayne-Carle-Middle-School/"
+      },
+      {
+        "name": "Standley Lake High School",
+        "distance": "1.45",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "9-12",
+        "levels": [
+          2
+        ],
+        "greatSchoolsRating": 6,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 1,
+        "displayableSchool": true,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/westminster/1025-Standley-Lake-High-School/"
+      },
+      {
+        "name": "Woodrow Wilson Charter Academy",
+        "distance": "0.16",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "PK-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 8,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": true,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/westminster/1986-Woodrow-Wilson-Charter-Academy/"
+      },
+      {
+        "name": "Moore Middle School",
+        "distance": "0.59",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "6-8",
+        "levels": [
+          1
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": true,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/arvada/1008-Moore-Middle-School/"
+      },
+      {
+        "name": "Jefferson Academy Elementary",
+        "distance": "0.83",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "PK-6",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 9,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": true,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/westminster/995-Jefferson-Academy-Elementary/"
+      },
+      {
+        "name": "Shepherd Of The Valley Lutheran School",
+        "distance": "0.74",
+        "types": [
+          "Private"
+        ],
+        "gradesOffered": "PK-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 1,
+        "schoolBoundarySource": 0,
+        "displayableSchool": true,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/broomfield/2228-Shepherd-Of-The-Valley-Lutheran-School/"
+      },
+      {
+        "name": "Summit Academy",
+        "distance": "0.83",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "9-12",
+        "levels": [
+          2
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/broomfield/5731-Summit-Academy/"
+      },
+      {
+        "name": "Doral Academy of Colorado",
+        "distance": "1.22",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "K-12",
+        "levels": [
+          0,
+          1,
+          2
+        ],
+        "greatSchoolsRating": 3,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/arvada/5396-Doral-Academy-Of-Colorado/"
+      },
+      {
+        "name": "Summit Academy",
+        "distance": "1.39",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "K-12",
+        "levels": [
+          0,
+          1,
+          2
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/westminster/2136-Summit-Academy/"
+      },
+      {
+        "name": "Excel Academy Charter School",
+        "distance": "2.3",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "K-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 5,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/arvada/1027-Excel-Academy-Charter-School/"
+      },
+      {
+        "name": "Jefferson Academy Secondary",
+        "distance": "2.53",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "7-12",
+        "levels": [
+          1,
+          2
+        ],
+        "greatSchoolsRating": 8,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/broomfield/2137-Jefferson-Academy-Secondary/"
+      },
+      {
+        "name": "Two Roads Charter School",
+        "distance": "3.09",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "PK-12",
+        "levels": [
+          0,
+          1,
+          2
+        ],
+        "greatSchoolsRating": 5,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/arvada/4221-Two-Roads-Charter-School/"
+      },
+      {
+        "name": "Lincoln Charter Academy",
+        "distance": "3.11",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "PK-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 7,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/arvada/1038-Lincoln-Charter-Academy/"
+      },
+      {
+        "name": "Warren Tech North",
+        "distance": "4.36",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "11-12",
+        "levels": [
+          2
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/arvada/4152-Warren-Tech-North/"
+      },
+      {
+        "name": "Arvada K-8",
+        "distance": "4.42",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "K-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/arvada/4179-Arvada-K-8/"
+      },
+      {
+        "name": "Foster Dual Language PK-8",
+        "distance": "5.04",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "PK-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 6,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/arvada/923-Foster-Elementary-School/"
+      },
+      {
+        "name": "Mountain Phoenix Community School",
+        "distance": "5.82",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "PK-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 6,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/wheat-ridge/2567-Mountain-Phoenix-Community-School/"
+      },
+      {
+        "name": "Compass Montessori - Wheat Ridge Charter School",
+        "distance": "6.14",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "PK-6",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 6,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/wheat-ridge/1041-Compass-Montessori---Wheat-Ridge-Charter-School/"
+      },
+      {
+        "name": "Manning School of Academics and Arts",
+        "distance": "7.85",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "6-8",
+        "levels": [
+          1
+        ],
+        "greatSchoolsRating": 10,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/golden/2074-Manning-School-Of-Academics-And-Arts/"
+      },
+      {
+        "name": "Sobesky Academy",
+        "distance": "8.16",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "K-12",
+        "levels": [
+          0,
+          1,
+          2
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/lakewood/2568-Sobesky-Academy/"
+      },
+      {
+        "name": "Compass Montessori - Golden Charter School",
+        "distance": "8.26",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "PK-12",
+        "levels": [
+          0,
+          1,
+          2
+        ],
+        "greatSchoolsRating": 6,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/golden/1984-Compass-Montessori---Golden-Charter-School/"
+      },
+      {
+        "name": "Jefferson County Open Elementary School",
+        "distance": "9.13",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "PK-6",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 4,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/lakewood/1047-Jefferson-County-Open-Elementary-School/"
+      },
+      {
+        "name": "Jefferson County Open Secondary",
+        "distance": "9.13",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "7-12",
+        "levels": [
+          1,
+          2
+        ],
+        "greatSchoolsRating": 7,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/lakewood/952-Jefferson-County-Open-Secondary/"
+      },
+      {
+        "name": "Jeffco's 21st Century Virtual Academy",
+        "distance": "9.67",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "6-12",
+        "levels": [
+          1,
+          2
+        ],
+        "greatSchoolsRating": 3,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/golden/4165-Jeffcos-21st-Century-Virtual-Academy/"
+      },
+      {
+        "name": "Dennison Elementary School",
+        "distance": "9.98",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "K-6",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 10,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/lakewood/909-Dennison-Elementary-School/"
+      },
+      {
+        "name": "Miller Special Education",
+        "distance": "10.11",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "PK-12",
+        "levels": [
+          0,
+          1,
+          2
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/lakewood/946-Miller-Special-Education/"
+      },
+      {
+        "name": "Jeffco Transition Services School",
+        "distance": "10.32",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "11-12",
+        "levels": [
+          2
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/lakewood/5646-Jeffco-Transition-Services-School/"
+      },
+      {
+        "name": "Free Horizon Montessori Charter School",
+        "distance": "10.36",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "PK-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 5,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/golden/2135-Free-Horizon-Montessori-Charter-School/"
+      },
+      {
+        "name": "Connections Learning Center On The Earle Johnson C",
+        "distance": "10.66",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "6-9",
+        "levels": [
+          1,
+          2
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/golden/2566-Connections-Learning-Center-On-The-Earle-Johnson-C/"
+      },
+      {
+        "name": "The New America School Lakewood",
+        "distance": "10.84",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "9-12",
+        "levels": [
+          2
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/denver/2511-New-America-School/"
+      },
+      {
+        "name": "Warren Tech",
+        "distance": "10.87",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "11-12",
+        "levels": [
+          2
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/denver/981-Warren-Tech/"
+      },
+      {
+        "name": "Mc Lain High School",
+        "distance": "10.91",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "7-12",
+        "levels": [
+          1,
+          2
+        ],
+        "greatSchoolsRating": 1,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/lakewood/1044-Mc-Lain-High-School/"
+      },
+      {
+        "name": "Mc Lain Community High School",
+        "distance": "10.92",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "8-12",
+        "levels": [
+          1,
+          2
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/lakewood/1009-Mc-Lain-Community-High-School/"
+      },
+      {
+        "name": "Longview High School",
+        "distance": "11.06",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "9-12",
+        "levels": [
+          2
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/lakewood/996-Longview-High-School/"
+      },
+      {
+        "name": "Great Work Montessori",
+        "distance": "11.24",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "PK-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/lakewood/5448-Great-Work-Montessori/"
+      },
+      {
+        "name": "Brady Exploration School",
+        "distance": "11.48",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "9-12",
+        "levels": [
+          2
+        ],
+        "greatSchoolsRating": 1,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/denver/2419-Brady-Exploration-School/"
+      },
+      {
+        "name": "Stein Elementary School",
+        "distance": "11.81",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "K-6",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/lakewood/970-Stein-Elementary-School/"
+      },
+      {
+        "name": "JeffCo Remote Learning Program",
+        "distance": "12.34",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "K-12",
+        "levels": [
+          0,
+          1,
+          2
+        ],
+        "greatSchoolsRating": 2,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/lakewood/5649-JeffCo-Remote-Learning-Program/"
+      },
+      {
+        "name": "Addenbrooke Classical Academy",
+        "distance": "14.94",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "9-12",
+        "levels": [
+          2
+        ],
+        "greatSchoolsRating": 10,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/lakewood/5211-Addenbrooke-Classical-Academy/"
+      },
+      {
+        "name": "Addenbrooke Classical Grammar School",
+        "distance": "15.33",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "PK-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 7,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/lakewood/5356-Addenbrooke-Classical-Grammar-School/"
+      },
+      {
+        "name": "D'Evelyn Junior/Senior High School",
+        "distance": "15.4",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "6-12",
+        "levels": [
+          1,
+          2
+        ],
+        "greatSchoolsRating": 7,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/denver/994-Develyn-Junior-Senior-High-School/"
+      },
+      {
+        "name": "Rocky Mountain Deaf School",
+        "distance": "15.43",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "PK-12",
+        "levels": [
+          0,
+          1,
+          2
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/golden/1039-Rocky-Mountain-Deaf-School/"
+      },
+      {
+        "name": "Montessori Peaks Charter Academy",
+        "distance": "18.02",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "PK-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 9,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/littleton/1040-Montessori-Peaks-Charter-Academy/"
+      },
+      {
+        "name": "Warren Tech South",
+        "distance": "18.34",
+        "types": [
+          "Public"
+        ],
+        "gradesOffered": "11-12",
+        "levels": [
+          2
+        ],
+        "greatSchoolsRating": 0,
+        "greatSchoolsType": 0,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": false,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/littleton/5670-Warren-Tech-South/"
+      },
+      {
+        "name": "Rocky Mountain Academy Of Evergreen",
+        "distance": "20.08",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "K-8",
+        "levels": [
+          0,
+          1
+        ],
+        "greatSchoolsRating": 8,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/evergreen/2076-Rocky-Mountain-Academy-Of-Evergreen/"
+      },
+      {
+        "name": "Collegiate Academy of Colorado",
+        "distance": "20.67",
+        "types": [
+          "Charter"
+        ],
+        "gradesOffered": "PK-12",
+        "levels": [
+          0,
+          1,
+          2
+        ],
+        "greatSchoolsRating": 6,
+        "greatSchoolsType": 2,
+        "schoolBoundarySource": 2,
+        "displayableSchool": false,
+        "choice": true,
+        "greatSchoolsUrl": "https://www.greatschools.org/colorado/littleton/1001-Collegiate-Academy-Of-Colorado/"
+      }
+    ],
+    "schoolIds": [
+      "0801986",
+      "0801008",
+      "0802228",
+      "0800995",
+      "0805731",
+      "0801024",
+      "0805396",
+      "0802136",
+      "0802512",
+      "0801025",
+      "0801027",
+      "0802137",
+      "0804221",
+      "0801038",
+      "0804152",
+      "0804179",
+      "0800923",
+      "0802567",
+      "0801041",
+      "0802074",
+      "0802568",
+      "0801984",
+      "0801047",
+      "0800952",
+      "0804165",
+      "0800909",
+      "0800946",
+      "0805646",
+      "0802135",
+      "0802566",
+      "0802511",
+      "0800981",
+      "0801044",
+      "0801009",
+      "0800996",
+      "0805448",
+      "0802419",
+      "0800970",
+      "0805649",
+      "0805211",
+      "0805356",
+      "0800994",
+      "0801039",
+      "0801040",
+      "0805670",
+      "0802076",
+      "0801001"
+    ],
+    "assessorDetails": {
+      "assessorInfo": {
+        "title": "Assessor Information",
+        "propertyTax": {
+          "taxYear": "2025",
+          "tax": "$3,062",
+          "dateUpdated": 1764806400000,
+          "monthlyTax": "$255"
+        },
+        "assessment": {
+          "title": "Taxable Value",
+          "landValue": 12244,
+          "additionsValue": 25258,
+          "year": "2025",
+          "previousValue": "$37,423",
+          "dateUpdated": 1764979200000
+        },
+        "appraisal": {
+          "title": "Appraisal",
+          "landValue": 12244,
+          "additionsValue": 25258,
+          "year": "2025"
+        },
+        "market": {
+          "title": "Market",
+          "landValue": 600035,
+          "additionsValue": 404134
+        }
+      },
+      "categories": [
+        {
+          "name": "Home Facts",
+          "subCategories": [
+            {
+              "fields": [
+                {
+                  "key": "Beds",
+                  "value": "3"
+                },
+                {
+                  "key": "Baths",
+                  "value": "2.8"
+                },
+                {
+                  "key": "Total Finished SqFt",
+                  "value": "2,708 SqFt"
+                },
+                {
+                  "key": "Above Grade Finished SqFt",
+                  "value": "1,867 SqFt"
+                },
+                {
+                  "key": "Finished Basement SqFt",
+                  "value": "841 SqFt"
+                },
+                {
+                  "key": "Lot Size",
+                  "value": "8,886 SqFt"
+                },
+                {
+                  "key": "Style",
+                  "value": "Single Family Residence"
+                },
+                {
+                  "key": "Year Built",
+                  "value": "1977"
+                },
+                {
+                  "key": "Year Renovated",
+                  "value": "2023"
+                },
+                {
+                  "key": "County",
+                  "value": "JEFFERSON"
+                },
+                {
+                  "key": "APN",
+                  "value": "29-232-07-013"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "totalParkingSpaces": 2,
+    "waterfrontYN": false,
+    "seniorCommunityYN": false,
+    "view": [
+      "None"
+    ],
+    "architecturalStyle": [
+      "Traditional"
+    ],
+    "parkingFeatures": [
+      "Concrete",
+      "Oversized"
+    ],
+    "garageSpaces": 2
+  },
+  "media": [
+    {
+      "category": 0,
+      "thumbnailUrl": "https://www.compass.com/m/25a308ecd949c45520947d591f6c2c94fd041d75_img_0_9087c/165x165.jpg",
+      "originalUrl": "https://www.compass.com/m/25a308ecd949c45520947d591f6c2c94fd041d75_img_0_9087c/origin.jpg",
+      "width": 1600,
+      "height": 1066
+    },
+    {
+      "category": 0,
+      "thumbnailUrl": "https://www.compass.com/m/25a308ecd949c45520947d591f6c2c94fd041d75_img_1_bc7e2/165x165.jpg",
+      "originalUrl": "https://www.compass.com/m/25a308ecd949c45520947d591f6c2c94fd041d75_img_1_bc7e2/origin.jpg",
+      "width": 1600,
+      "height": 1066
+    }
+  ],
+  "isConsumerSearchable": true,
+  "isOffMLS": false,
+  "hasManualPatch": false,
+  "parcelNumber": "29-232-07-013",
+  "externalId": "6098122",
+  "badges": {
+    "cornerBadges": [
+      {
+        "badgeType": 3,
+        "displayText": "Closed 5/4/22"
+      }
+    ]
+  },
+  "changeInfos": [
+    {
+      "changeInfoType": 2,
+      "currentValue": "Sold",
+      "changeTimestamp": 1651665600000,
+      "changeSubmittedTimestamp": 1651784124657
+    }
+  ],
+  "databaseSource": {
+    "externalSourceName": "denver_recolorado_grid",
+    "isPublicRecord": true,
+    "sourceDisplayName": "RECOLORADO",
+    "contributingDatasetList": [
+      "denver_recolorado_grid",
+      "denver_ires_grid",
+      "REALTYTRAC"
+    ]
+  },
+  "pageLink": "/homedetails/8221-W-93rd-Way-Westminster-CO-80021/1018710630984637593_lid/",
+  "pageLinkSlug": "8221-W-93rd-Way-Westminster-CO-80021",
+  "propertyLinkSlug": "8221-W-93rd-Way-Westminster-CO-80021",
+  "propertyPageLink": "/homedetails/8221-W-93rd-Way-Westminster-CO-80021/130886_pid/",
+  "navigationPageLink": "/homedetails/8221-W-93rd-Way-Westminster-CO-80021/130886_pid/",
+  "canonicalPageLink": "/homedetails/8221-W-93rd-Way-Westminster-CO-80021/130886_pid/",
+  "editable": true,
+  "cloneable": true,
+  "mlsStatus": "Closed"
+}

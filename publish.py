@@ -22,7 +22,7 @@ PHOTOS_DIR = DATA_DIR / "photos"
 KEYED_TABLES = ["listings", "commute", "scores", "visual_scores"]
 
 # Mirrors src.turso_sync.BATCH_CHUNK -- how many rows go in one statement.
-TURSO_BATCH_CHUNK = 50
+TURSO_BATCH_CHUNK = 30
 
 # Photo uploads shell out to the Vercel CLI, which costs ~0.6s of Node
 # startup per photo. At ~3000 photos that is ~30 minutes of pure process

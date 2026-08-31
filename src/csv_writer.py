@@ -20,6 +20,10 @@ FIELDNAMES = [
     "amenities",
     "listing_url",
     "hoa_annual",
+    "tax_annual",
+    "sqft_above_grade",
+    "sqft_below_grade",
+    "outdoor_spaces",
     "photo_dir",
 ]
 
@@ -50,6 +54,15 @@ def write_csv(listings: list[Listing], photos_root: Path, path: Path) -> None:
                     # Blank rather than 0 when unknown, so the CSV keeps the
                     # same unknown-vs-confirmed-no-HOA distinction the db does.
                     "hoa_annual": "" if listing.hoa_annual is None else listing.hoa_annual,
+                    "tax_annual": "" if listing.tax_annual is None else listing.tax_annual,
+                    "sqft_above_grade": (
+                        "" if listing.sqft_above_grade is None else listing.sqft_above_grade
+                    ),
+                    # Blank means no basement; 0 means an unfinished one.
+                    "sqft_below_grade": (
+                        "" if listing.sqft_below_grade is None else listing.sqft_below_grade
+                    ),
+                    "outdoor_spaces": ", ".join(listing.outdoor_spaces),
                     "photo_dir": str(photos_root / listing.listing_id),
                 }
             )

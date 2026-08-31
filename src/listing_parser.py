@@ -1,5 +1,11 @@
-from src.hoa import parse_hoa_from_description
 from src.models import Listing
+from src.structured_fields import (
+    extract_hoa_annual,
+    extract_outdoor_spaces,
+    extract_sqft_above_grade,
+    extract_sqft_below_grade,
+    extract_tax_annual,
+)
 
 
 def parse_listing_object(obj: dict, listing_url: str) -> Listing:
@@ -41,5 +47,9 @@ def parse_listing_object(obj: dict, listing_url: str) -> Listing:
         listing_url=listing_url,
         property_type=property_type,
         localized_status=obj.get("localizedStatus", ""),
-        hoa_annual=parse_hoa_from_description(description),
+        hoa_annual=extract_hoa_annual(obj),
+        tax_annual=extract_tax_annual(obj),
+        sqft_above_grade=extract_sqft_above_grade(obj),
+        sqft_below_grade=extract_sqft_below_grade(obj),
+        outdoor_spaces=extract_outdoor_spaces(obj),
     )

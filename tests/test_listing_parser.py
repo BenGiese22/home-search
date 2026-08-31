@@ -104,3 +104,71 @@ def test_parse_listing_object_sets_hoa_annual_from_dollar_amount_in_description(
         "https://example.com/1",
     )
     assert listing.hoa_annual == 1800.0
+
+
+# --- Real-payload fixture faithfulness ------------------------------------
+# These assert only CURRENT behavior against complete (untrimmed) payloads,
+# proving the fixtures are faithful before any extraction changes land.
+
+import json as _json
+from pathlib import Path as _Path
+
+FIXTURES = _Path(__file__).parent / "fixtures"
+
+
+def _fixture(name):
+    return _json.loads((FIXTURES / name).read_text())
+
+
+def test_real_detail_payload_parses_with_current_parser():
+    obj = _fixture("detail_hoa_association_yes.json")
+    listing = parse_listing_object(obj, "https://example.com/z")
+    assert listing.address == "10191 Zenobia Circle"
+    assert listing.sqft == 2668
+    assert listing.beds > 0
+
+
+def test_real_payloads_carry_the_structured_fields_the_parser_ignores():
+    """Guards the fixtures against being re-trimmed to the parser's field
+    list -- the exact mistake that hid the HOA field for a whole feature."""
+    obj = _fixture("detail_hoa_association_yes.json")
+    charges = obj["price"]["charges"]
+    assert any(c["chargeType"] == 2 for c in charges), "HOA charge must survive trimming"
+    assert obj["price"]["monthlySalesCharges"] > 0
+    assert obj["size"]["aboveGradeTotalAreaSquareFeet"] == 1862
+    assert obj["detailedInfo"]["assessorDetails"]["assessorInfo"]["propertyTax"]["tax"]
+    assert obj["detailedInfo"]["outdoorSpace"]
+
+
+def test_no_basement_fixture_omits_below_grade_key_entirely():
+    obj = _fixture("detail_no_basement.json")
+    assert "belowGradeTotalAreaSquareFeet" not in obj["size"]
+    assert obj["size"]["aboveGradeTotalAreaSquareFeet"] == 1867
+
+
+def test_association_no_fixture_has_tax_charge_but_no_hoa_charge():
+    obj = _fixture("detail_sfh_association_no.json")
+    charges = obj["price"]["charges"]
+    assert any(c["chargeType"] == 0 for c in charges), "tax charge present"
+    assert not any(c["chargeType"] == 2 for c in charges), "no HOA charge"
+
+
+def test_parse_listing_object_extracts_structured_fields_from_real_payload():
+    listing = parse_listing_object(_fixture("detail_hoa_association_yes.json"), "u")
+    assert listing.hoa_annual == 1000.0
+    assert listing.tax_annual > 0
+    assert listing.sqft_above_grade == 1862
+    assert listing.sqft_below_grade == 725
+    assert "Patio" in listing.outdoor_spaces
+
+
+def test_parse_listing_object_no_basement_keeps_below_grade_none():
+    listing = parse_listing_object(_fixture("detail_no_basement.json"), "u")
+    assert listing.sqft_above_grade == 1867
+    assert listing.sqft_below_grade is None
+
+
+def test_parse_listing_object_prefers_structured_hoa_over_description():
+    obj = _fixture("detail_sfh_association_no.json")
+    obj["description"] = "HOA dues are $150/month."
+    assert parse_listing_object(obj, "u").hoa_annual == 0.0

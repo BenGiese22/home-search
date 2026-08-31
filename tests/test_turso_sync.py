@@ -1,3 +1,4 @@
+import math
 import sqlite3
 
 import pytest
@@ -108,6 +109,7 @@ def test_ensure_schema_migrates_a_mirror_created_before_a_column_existed():
     assert "property_type" not in cols_before
     assert "localized_status" not in cols_before
     assert "hoa_annual" not in cols_before
+    assert "tax_annual" not in cols_before
 
     ensure_schema(conn)
 
@@ -115,6 +117,8 @@ def test_ensure_schema_migrates_a_mirror_created_before_a_column_existed():
     assert "property_type" in cols_after
     assert "localized_status" in cols_after
     assert "hoa_annual" in cols_after
+    for col in ("tax_annual", "sqft_above_grade", "sqft_below_grade", "outdoor_spaces"):
+        assert col in cols_after
 
     source = _connect()
     source.executescript(_SCHEMA)
@@ -204,7 +208,11 @@ def test_upsert_rows_costs_one_statement_per_chunk_not_one_per_row():
     upsert_rows(Counting(), "amenities", rows)
 
     inserts = [s for s in statements if s.lstrip().upper().startswith("INSERT")]
-    assert len(inserts) == 3, f"120 rows at chunk 50 should be 3 statements, got {len(inserts)}"
+    expected = math.ceil(120 / BATCH_CHUNK)
+    assert len(inserts) == expected, (
+        f"120 rows at chunk {BATCH_CHUNK} should be {expected} "
+        f"statements, got {len(inserts)}"
+    )
 
 
 def test_upsert_rows_replaces_on_conflict_like_upsert_row_did():

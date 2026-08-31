@@ -59,3 +59,16 @@ def test_write_csv_writes_known_hoa_annual(tmp_path: Path):
     write_csv([listing], tmp_path / "photos", path)
     row = list(csv.DictReader(path.open()))[0]
     assert float(row["hoa_annual"]) == 1200.0
+
+
+def test_write_csv_includes_structured_fields(tmp_path: Path):
+    path = tmp_path / "out.csv"
+    listing = LISTING.__class__(**{**LISTING.__dict__, "tax_annual": 4407.0,
+                                   "sqft_above_grade": 1862, "sqft_below_grade": None,
+                                   "outdoor_spaces": ["Deck", "Patio"]})
+    write_csv([listing], tmp_path / "photos", path)
+    row = list(csv.DictReader(path.open()))[0]
+    assert float(row["tax_annual"]) == 4407.0
+    assert row["sqft_above_grade"] == "1862"
+    assert row["sqft_below_grade"] == ""
+    assert row["outdoor_spaces"] == "Deck, Patio"
