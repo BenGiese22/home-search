@@ -9,7 +9,13 @@ from playwright.sync_api import Page
 from src.auth import launch_authenticated_page
 from src.config import load_config
 from src.csv_writer import write_csv
-from src.db import get_connection, get_pinned_listing_ids, get_price_snapshot, upsert_listing
+from src.db import (
+    get_connection,
+    get_pinned_listing_ids,
+    get_price_snapshot,
+    query_listings,
+    upsert_listing,
+)
 from src.diff import compute_changes, run_delisting
 from src.gallery import write_gallery
 from src.models import Listing, is_active_status
@@ -87,6 +93,31 @@ def _save_listing(listing: Listing, skip_photos: bool, page: Page) -> None:
     print(f"scraped: {listing.address}")
 
 
+def _backfill_orphans(db_conn, page: Page, skip_photos: bool) -> None:
+    """Refresh stale listings that neither ingestion path can reach.
+
+    A listing pinned in the DB but no longer in LISTING_URLS and no longer in
+    the active collection is invisible to both branches above -- it would keep
+    whatever fields it had when it was last scraped, forever. Its listing_url
+    is still on its row, so re-scrape it from that.
+    """
+    stale = [
+        row for row in query_listings(db_conn)
+        if needs_field_backfill(STORE_DIR, row["listing_id"], BACKFILL_FIELDS)
+    ]
+    if not stale:
+        return
+    print(f"--backfill-missing: {len(stale)} unreachable listing(s) to refresh by stored URL")
+    pinned_ids = get_pinned_listing_ids(db_conn)
+    for row in stale:
+        try:
+            listing = scrape_listing(page, row["listing_url"])
+            upsert_listing(db_conn, listing, is_pinned=row["listing_id"] in pinned_ids)
+            _save_listing(listing, skip_photos, page)
+        except Exception as exc:
+            print(f"skip listing (failed to refresh {row['address']}): {exc}")
+
+
 def _parse_limit(argv: list[str]) -> int | None:
     for arg in argv:
         if arg.startswith("--limit="):
@@ -124,14 +155,26 @@ def main() -> None:
     with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
         for url in config.listing_urls:
             precheck_id = derive_listing_id_from_url(url)
-            if not force and precheck_id and is_scraped(STORE_DIR, precheck_id):
+            # --backfill-missing must reach pinned listings too. They take the
+            # detail-page branch rather than the collection one, so filtering
+            # only the collection batch left every pinned listing stale.
+            stale = (
+                backfill_missing
+                and precheck_id is not None
+                and needs_field_backfill(STORE_DIR, precheck_id, BACKFILL_FIELDS)
+            )
+            if not force and not stale and precheck_id and is_scraped(STORE_DIR, precheck_id):
                 print(f"skip (already scraped): {url}")
                 continue
             try:
                 listing = scrape_listing(page, url)
                 pinned_ids.add(listing.listing_id)
                 upsert_listing(db_conn, listing, is_pinned=True)
-                if not force and is_scraped(STORE_DIR, listing.listing_id):
+                stale = stale or (
+                    backfill_missing
+                    and needs_field_backfill(STORE_DIR, listing.listing_id, BACKFILL_FIELDS)
+                )
+                if not force and not stale and is_scraped(STORE_DIR, listing.listing_id):
                     print(f"skip (already scraped): {listing.address}")
                     continue
                 _save_listing(listing, skip_photos, page)
@@ -230,6 +273,9 @@ def main() -> None:
                 except Exception as exc:
                     print(f"skip listing (failed to process {listing.address}): {exc}")
                     continue
+
+            if backfill_missing:
+                _backfill_orphans(db_conn, page, skip_photos)
 
             report = compute_changes(
                 present_listings, before, pinned_ids=frozenset(pinned_ids)
