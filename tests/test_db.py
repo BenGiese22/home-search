@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 
@@ -658,3 +659,47 @@ def test_init_db_migrates_existing_scores_table_missing_hoa_score_column(tmp_pat
     conn = get_connection(db_path)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(scores)")}
     assert "hoa_score" in columns
+
+
+def test_upsert_listing_roundtrips_structured_fields(tmp_path: Path):
+    conn = get_connection(tmp_path / "t.db")
+    upsert_listing(conn, SAMPLE.__class__(**{**SAMPLE.__dict__, "tax_annual": 4407.0,
+                                             "sqft_above_grade": 1862, "sqft_below_grade": 725,
+                                             "outdoor_spaces": ["Deck", "Patio"]}))
+    row = conn.execute("SELECT * FROM listings").fetchone()
+    assert row["tax_annual"] == 4407.0
+    assert row["sqft_above_grade"] == 1862
+    assert row["sqft_below_grade"] == 725
+    assert json.loads(row["outdoor_spaces"]) == ["Deck", "Patio"]
+
+
+def test_upsert_listing_keeps_below_grade_null_distinct_from_zero(tmp_path: Path):
+    """NULL means no basement; 0 means a basement with no finished area."""
+    conn = get_connection(tmp_path / "t.db")
+    upsert_listing(conn, SAMPLE.__class__(**{**SAMPLE.__dict__, "sqft_below_grade": None}))
+    assert conn.execute("SELECT sqft_below_grade FROM listings").fetchone()[0] is None
+    upsert_listing(conn, SAMPLE.__class__(**{**SAMPLE.__dict__, "sqft_below_grade": 0}))
+    assert conn.execute("SELECT sqft_below_grade FROM listings").fetchone()[0] == 0
+
+
+def test_init_db_migrates_existing_listings_table_missing_structured_columns(tmp_path: Path):
+    db_path = tmp_path / "old2.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE listings (
+            listing_id TEXT PRIMARY KEY, address TEXT NOT NULL, city TEXT NOT NULL,
+            state TEXT NOT NULL, zip_code TEXT NOT NULL, price TEXT NOT NULL,
+            price_numeric REAL, beds INTEGER NOT NULL, baths REAL NOT NULL,
+            sqft INTEGER NOT NULL, lot_sqft INTEGER NOT NULL,
+            parking_spaces INTEGER NOT NULL, year_built INTEGER NOT NULL,
+            description TEXT NOT NULL, listing_url TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+    conn = get_connection(db_path)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
+    for col in ("tax_annual", "sqft_above_grade", "sqft_below_grade", "outdoor_spaces"):
+        assert col in columns

@@ -139,7 +139,14 @@ class BatchRowErrors(Exception):
         super().__init__(f"{len(rows)} row(s) failed to sync into {table}")
 
 
-BATCH_CHUNK = 50
+# Rows per batched statement. CHUNK x (widest table's column count) must stay
+# under SQLite's 999-variable default, which test_batch_chunk_stays_inside_
+# sqlites_variable_limit enforces. `listings` reached 23 columns when the
+# structured fields landed, and 50 x 23 = 1150 would have silently broken
+# every Turso upsert -- lowered to 30 (30 x 23 = 690), which also leaves room
+# for ~10 more columns before this needs revisiting. The cost is a few more
+# round trips per sync, which is nothing against an 85-row corpus.
+BATCH_CHUNK = 30
 
 
 def upsert_rows(conn, table: str, rows: list[sqlite3.Row]) -> None:

@@ -123,6 +123,26 @@ def score_commute(
     return MEDTRONIC_LEG_WEIGHT * medtronic_score + DENVER_LEG_WEIGHT * denver_score
 
 
+def finished_sqft(listing: Listing) -> int:
+    """Finished living area: above-grade plus any finished below-grade.
+
+    score_sqft exists to compare living space like-for-like, and
+    Listing.sqft (Compass's squareFeet) does not: it is the MLS total
+    footprint, which counts unfinished basement area. It exceeds
+    above+below on 45 of 85 corpus listings, by up to 1,560 sqft -- so a
+    home with a large unfinished basement was outranking a fully finished
+    home of equal living area.
+
+    sqft_below_grade is None for "no basement" and 0 for "basement with no
+    finished area"; both contribute nothing here, but the distinction is
+    preserved in storage. Falls back to Listing.sqft when the split is
+    unavailable (defensive only -- above-grade is present on 85/85 today).
+    """
+    if listing.sqft_above_grade is None:
+        return listing.sqft
+    return listing.sqft_above_grade + (listing.sqft_below_grade or 0)
+
+
 def score_sqft(sqft: int, sqft_min: int, sqft_max: int) -> float:
     if not sqft:
         return NEUTRAL_SCORE
@@ -276,7 +296,7 @@ def score_listing(
     commute_score = score_commute(
         medtronic_minutes, denver_minutes, stats.denver_minutes_min, stats.denver_minutes_max
     )
-    sqft_score = score_sqft(listing.sqft, stats.sqft_min, stats.sqft_max)
+    sqft_score = score_sqft(finished_sqft(listing), stats.sqft_min, stats.sqft_max)
     condition_score = score_condition(
         listing.description, listing.amenities, listing.year_built, visual_condition_score
     )

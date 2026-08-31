@@ -151,3 +151,24 @@ def test_association_no_fixture_has_tax_charge_but_no_hoa_charge():
     charges = obj["price"]["charges"]
     assert any(c["chargeType"] == 0 for c in charges), "tax charge present"
     assert not any(c["chargeType"] == 2 for c in charges), "no HOA charge"
+
+
+def test_parse_listing_object_extracts_structured_fields_from_real_payload():
+    listing = parse_listing_object(_fixture("detail_hoa_association_yes.json"), "u")
+    assert listing.hoa_annual == 1000.0
+    assert listing.tax_annual > 0
+    assert listing.sqft_above_grade == 1862
+    assert listing.sqft_below_grade == 725
+    assert "Patio" in listing.outdoor_spaces
+
+
+def test_parse_listing_object_no_basement_keeps_below_grade_none():
+    listing = parse_listing_object(_fixture("detail_no_basement.json"), "u")
+    assert listing.sqft_above_grade == 1867
+    assert listing.sqft_below_grade is None
+
+
+def test_parse_listing_object_prefers_structured_hoa_over_description():
+    obj = _fixture("detail_sfh_association_no.json")
+    obj["description"] = "HOA dues are $150/month."
+    assert parse_listing_object(obj, "u").hoa_annual == 0.0

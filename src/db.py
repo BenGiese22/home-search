@@ -1,3 +1,4 @@
+import json
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -28,7 +29,11 @@ CREATE TABLE IF NOT EXISTS listings (
     is_pinned INTEGER NOT NULL DEFAULT 0,
     property_type TEXT NOT NULL DEFAULT '',
     localized_status TEXT NOT NULL DEFAULT '',
-    hoa_annual REAL
+    hoa_annual REAL,
+    tax_annual REAL,
+    sqft_above_grade INTEGER,
+    sqft_below_grade INTEGER,
+    outdoor_spaces TEXT
 );
 
 CREATE TABLE IF NOT EXISTS amenities (
@@ -126,6 +131,18 @@ def init_db(conn: sqlite3.Connection) -> None:
     # HOA and hand out the no-HOA bonus across the board.
     if "hoa_annual" not in existing_listing_columns:
         conn.execute("ALTER TABLE listings ADD COLUMN hoa_annual REAL")
+    # All nullable with no DEFAULT: NULL is meaningful for each. For
+    # sqft_below_grade specifically, NULL means "no basement" (Compass omits
+    # the key exactly when it reports Basement: No), which a DEFAULT 0 would
+    # collapse into "basement with no finished area".
+    if "tax_annual" not in existing_listing_columns:
+        conn.execute("ALTER TABLE listings ADD COLUMN tax_annual REAL")
+    if "sqft_above_grade" not in existing_listing_columns:
+        conn.execute("ALTER TABLE listings ADD COLUMN sqft_above_grade INTEGER")
+    if "sqft_below_grade" not in existing_listing_columns:
+        conn.execute("ALTER TABLE listings ADD COLUMN sqft_below_grade INTEGER")
+    if "outdoor_spaces" not in existing_listing_columns:
+        conn.execute("ALTER TABLE listings ADD COLUMN outdoor_spaces TEXT")
     conn.commit()
 
 
@@ -157,8 +174,9 @@ def upsert_listing(conn: sqlite3.Connection, listing: Listing, is_pinned: bool =
                 listing_id, address, city, state, zip_code,
                 price, price_numeric, beds, baths, sqft, lot_sqft,
                 parking_spaces, year_built, description, listing_url, is_pinned,
-                property_type, localized_status, hoa_annual
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                property_type, localized_status, hoa_annual, tax_annual,
+                sqft_above_grade, sqft_below_grade, outdoor_spaces
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 listing.listing_id,
@@ -180,6 +198,10 @@ def upsert_listing(conn: sqlite3.Connection, listing: Listing, is_pinned: bool =
                 listing.property_type,
                 listing.localized_status,
                 listing.hoa_annual,
+                listing.tax_annual,
+                listing.sqft_above_grade,
+                listing.sqft_below_grade,
+                json.dumps(listing.outdoor_spaces),
             ),
         )
         conn.execute("DELETE FROM amenities WHERE listing_id = ?", (listing.listing_id,))
