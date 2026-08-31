@@ -63,3 +63,7 @@ so a manual run always does the work.
 ```bash
 systemctl --user disable --now home-search-pipeline.timer
 ```
+
+For the full picture — retiring the local timer once a cloud pipeline takes
+over, returning to local if it does not, or removing the automation
+altogether — see [DECOMMISSION.md](../DECOMMISSION.md).
