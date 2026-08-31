@@ -9,9 +9,10 @@ Wants=network-online.target
 Type=oneshot
 # Load-bearing: every script resolves data/ and .env relative to cwd.
 WorkingDirectory=/home/bengi/code/home-search
-# publish.py shells out to the `vercel` CLI and fails fast without it, so the
-# systemd PATH must include it. Verified 2026-08-30: /usr/bin/vercel, covered
-# by /usr/bin below. Re-check with `which vercel` if publish starts failing.
+# Nothing in the pipeline shells out to an external CLI any more -- photo
+# upload used to require the `vercel` binary on PATH, and now goes straight
+# to the Blob REST API. This is just a sane default PATH; the venv entry is
+# what stage subprocesses resolve `python` through.
 Environment=PATH=/home/bengi/code/home-search/venv/bin:/usr/local/bin:/usr/bin:/bin
 # --max-age=5h makes the several triggers below idempotent: whichever fires
 # first does the work, the rest find a recent success and exit 0. Slightly
