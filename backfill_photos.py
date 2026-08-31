@@ -2,12 +2,11 @@ import random
 import time
 from pathlib import Path
 
-from dotenv import dotenv_values
 from playwright.sync_api import Page
 
 from src.auth import launch_authenticated_page
 from src.backfill import dedupe_by_listing_id
-from src.config import load_config
+from src.config import load_config, load_env
 from src.db import get_connection, get_pinned_listing_ids, upsert_listing
 from src.photos import download_photos
 from src.scraper import fetch_collection_listings
@@ -44,7 +43,7 @@ def _build_fetch_bytes(page: Page):
 
 
 def main() -> None:
-    config = load_config(dotenv_values(".env"))
+    config = load_config(load_env())
     if not config.collection_url:
         print("No COMPASS_COLLECTION_URL configured; nothing to backfill.")
         return

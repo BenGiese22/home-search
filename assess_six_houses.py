@@ -20,11 +20,10 @@ import time
 from pathlib import Path
 
 import anthropic
-from dotenv import dotenv_values
 from playwright.sync_api import Page
 
 from src.auth import launch_authenticated_page
-from src.config import load_config
+from src.config import load_config, load_env
 from src.db import get_connection, upsert_listing
 from src.models import Listing
 from src.photos import download_photos
@@ -332,7 +331,7 @@ def main() -> None:
 
     done_ids = already_assessed_ids(OUTPUT_PATH)
 
-    env = dotenv_values(".env")
+    env = load_env()
     if not env.get("ANTHROPIC_API_KEY"):
         print("ANTHROPIC_API_KEY not set in .env -- add it before running this script.")
         return

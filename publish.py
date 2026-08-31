@@ -1,12 +1,11 @@
-import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import requests
 import turso_serverless
-from dotenv import dotenv_values
 
+from src.config import load_env
 from src.db import get_connection, query_listings, tables_child_first
 from src.turso_sync import BatchRowErrors, ensure_schema, replace_listing_rows, upsert_rows
 from src.blob_upload import upload_photo
@@ -37,7 +36,11 @@ PHOTO_UPLOAD_WORKERS = 8
 # listing and the detail gallery is comfortable with a handful, so cap what
 # gets hosted. 85 listings x 8 = ~680 operations, which fits the free tier
 # with room to spare. Raise it (or set it to 0 for no cap) on a paid plan.
-MAX_PHOTOS_PER_LISTING = int(os.environ.get("MAX_PHOTOS_PER_LISTING", "8"))
+# Read through the merged lookup, not os.environ alone. Sourcing this from
+# the process environment only meant the MAX_PHOTOS_PER_LISTING sitting in
+# .env was silently ignored and the cap stayed at this default -- the exact
+# class of bug that motivated unifying env handling.
+MAX_PHOTOS_PER_LISTING = int(load_env().get("MAX_PHOTOS_PER_LISTING", "8"))
 
 # Every table pruning must consider: the keyed tables above, plus the
 # per-listing tables and the Turso-only hosted_photos table. This is the
@@ -243,7 +246,7 @@ def _revalidate(short_list_url: str, secret: str) -> None:
 
 
 def main() -> None:
-    env = {**dotenv_values(".env"), **os.environ}
+    env = load_env()
 
     missing = [key for key in REQUIRED_ENV_VARS if not env.get(key)]
     if missing:

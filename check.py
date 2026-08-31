@@ -1,9 +1,7 @@
 from pathlib import Path
 
-from dotenv import dotenv_values
-
 from src.auth import launch_authenticated_page
-from src.config import load_config
+from src.config import load_config, load_env
 from src.db import get_connection, get_pinned_listing_ids, get_price_snapshot, upsert_listing
 from src.diff import compute_changes, format_report, run_delisting
 from src.models import is_active_status
@@ -18,7 +16,7 @@ LOGIN_URL = "https://www.compass.com/login/"
 
 
 def main() -> None:
-    config = load_config(dotenv_values(".env"))
+    config = load_config(load_env())
     if not config.collection_url:
         print("No COMPASS_COLLECTION_URL configured; nothing to check.")
         return
