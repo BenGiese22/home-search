@@ -7,6 +7,7 @@ from playwright.sync_api import Page
 
 from src.auth import launch_authenticated_page
 from src.config import load_config, load_env
+from src.turso_db import connect as turso_connect
 from src.csv_writer import write_csv
 from src.db import (
     bulk_upsert_listings,
@@ -19,6 +20,7 @@ from src.db import (
 from src.diff import compute_changes, run_delisting
 from src.gallery import write_gallery
 from src.models import Listing, is_active_status
+from src.photo_upload import upload_photos
 from src.photos import download_photos
 from src.scraper import (
     derive_listing_id_from_url,
@@ -116,6 +118,50 @@ def _backfill_orphans(db_conn, page: Page, skip_photos: bool) -> None:
             _save_listing(listing, skip_photos, page)
         except Exception as exc:
             print(f"skip listing (failed to refresh {row['address']}): {exc}")
+
+
+# Photos hosted per listing in Blob. 0 means no cap -- see issue #17; on Pro
+# the whole corpus is roughly $0.02 one-time in operations.
+MAX_PHOTOS_PER_LISTING = int(load_env().get("MAX_PHOTOS_PER_LISTING", 0))
+
+
+def _upload_photos_for(db_conn) -> None:
+    """Uploads any not-yet-hosted photo for every tracked listing.
+
+    Runs over all listings rather than only the ones processed this run: the
+    skip set makes that nearly free (one query), and it means a photo whose
+    upload failed or was interrupted on an earlier run gets picked up rather
+    than being stranded forever.
+
+    hosted_photos lives only in Turso, so this opens its own connection. A
+    configuration or upload problem must not fail the scrape -- the listings
+    and photos are already safely on disk, and the next run retries.
+    """
+    env = load_env()
+    if not env.get("BLOB_READ_WRITE_TOKEN"):
+        print("skipping photo upload: BLOB_READ_WRITE_TOKEN is not set")
+        return
+    listing_ids = [row["listing_id"] for row in query_listings(db_conn)]
+    if not listing_ids:
+        return
+    try:
+        blob_conn = turso_connect(env)
+    except Exception as exc:
+        print(f"skipping photo upload: {exc}")
+        return
+    try:
+        uploaded, failed = upload_photos(
+            blob_conn, PHOTOS_DIR, listing_ids,
+            env["BLOB_READ_WRITE_TOKEN"],
+            max_per_listing=MAX_PHOTOS_PER_LISTING,
+        )
+        if uploaded or failed:
+            summary = f"uploaded {uploaded} new photo(s)"
+            if failed:
+                summary += f" ({failed} failed -- a rerun retries them)"
+            print(summary)
+    finally:
+        blob_conn.close()
 
 
 def _parse_limit(argv: list[str]) -> int | None:
@@ -290,6 +336,7 @@ def main() -> None:
                 frozenset(pinned_ids),
             )
 
+    _upload_photos_for(db_conn)
     db_conn.close()
 
     all_listings = load_all_listings(STORE_DIR)
