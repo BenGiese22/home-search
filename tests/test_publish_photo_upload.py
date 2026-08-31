@@ -242,3 +242,43 @@ def test_prune_deleted_listings_succeeds_with_foreign_keys_enforced():
     assert pruned == 2  # the dropped listing's own row plus its amenity
     assert [r[0] for r in conn.execute("SELECT listing_id FROM listings")] == ["keep"]
     assert [r[0] for r in conn.execute("SELECT listing_id FROM amenities")] == ["keep"]
+
+
+# --- the photo cap default (issue #17) -----------------------------------
+
+def test_the_default_cap_is_uncapped():
+    """The cap existed because Vercel's Hobby tier included only 2,000
+    Advanced Operations per month and a 3,000-photo backfill once consumed
+    11,000, suspending the store for 30 days. On Pro that no longer binds,
+    and the cap's only remaining effect was hosted galleries showing a
+    fraction of each listing's photos."""
+    assert publish.DEFAULT_MAX_PHOTOS_PER_LISTING == 0
+
+
+def test_the_env_override_is_retained(monkeypatch):
+    """Uncapped by default, but still capped on demand -- and the value must
+    come through the merged lookup, so process env wins over .env."""
+    import importlib
+
+    monkeypatch.setenv("MAX_PHOTOS_PER_LISTING", "5")
+    reloaded = importlib.reload(publish)
+    try:
+        assert reloaded.MAX_PHOTOS_PER_LISTING == 5
+    finally:
+        monkeypatch.delenv("MAX_PHOTOS_PER_LISTING", raising=False)
+        importlib.reload(publish)
+
+
+def test_an_uncapped_run_collects_every_photo(tmp_path, monkeypatch):
+    """The behaviour the default now selects: a listing with 40 photos gets
+    all 40 hosted, not the first 8."""
+    d = tmp_path / "aaa"
+    d.mkdir()
+    for i in range(1, 41):
+        (d / f"{i:02d}.jpg").write_bytes(b"x")
+    monkeypatch.setattr(publish, "PHOTOS_DIR", tmp_path)
+    monkeypatch.setattr(publish, "MAX_PHOTOS_PER_LISTING", publish.DEFAULT_MAX_PHOTOS_PER_LISTING)
+
+    pending = publish._collect_pending_photos(_conn(), ["aaa"])
+
+    assert len(pending) == 40

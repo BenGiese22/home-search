@@ -29,18 +29,25 @@ TURSO_BATCH_CHUNK = 30
 # uploads are I/O-bound so more workers buys little.
 PHOTO_UPLOAD_WORKERS = 8
 
-# Vercel bills every upload as an "Advanced Operation" and the Hobby tier
-# includes only 2,000 per month. Backfilling all ~3,000 local photos costs
-# more than the whole monthly budget in one run -- and with the CLI's
-# multipart default it cost 11,000. The list view needs one photo per
-# listing and the detail gallery is comfortable with a handful, so cap what
-# gets hosted. 85 listings x 8 = ~680 operations, which fits the free tier
-# with room to spare. Raise it (or set it to 0 for no cap) on a paid plan.
+# How many photos per listing get hosted in Blob. 0 means no cap.
+#
+# This was 8 because Vercel's Hobby tier included only 2,000 Advanced
+# Operations per month, and a 3,000-photo backfill once consumed 11,000 of
+# them -- the CLI's multipart default billing each part separately -- and
+# suspended the store for 30 days. Two things changed: uploads are now a
+# single-part REST PUT (one operation per photo, not three-plus), and Ben is
+# on Pro. The whole corpus is ~4,560 photos: roughly $0.02 one-time in
+# operations and ~$0.02/month in storage. The cap's only remaining effect
+# was hosted galleries showing a fraction of each listing's photos.
+#
 # Read through the merged lookup, not os.environ alone. Sourcing this from
 # the process environment only meant the MAX_PHOTOS_PER_LISTING sitting in
 # .env was silently ignored and the cap stayed at this default -- the exact
 # class of bug that motivated unifying env handling.
-MAX_PHOTOS_PER_LISTING = int(load_env().get("MAX_PHOTOS_PER_LISTING", "8"))
+DEFAULT_MAX_PHOTOS_PER_LISTING = 0
+MAX_PHOTOS_PER_LISTING = int(
+    load_env().get("MAX_PHOTOS_PER_LISTING", DEFAULT_MAX_PHOTOS_PER_LISTING)
+)
 
 # Every table pruning must consider: the keyed tables above, plus the
 # per-listing tables and the Turso-only hosted_photos table. This is the
