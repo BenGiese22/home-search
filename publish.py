@@ -1,5 +1,4 @@
 import os
-import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -24,11 +23,11 @@ KEYED_TABLES = ["listings", "commute", "scores", "visual_scores"]
 # Mirrors src.turso_sync.BATCH_CHUNK -- how many rows go in one statement.
 TURSO_BATCH_CHUNK = 30
 
-# Photo uploads shell out to the Vercel CLI, which costs ~0.6s of Node
-# startup per photo. At ~3000 photos that is ~30 minutes of pure process
-# spawn, serially. The uploads are independent -- each writes its own
-# pathname -- so they parallelize cleanly. Kept modest: this is a personal
-# sync, not a load test, and every worker is a real `vercel` process.
+# Photo uploads are independent -- each writes its own pathname -- so they
+# parallelize cleanly. Each is now one HTTP PUT rather than a `vercel` CLI
+# subprocess, so a worker costs a socket instead of ~0.6s of Node startup.
+# Kept modest anyway: this is a personal sync, not a load test, and the
+# uploads are I/O-bound so more workers buys little.
 PHOTO_UPLOAD_WORKERS = 8
 
 # Vercel bills every upload as an "Advanced Operation" and the Hobby tier
@@ -252,18 +251,6 @@ def main() -> None:
             "publish.py: missing required environment variable(s): "
             + ", ".join(missing)
             + " (set them in .env -- see .env.example)"
-        )
-
-    # upload_photo() shells out to the `vercel` CLI (see src/blob_upload.py).
-    # It's an undeclared dependency requirements.txt can't express: if it's
-    # missing, subprocess.run raises FileNotFoundError once per photo, which
-    # _upload_new_photos already catches and counts as a failure -- so
-    # without this check, a missing CLI silently fails every photo instead
-    # of failing fast with a clear cause.
-    if shutil.which("vercel") is None:
-        sys.exit(
-            "publish.py: the `vercel` CLI is required for photo uploads but "
-            "was not found on PATH (npm install -g vercel)"
         )
 
     local_conn = get_connection(DB_PATH)

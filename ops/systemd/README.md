@@ -38,13 +38,6 @@ systemctl --user daemon-reload
 systemctl --user enable --now home-search-pipeline.timer
 ```
 
-Before enabling, confirm the `vercel` CLI path in the unit matches your
-machine — `publish.py` fails fast without it:
-
-```bash
-which vercel        # then edit Environment=PATH= in the .service if it differs
-```
-
 ## Operate
 
 ```bash
