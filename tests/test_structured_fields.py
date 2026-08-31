@@ -77,9 +77,13 @@ def test_monthly_sales_charges_used_when_charges_missing():
     assert extract_hoa_annual(payload(msc=65.13)) == pytest.approx(781.56)
 
 
-def test_charges_wins_over_disagreeing_monthly_sales_charges():
-    obj = payload(charges=[TAX, {"chargeAmount": 1200, "chargeType": 2}], msc=999.0)
-    assert extract_hoa_annual(obj) == 1200.0
+def test_monthly_sales_charges_wins_over_a_disagreeing_charges_entry():
+    """monthlySalesCharges is unambiguously monthly in both payload shapes;
+    the charges entry only carries a cadence in one of them. When they
+    disagree, prefer the one whose units are never in doubt."""
+    obj = payload(charges=[TAX, {"chargeAmount": 1200, "chargeType": 2,
+                                 "paymentFrequentType": 3}], msc=999.0)
+    assert extract_hoa_annual(obj) == 11988.0
 
 
 def test_non_annual_payment_frequency_is_not_trusted():
@@ -174,3 +178,37 @@ def test_outdoor_spaces_from_real_fixture():
 
 def test_outdoor_spaces_empty_when_absent():
     assert extract_outdoor_spaces({}) == []
+
+
+# --- Payload-shape cadence divergence -------------------------------------
+# The collection payload omits paymentFrequentType and quotes the HOA charge
+# MONTHLY, while the detail payload marks it annual. Same listing, same fee.
+
+def collection(name):
+    return json.loads((FIXTURES / "collection_listings.json").read_text())[name]
+
+
+def test_collection_and_detail_payloads_agree_on_the_same_listing():
+    """3123 W 105th Ct: detail says 782/yr, collection says 65/mo."""
+    from_detail = 782.0
+    from_collection = extract_hoa_annual(collection("hoa"))
+    assert from_collection == pytest.approx(from_detail, abs=1.0)
+
+
+def test_collection_hoa_charge_without_cadence_is_not_read_as_annual():
+    """The 12x bug: chargeAmount 65 with no paymentFrequentType is monthly."""
+    assert extract_hoa_annual(collection("hoa")) > 700
+
+
+def test_collection_no_hoa_listing_is_confirmed_zero():
+    assert extract_hoa_annual(collection("nohoa")) == 0.0
+
+
+def test_charges_without_payment_frequency_is_refused_as_amount_source():
+    obj = payload(charges=[TAX, {"chargeAmount": 65, "chargeType": 2}])
+    assert extract_hoa_annual(obj) is None
+
+
+def test_tax_charge_is_annual_in_both_shapes():
+    assert extract_tax_annual(collection("hoa")) == 4400.0
+    assert extract_tax_annual(collection("nohoa")) == 2066.0

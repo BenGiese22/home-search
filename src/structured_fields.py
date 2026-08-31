@@ -79,48 +79,75 @@ def _sum_charges(obj: dict, charge_type: int) -> float | None:
     return float(sum(c.get("chargeAmount", 0) or 0 for c in matching))
 
 
-def extract_hoa_annual(obj: dict) -> float | None:
-    """Annual HOA dues in dollars, or 0.0 for a confirmed absence, or None
-    when genuinely unknown.
+def _annual_hoa_from_charges(obj: dict) -> float | None:
+    """Summed annual HOA from charges[], but ONLY when every matching entry
+    carries an explicit annual paymentFrequentType.
 
-    Precedence, each rung skipped when its field is absent from the payload
-    shape at hand:
+    The two payload shapes disagree here, which is easy to miss and costs a
+    silent 12x. For the same listing (3123 W 105th Ct):
+
+        detail:     {"chargeAmount": 782, "paymentFrequentType": 3, "chargeType": 2}
+        collection: {"chargeAmount": 65,                            "chargeType": 2}
+
+    782/yr and 65/mo are the same fee. The collection shape omits the
+    cadence entirely, so an amount with no paymentFrequentType is treated as
+    unknown-cadence and refused, exactly as src/hoa.py refuses a prose amount
+    with no cadence beside it. Note chargeType 0 (tax) is annual in BOTH
+    shapes -- the inconsistency is specific to the HOA entry.
+    """
+    hoa_charges = [c for c in _charges(obj) if c.get("chargeType") == CHARGE_TYPE_HOA]
+    if not hoa_charges:
+        return None
+    if any(c.get("paymentFrequentType") != PAYMENT_FREQUENCY_ANNUAL for c in hoa_charges):
+        return None
+    return float(sum(c.get("chargeAmount", 0) or 0 for c in hoa_charges))
+
+
+def extract_hoa_annual(obj: dict) -> float | None:
+    """Annual HOA dues in dollars, 0.0 for a confirmed absence, or None when
+    genuinely unknown.
+
+    Precedence, each rung skipped when its field is absent:
       1. `Association` Yes/No -- ground truth for HOA *presence* (detail
          payloads only). "No" is authoritative. "Yes" means the amount must
-         come from a lower rung, and if none is found the answer is None,
-         NEVER 0.0 -- otherwise an undisclosed fee would earn the no-HOA bonus.
-      2. charges[chargeType==2] -- the authoritative annual amount, summed
-         across multiple associations (sub + master HOAs both appear).
-         A populated charges list with no HOA entry is a confirmed 0.0: it is
-         the exact structural signature of Association: No, corroborated on
-         77/77 no-HOA listings.
-      3. monthlySalesCharges * 12 -- derived from the same source, so it
-         loses to rung 2 on disagreement, but serves when charges is absent.
-      4. The description regex, for the handful of listings with prose.
-         A structured 0.0 beats a positive regex hit.
+         come from a lower rung; if none resolves, the answer is None and
+         NEVER 0.0, so an undisclosed fee cannot earn the no-HOA bonus.
+      2. monthlySalesCharges * 12 -- the primary amount source. Present on
+         85/85 listings in BOTH payload shapes and unambiguously monthly,
+         which the charges[] entry is not (see _annual_hoa_from_charges).
+      3. charges[chargeType==2] with an explicit annual cadence -- agrees
+         with rung 2 to within rounding wherever both resolve; serves when
+         monthlySalesCharges is absent.
+      4. A populated charges[] with no HOA entry -- confirmed 0.0. This is
+         the structural signature of Association: No, corroborated on 77/77.
+      5. The description regex, for the few listings carrying prose. A
+         structured 0.0 beats a positive regex hit.
     """
     association = _detail_value(obj, "Association")
-    has_association = association in ("Yes", "No")
 
     if association == "No":
         return 0.0
 
-    charged = _sum_charges(obj, CHARGE_TYPE_HOA)
-    if charged:
-        return charged
-
     monthly = (obj.get("price") or {}).get("monthlySalesCharges")
-    if charged is None and isinstance(monthly, (int, float)) and monthly > 0:
+    if isinstance(monthly, (int, float)) and monthly > 0:
         return round(float(monthly) * 12.0, 2)
 
+    from_charges = _annual_hoa_from_charges(obj)
+    if from_charges:
+        return from_charges
+
+    charges = _charges(obj)
+    has_hoa_entry = any(c.get("chargeType") == CHARGE_TYPE_HOA for c in charges)
+
     if association == "Yes":
-        # An HOA exists but no amount is resolvable. Unknown, not free.
         return None
 
-    if charged == 0.0:
+    # A populated charges list with no HOA entry is a confirmed absence.
+    # An empty/absent list is a sum over nothing -- ambiguity, not absence.
+    if charges and not has_hoa_entry:
         return 0.0
 
-    if not has_association:
+    if not has_hoa_entry:
         from_description = parse_hoa_from_description(obj.get("description") or "")
         if from_description is not None:
             return from_description
