@@ -1,3 +1,4 @@
+import sys
 import time
 from pathlib import Path
 
@@ -40,7 +41,11 @@ def route_fn(origin, destination):
 def main() -> None:
     conn = get_connection(DB_PATH)
     listings_by_id = {row["listing_id"]: row for row in query_listings(conn)}
-    missing_ids = get_listing_ids_missing_commute(conn)
+    # --only-new skips listings whose previous attempt failed; the default
+    # retries them, since a failure is usually transient (rate limit, blip)
+    # and leaving it unretried permanently neutralizes the commute factor.
+    retry_failed = "--only-new" not in sys.argv
+    missing_ids = get_listing_ids_missing_commute(conn, retry_failed=retry_failed)
 
     if not missing_ids:
         print("commute table already covers every listing")

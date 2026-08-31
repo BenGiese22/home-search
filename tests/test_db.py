@@ -5,6 +5,8 @@ from pathlib import Path
 
 from src.commute import CommuteResult
 from src.db import (
+    get_listing_ids_missing_commute,
+    upsert_commute,
     _SCHEMA,
     tables_child_first,
     tables_parent_first,
@@ -770,3 +772,61 @@ def test_delete_listing_removes_children_under_fk_enforcement(tmp_path: Path):
     assert conn.execute("SELECT COUNT(*) FROM listings").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM amenities").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM visual_scores").fetchone()[0] == 0
+
+
+def _commute_row(conn, listing_id, *, failed, minutes):
+    from src.commute import CommuteResult
+
+    upsert_commute(
+        conn,
+        listing_id,
+        CommuteResult(
+            lat=None if failed else 1.0,
+            lon=None if failed else 2.0,
+            denver_miles=None if failed else 10.0,
+            denver_minutes=None if failed else 20.0,
+            medtronic_miles=None if failed else 5.0,
+            medtronic_minutes=minutes,
+            geocode_failed=failed,
+        ),
+    )
+
+
+def test_missing_commute_includes_listings_with_no_row(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    assert get_listing_ids_missing_commute(conn) == ["abc123"]
+
+
+def test_missing_commute_excludes_listings_with_a_usable_result(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    _commute_row(conn, "abc123", failed=False, minutes=18.0)
+    assert get_listing_ids_missing_commute(conn) == []
+
+
+def test_missing_commute_retries_a_previous_geocode_failure(tmp_path: Path):
+    """A failed row used to make the failure permanent: the listing had a
+    commute row, so it was never selected again, and it scored on the
+    neutral fallback for the heaviest-weighted factor forever."""
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    _commute_row(conn, "abc123", failed=True, minutes=None)
+    assert get_listing_ids_missing_commute(conn) == ["abc123"]
+
+
+def test_missing_commute_retries_a_row_with_no_minutes(tmp_path: Path):
+    """Geocoding succeeded but routing did not -- also unusable, also
+    previously permanent."""
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    _commute_row(conn, "abc123", failed=False, minutes=None)
+    assert get_listing_ids_missing_commute(conn) == ["abc123"]
+
+
+def test_missing_commute_can_skip_retries_when_asked(tmp_path: Path):
+    """Opt-out for a run that should only pay for genuinely new listings."""
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    _commute_row(conn, "abc123", failed=True, minutes=None)
+    assert get_listing_ids_missing_commute(conn, retry_failed=False) == []

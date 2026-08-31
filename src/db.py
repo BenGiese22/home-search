@@ -348,15 +348,41 @@ def get_commute(conn: sqlite3.Connection, listing_id: str) -> sqlite3.Row | None
     ).fetchone()
 
 
-def get_listing_ids_missing_commute(conn: sqlite3.Connection) -> list[str]:
-    """Listings with no commute row yet — a rerun only pays the
-    geocode/routing cost for listings it hasn't already covered."""
-    rows = conn.execute(
-        """
-        SELECT listing_id FROM listings
-        WHERE listing_id NOT IN (SELECT listing_id FROM commute)
-        """
-    ).fetchall()
+def get_listing_ids_missing_commute(
+    conn: sqlite3.Connection, retry_failed: bool = True
+) -> list[str]:
+    """Listings whose commute still needs computing — no row at all, or a
+    row that never produced a usable result.
+
+    A rerun still skips every listing already covered, so it only pays the
+    geocode/routing cost for work that is actually outstanding.
+
+    retry_failed exists because the original version selected only listings
+    with NO commute row, which quietly made failures permanent: a row
+    written with geocode_failed=1 (or with no medtronic_minutes) counted as
+    "covered" forever, so a transient geocoding hiccup left that listing
+    scoring on the NEUTRAL_SCORE fallback for the heaviest-weighted factor
+    in the rubric, with nothing to signal it. Eight listings were sitting in
+    exactly that state. Pass retry_failed=False for a run that should only
+    pick up genuinely new listings.
+    """
+    if retry_failed:
+        rows = conn.execute(
+            """
+            SELECT l.listing_id FROM listings l
+            LEFT JOIN commute c ON c.listing_id = l.listing_id
+            WHERE c.listing_id IS NULL
+               OR c.geocode_failed = 1
+               OR c.medtronic_minutes IS NULL
+            """
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT listing_id FROM listings
+            WHERE listing_id NOT IN (SELECT listing_id FROM commute)
+            """
+        ).fetchall()
     return [row["listing_id"] for row in rows]
 
 
