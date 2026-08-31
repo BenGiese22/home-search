@@ -3,11 +3,10 @@ import sys
 import time
 from pathlib import Path
 
-from dotenv import dotenv_values
 from playwright.sync_api import Page
 
 from src.auth import launch_authenticated_page
-from src.config import load_config
+from src.config import load_config, load_env
 from src.csv_writer import write_csv
 from src.db import (
     get_connection,
@@ -135,7 +134,7 @@ def main() -> None:
     # alternative to --force: same one collection API pass, but it skips the
     # photo download and store rewrite for listings that already have the data.
     backfill_missing = "--backfill-missing" in sys.argv
-    config = load_config(dotenv_values(".env"))
+    config = load_config(load_env())
     db_conn = get_connection(DB_PATH)
     # Snapshot BEFORE any upserts this run touch the DB -- including the
     # explicit-URL loop below -- so a genuine price change on a listing

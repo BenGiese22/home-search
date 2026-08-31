@@ -7,8 +7,8 @@ from pathlib import Path
 import anthropic
 from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
 from anthropic.types.messages.batch_create_params import Request
-from dotenv import dotenv_values
 
+from src.config import load_env
 from src.db import (
     get_amenities,
     get_connection,
@@ -261,7 +261,7 @@ def _process_batch_results(
 
 def main() -> None:
     conn = get_connection(DB_PATH)
-    env = dotenv_values(".env")
+    env = load_env()
     if not env.get("ANTHROPIC_API_KEY"):
         print("ANTHROPIC_API_KEY not set in .env -- add it before running this script.")
         conn.close()

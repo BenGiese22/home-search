@@ -1,5 +1,36 @@
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Mapping
+
+from dotenv import dotenv_values
+
+DEFAULT_ENV_PATH = ".env"
+
+
+def load_env(dotenv_path: str | Path = DEFAULT_ENV_PATH) -> dict[str, str]:
+    """Configuration from `.env`, overridden by the process environment.
+
+    Reading only `.env` means a script cannot run anywhere that supplies
+    configuration as process environment variables -- which is every
+    containerised or hosted environment, and a hard prerequisite for running
+    any stage outside this laptop. Merging is harmless locally: with no
+    process env set, every value is exactly what `.env` says.
+
+    A missing `.env` is not an error; dotenv_values returns an empty mapping
+    and the process environment supplies everything.
+
+    Keys declared without a value (a bare `KEY` line) parse to None and are
+    dropped rather than merged -- injecting None would shadow a real
+    process-env value and defeat callers' defaults, both worse than treating
+    the line as absent.
+    """
+    from_file = {
+        key: value
+        for key, value in dotenv_values(dotenv_path).items()
+        if value is not None
+    }
+    return {**from_file, **os.environ}
 
 
 @dataclass
