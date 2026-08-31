@@ -24,7 +24,8 @@ from playwright.sync_api import Page
 
 from src.auth import launch_authenticated_page
 from src.config import load_config, load_env
-from src.db import get_connection, upsert_listing
+from src.turso_db import stage_connection
+from src.db import upsert_listing
 from src.models import Listing
 from src.photos import download_photos
 from src.scraper import scrape_listing
@@ -34,7 +35,6 @@ DATA_DIR = Path("data")
 PHOTOS_DIR = DATA_DIR / "photos"
 STORE_DIR = DATA_DIR / "listings"
 AUTH_STATE_PATH = DATA_DIR / ".auth" / "compass_state.json"
-DB_PATH = DATA_DIR / "listings.db"
 LOGIN_URL = "https://www.compass.com/login/"
 
 FEEDBACK_PATH = Path("docs/house-tour-feedback.md")
@@ -338,7 +338,7 @@ def main() -> None:
 
     config = load_config(env)
     client = anthropic.Anthropic(api_key=env["ANTHROPIC_API_KEY"])
-    db_conn = get_connection(DB_PATH)
+    db_conn = stage_connection()
 
     if not OUTPUT_PATH.exists():
         OUTPUT_PATH.write_text(

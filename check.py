@@ -2,7 +2,8 @@ from pathlib import Path
 
 from src.auth import launch_authenticated_page
 from src.config import load_config, load_env
-from src.db import get_connection, get_pinned_listing_ids, get_price_snapshot, upsert_listing
+from src.turso_db import stage_connection
+from src.db import get_pinned_listing_ids, get_price_snapshot, upsert_listing
 from src.diff import compute_changes, format_report, run_delisting
 from src.models import is_active_status
 from src.scraper import derive_pinned_ids_from_urls, fetch_collection_listings
@@ -11,7 +12,6 @@ DATA_DIR = Path("data")
 PHOTOS_DIR = DATA_DIR / "photos"
 STORE_DIR = DATA_DIR / "listings"
 AUTH_STATE_PATH = DATA_DIR / ".auth" / "compass_state.json"
-DB_PATH = DATA_DIR / "listings.db"
 LOGIN_URL = "https://www.compass.com/login/"
 
 
@@ -21,7 +21,7 @@ def main() -> None:
         print("No COMPASS_COLLECTION_URL configured; nothing to check.")
         return
 
-    db_conn = get_connection(DB_PATH)
+    db_conn = stage_connection()
     # Union of the authoritative persisted flag and a best-effort URL
     # match: a listing whose pin predates this feature (or that a schema
     # migration reset) is still protected here even before scrape.py next

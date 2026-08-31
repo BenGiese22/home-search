@@ -268,7 +268,7 @@ def test_score_main_statement_count_is_independent_of_listing_count(
 
         counter = {"n": 0}
         conn.set_trace_callback(lambda _sql, c=counter: c.__setitem__("n", c["n"] + 1))
-        monkeypatch.setattr(score, "get_connection", lambda _path, c=conn: c)
+        monkeypatch.setattr(score, "stage_connection", lambda c=conn: c)
         monkeypatch.setattr(score, "RANKED_CSV_PATH", tmp_path / f"ranked-{size}.csv")
         monkeypatch.setattr(score.sys, "argv", ["score.py"])
 

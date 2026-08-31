@@ -9,9 +9,9 @@ from anthropic.types.message_create_params import MessageCreateParamsNonStreamin
 from anthropic.types.messages.batch_create_params import Request
 
 from src.config import load_env
+from src.turso_db import stage_connection
 from src.db import (
     get_amenities,
-    get_connection,
     get_listing_ids_missing_visual_score,
     query_listings,
     upsert_visual_score,
@@ -26,7 +26,6 @@ from src.vision import (
 )
 
 DATA_DIR = Path("data")
-DB_PATH = DATA_DIR / "listings.db"
 PHOTOS_DIR = DATA_DIR / "photos"
 MODEL = "claude-sonnet-5"
 # 1536 was too small: confirmed live, 2026-08-27, that ~30% of listings hit
@@ -260,7 +259,7 @@ def _process_batch_results(
 
 
 def main() -> None:
-    conn = get_connection(DB_PATH)
+    conn = stage_connection()
     env = load_env()
     if not env.get("ANTHROPIC_API_KEY"):
         print("ANTHROPIC_API_KEY not set in .env -- add it before running this script.")

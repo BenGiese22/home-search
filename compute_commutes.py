@@ -5,10 +5,10 @@ from pathlib import Path
 import requests
 
 from src.commute import compute_commute, geocode, resolve_destination, route_miles_minutes
-from src.db import get_connection, get_listing_ids_missing_commute, query_listings, upsert_commute
+from src.turso_db import stage_connection
+from src.db import get_listing_ids_missing_commute, query_listings, upsert_commute
 
 DATA_DIR = Path("data")
-DB_PATH = DATA_DIR / "listings.db"
 USER_AGENT = "home-search/1.0 (bengiese22@gmail.com)"
 NOMINATIM_RATE_LIMIT_SECONDS = 1.0
 
@@ -39,7 +39,7 @@ def route_fn(origin, destination):
 
 
 def main() -> None:
-    conn = get_connection(DB_PATH)
+    conn = stage_connection()
     listings_by_id = {row["listing_id"]: row for row in query_listings(conn)}
     # --only-new skips listings whose previous attempt failed; the default
     # retries them, since a failure is usually transient (rate limit, blip)

@@ -7,7 +7,8 @@ from playwright.sync_api import Page
 from src.auth import launch_authenticated_page
 from src.backfill import dedupe_by_listing_id
 from src.config import load_config, load_env
-from src.db import get_connection, get_pinned_listing_ids, upsert_listing
+from src.turso_db import stage_connection
+from src.db import get_pinned_listing_ids, upsert_listing
 from src.photos import download_photos
 from src.scraper import fetch_collection_listings
 from src.store import is_scraped, save_listing
@@ -16,7 +17,6 @@ DATA_DIR = Path("data")
 PHOTOS_DIR = DATA_DIR / "photos"
 STORE_DIR = DATA_DIR / "listings"
 AUTH_STATE_PATH = DATA_DIR / ".auth" / "compass_state.json"
-DB_PATH = DATA_DIR / "listings.db"
 LOGIN_URL = "https://www.compass.com/login/"
 
 # See scrape.py's matching constants/helper -- same rationale, kept in sync.
@@ -48,7 +48,7 @@ def main() -> None:
         print("No COMPASS_COLLECTION_URL configured; nothing to backfill.")
         return
 
-    db_conn = get_connection(DB_PATH)
+    db_conn = stage_connection()
     pinned_ids = get_pinned_listing_ids(db_conn)
 
     with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
