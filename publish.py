@@ -45,7 +45,21 @@ MAX_PHOTOS_PER_LISTING = int(os.environ.get("MAX_PHOTOS_PER_LISTING", "8"))
 # only source of table names _prune_deleted_listings uses -- it is a fixed
 # internal list, never derived from external input, so interpolating a name
 # from it into SQL cannot become an injection path.
-PRUNABLE_TABLES = KEYED_TABLES + ["amenities", "photo_urls", "hosted_photos"]
+# Child tables FIRST, `listings` LAST. Every other mirrored table has a
+# `REFERENCES listings(listing_id)` foreign key, and Turso enforces foreign
+# keys even though local SQLite leaves them off by default -- deleting the
+# parent row first fails with "FOREIGN KEY constraint failed" and aborts the
+# publish before the revalidate call. This is the reverse of KEYED_TABLES,
+# which syncs parent-first for the same reason.
+PRUNABLE_TABLES = [
+    "commute",
+    "scores",
+    "visual_scores",
+    "amenities",
+    "photo_urls",
+    "hosted_photos",
+    "listings",
+]
 
 # Config publish.py needs from the environment. Checked up front so a
 # missing var fails with a readable message instead of a bare KeyError.
