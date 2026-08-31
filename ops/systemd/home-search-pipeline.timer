@@ -1,0 +1,29 @@
+[Unit]
+Description=Run the home-search pipeline on an intermittently-available machine
+
+[Timer]
+# This machine's uptime is unpredictable -- off for two days, or on all day.
+# So trigger from three angles and let pipeline.py's --max-age guard collapse
+# the redundancy:
+#
+#   OnBootSec       -- the machine just came up, possibly after days off. This
+#                      is when data is staleest and someone is most likely to
+#                      open the viewer, so refresh promptly.
+#   OnUnitActiveSec -- it has stayed on; keep it fresh through the day.
+#                      Monotonic, so it measures actual uptime, not wall clock.
+#   OnCalendar      -- a realtime anchor. Unlike the monotonic timers this
+#                      still fires after a suspend/resume cycle, which a
+#                      laptop does far more often than it cold-boots.
+#
+# Persistent=true makes the calendar trigger catch up one missed window at
+# next boot rather than silently skipping it.
+OnBootSec=5min
+OnUnitActiveSec=6h
+OnCalendar=*-*-* 07,19:00:00
+Persistent=true
+# Don't hit Compass at a robotic exact second.
+RandomizedDelaySec=15m
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

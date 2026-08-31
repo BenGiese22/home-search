@@ -1,0 +1,26 @@
+[Unit]
+Description=home-search pipeline (scrape, score, publish)
+Documentation=file:///home/bengi/code/home-search/ops/systemd/README.md
+# Every stage talks to the network; starting before DNS is up just wastes a run.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Load-bearing: every script resolves data/ and .env relative to cwd.
+WorkingDirectory=/home/bengi/code/home-search
+# publish.py shells out to the `vercel` CLI and fails fast without it, so the
+# systemd PATH must include it. Verified 2026-08-30: /usr/bin/vercel, covered
+# by /usr/bin below. Re-check with `which vercel` if publish starts failing.
+Environment=PATH=/home/bengi/code/home-search/venv/bin:/usr/local/bin:/usr/bin:/bin
+# --max-age=5h makes the several triggers below idempotent: whichever fires
+# first does the work, the rest find a recent success and exit 0. Slightly
+# under the 6h interval so a scheduled run is never skipped by rounding.
+ExecStart=/home/bengi/code/home-search/venv/bin/python pipeline.py --max-age=5h
+# A photo-scoring batch can legitimately run for hours; do not kill it.
+TimeoutStartSec=6h
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target
