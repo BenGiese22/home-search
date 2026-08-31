@@ -2,7 +2,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.db import delete_listing, parse_price
+from src.db import bulk_delete_listings, delete_listing, parse_price
 from src.models import Listing
 from src.photos import delete_photos
 from src.store import delete_stored_listing
@@ -112,13 +112,38 @@ def apply_delisting(
     cascade only lives in one place. A failure on one listing (e.g. a
     locked database) is logged and skipped rather than aborting the rest
     of the batch, matching every other per-item loop in this codebase."""
-    for listing_id in delisted_ids:
+    if not delisted_ids:
+        return
+    # Fast path: one statement per table, child-first, rather than a
+    # delete_listing() per listing -- against Turso the per-listing form is
+    # ~7 round-trips each.
+    try:
+        bulk_delete_listings(conn, delisted_ids)
+        removed = list(delisted_ids)
+    except Exception as exc:
+        # Falling back per listing preserves the property the batched form
+        # gives up: one undeletable listing (a locked database, a constraint
+        # violation) must not strand the rest of the batch.
+        print(f"batched delisting failed ({exc}); retrying one at a time")
+        removed = []
+        for listing_id in delisted_ids:
+            try:
+                delete_listing(conn, listing_id)
+            except Exception as inner:
+                print(f"skip delisting (failed to remove {listing_id}): {inner}")
+                continue
+            removed.append(listing_id)
+
+    # Only clean up files for listings actually gone from the database.
+    # Deleting a listing's photos while its row survives would leave a
+    # tracked listing with no images and no way to notice.
+    for listing_id in removed:
         try:
-            delete_listing(conn, listing_id)
             delete_photos(photos_dir, listing_id)
             delete_stored_listing(store_dir, listing_id)
         except Exception as exc:
-            print(f"skip delisting (failed to remove {listing_id}): {exc}")
+            print(f"delisted {listing_id} from the database, but its local "
+                  f"files could not be removed: {exc}")
             continue
         print(f"delisted: {listing_id}")
 

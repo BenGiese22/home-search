@@ -195,13 +195,34 @@ class BatchRowErrors(Exception):
         super().__init__(f"{len(rows)} row(s) failed to sync into {table}")
 
 
-# Rows per batched statement. CHUNK x (widest table's column count) must stay
-# under SQLite's 999-variable default, which test_batch_chunk_stays_inside_
-# sqlites_variable_limit enforces. `listings` reached 23 columns when the
-# structured fields landed, and 50 x 23 = 1150 would have silently broken
-# every Turso upsert -- lowered to 30 (30 x 23 = 690), which also leaves room
-# for ~10 more columns before this needs revisiting. The cost is a few more
-# round trips per sync, which is nothing against an 85-row corpus.
+# SQLite's default limit on bound variables in one statement. Exceeding it
+# does not degrade -- it fails outright, and it failed for real once:
+# `listings` reached 23 columns when the structured fields landed, and a
+# fixed chunk of 50 would have meant 1,150 variables and a broken write path.
+MAX_SQL_VARIABLES = 999
+
+# Upper bound on rows per statement regardless of how narrow the table is.
+# Nothing here needs statements larger than this, and keeping them bounded
+# keeps a single failed chunk cheap to retry row by row.
+MAX_ROWS_PER_STATEMENT = 200
+
+
+def chunk_size(column_count: int) -> int:
+    """Rows per batched statement for a table of this width.
+
+    Derived rather than fixed. A single constant has to be tuned for the
+    widest table (`listings`, 23 columns), which then makes narrow tables pay
+    for width they do not have: `amenities` has 2 columns, so a chunk of 30
+    uses 60 of the 999 available variables and issues 17x more statements
+    than it needs. At ~240ms per statement that is real minutes.
+    """
+    if column_count <= 0:
+        return MAX_ROWS_PER_STATEMENT
+    return max(1, min(MAX_ROWS_PER_STATEMENT, MAX_SQL_VARIABLES // column_count))
+
+
+# Retained as the conservative rows-per-statement figure for the widest
+# mirrored table; chunk_size() supersedes it for width-aware batching.
 BATCH_CHUNK = 30
 
 
@@ -218,9 +239,10 @@ def upsert_rows(conn, table: str, rows: list[sqlite3.Row]) -> None:
     col_list = ", ".join(columns)
     one = "(" + ", ".join("?" for _ in columns) + ")"
     failed_rows: list = []
+    rows_per_statement = chunk_size(len(columns))
 
-    for start in range(0, len(rows), BATCH_CHUNK):
-        chunk = rows[start:start + BATCH_CHUNK]
+    for start in range(0, len(rows), rows_per_statement):
+        chunk = rows[start:start + rows_per_statement]
         values: list[object] = []
         for row in chunk:
             values.extend(row[c] for c in columns)

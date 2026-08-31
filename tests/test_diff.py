@@ -193,6 +193,13 @@ def test_apply_delisting_continues_past_a_failure(tmp_path: Path, monkeypatch, c
     other = SAMPLE.__class__(**{**SAMPLE.__dict__, "listing_id": "other456"})
     upsert_listing(conn, other)
 
+    # Delisting now takes a batched fast path; this exercises the per-listing
+    # fallback that preserves "one bad listing must not strand the rest".
+    def failing_bulk(conn, listing_ids):
+        raise Exception("database is locked")
+
+    monkeypatch.setattr(diff_module, "bulk_delete_listings", failing_bulk)
+
     real_delete_listing = diff_module.delete_listing
     calls = []
 
@@ -305,3 +312,32 @@ def test_run_delisting_prints_nothing_when_nothing_delisted(tmp_path: Path, caps
     run_delisting(conn, tmp_path / "photos", tmp_path / "listings", True, report, {}, frozenset())
 
     assert capsys.readouterr().out == ""
+
+
+def test_files_are_not_removed_for_a_listing_whose_db_delete_failed(tmp_path, monkeypatch):
+    """A listing whose row survives must keep its photos. Deleting them while
+    the listing is still tracked leaves it image-less with nothing to signal
+    why -- and the JSON store is what a re-scrape checks to decide whether the
+    listing needs fetching at all."""
+    from src import diff as diff_module
+
+    conn = get_connection(tmp_path / "listings.db")
+    upsert_listing(conn, SAMPLE)
+
+    photos_dir = tmp_path / "photos" / SAMPLE.listing_id
+    photos_dir.mkdir(parents=True)
+    (photos_dir / "01.jpg").write_bytes(b"x")
+
+    def failing_bulk(conn, listing_ids):
+        raise Exception("database is locked")
+
+    def failing_single(conn, listing_id):
+        raise Exception("database is locked")
+
+    monkeypatch.setattr(diff_module, "bulk_delete_listings", failing_bulk)
+    monkeypatch.setattr(diff_module, "delete_listing", failing_single)
+
+    apply_delisting(conn, tmp_path / "photos", tmp_path / "listings", [SAMPLE.listing_id])
+
+    assert (photos_dir / "01.jpg").exists(), "photos removed for a listing still in the db"
+    assert [row["listing_id"] for row in query_listings(conn)] == [SAMPLE.listing_id]
