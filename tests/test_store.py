@@ -1,7 +1,8 @@
+import json
 from pathlib import Path
 
 from src.models import Listing
-from src.store import delete_stored_listing, is_scraped, load_all_listings, save_listing
+from src.store import needs_field_backfill, delete_stored_listing, is_scraped, load_all_listings, save_listing
 
 SAMPLE = Listing(
     listing_id="abc123",
@@ -61,3 +62,31 @@ def test_delete_stored_listing_removes_file(tmp_path: Path):
 
 def test_delete_stored_listing_is_safe_when_file_missing(tmp_path: Path):
     delete_stored_listing(tmp_path, "nope")  # should not raise
+
+
+def test_needs_field_backfill_true_when_key_absent(tmp_path: Path):
+    """A listing stored before the field existed has no such key at all."""
+    (tmp_path / "abc.json").write_text(json.dumps({"listing_id": "abc", "address": "x"}))
+    assert needs_field_backfill(tmp_path, "abc", ("tax_annual",)) is True
+
+
+def test_needs_field_backfill_true_when_value_is_null(tmp_path: Path):
+    (tmp_path / "abc.json").write_text(json.dumps({"listing_id": "abc", "tax_annual": None}))
+    assert needs_field_backfill(tmp_path, "abc", ("tax_annual",)) is True
+
+
+def test_needs_field_backfill_false_when_all_fields_present(tmp_path: Path):
+    (tmp_path / "abc.json").write_text(
+        json.dumps({"listing_id": "abc", "tax_annual": 4407.0, "hoa_annual": 0.0})
+    )
+    assert needs_field_backfill(tmp_path, "abc", ("tax_annual", "hoa_annual")) is False
+
+
+def test_needs_field_backfill_false_for_unscraped_listing(tmp_path: Path):
+    """New work, not backfill -- the normal is_scraped path handles it."""
+    assert needs_field_backfill(tmp_path, "nope", ("tax_annual",)) is False
+
+
+def test_needs_field_backfill_true_for_corrupt_store_file(tmp_path: Path):
+    (tmp_path / "abc.json").write_text("{not json")
+    assert needs_field_backfill(tmp_path, "abc", ("tax_annual",)) is True

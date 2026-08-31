@@ -1,10 +1,11 @@
 import csv
+import json
 import sys
 from pathlib import Path
 
 from src.db import get_amenities, get_commute, get_connection, get_visual_score, query_listings, upsert_score
 from src.models import Listing
-from src.scoring import compute_collection_stats, score_listing
+from src.scoring import compute_collection_stats, finished_sqft, score_listing
 
 DATA_DIR = Path("data")
 DB_PATH = DATA_DIR / "listings.db"
@@ -78,6 +79,10 @@ def _row_to_listing(row, amenities: list[str]) -> Listing:
         photo_urls=[],
         listing_url=row["listing_url"],
         hoa_annual=row["hoa_annual"],
+        tax_annual=row["tax_annual"],
+        sqft_above_grade=row["sqft_above_grade"],
+        sqft_below_grade=row["sqft_below_grade"],
+        outdoor_spaces=json.loads(row["outdoor_spaces"] or "[]"),
     )
 
 
@@ -90,7 +95,10 @@ def main() -> None:
     price_numeric_by_id = {row["listing_id"]: row["price_numeric"] for row in rows}
 
     commute_by_id = {listing.listing_id: get_commute(conn, listing.listing_id) for listing in listings}
-    sqft_values = [listing.sqft for listing in listings if listing.sqft]
+    # Normalize against finished area, matching what score_sqft now scores --
+    # mixing a total-footprint min/max with finished-area inputs would skew
+    # every listing's percentile.
+    sqft_values = [finished_sqft(listing) for listing in listings if finished_sqft(listing)]
     denver_minutes_values = [
         commute["denver_minutes"]
         for commute in commute_by_id.values()

@@ -20,7 +20,7 @@ from src.scraper import (
     fetch_collection_listings,
     scrape_listing,
 )
-from src.store import is_scraped, load_all_listings, save_listing
+from src.store import is_scraped, load_all_listings, needs_field_backfill, save_listing
 
 DATA_DIR = Path("data")
 PHOTOS_DIR = DATA_DIR / "photos"
@@ -59,6 +59,17 @@ def _build_fetch_bytes(page: Page):
     return fetch_bytes
 
 
+# Fields introduced after listings were first scraped; --backfill-missing
+# uses these to decide which stored listings are stale. Add to this tuple
+# whenever a new extracted field lands, so one flag keeps working.
+BACKFILL_FIELDS = (
+    "hoa_annual",
+    "tax_annual",
+    "sqft_above_grade",
+    "outdoor_spaces",
+)
+
+
 def _save_listing(listing: Listing, skip_photos: bool, page: Page) -> None:
     """Download photos (unless skipped) and persist a scraped Listing.
     Safe to call again for an already-scraped listing (see --force): the
@@ -88,6 +99,11 @@ def main() -> None:
     limit = _parse_limit(sys.argv)
     new_listing_only = "--new-listing" in sys.argv
     force = "--force" in sys.argv
+    # Fields added after the initial scrape. --backfill-missing re-processes
+    # only the listings whose stored JSON predates them, which is the cheap
+    # alternative to --force: same one collection API pass, but it skips the
+    # photo download and store rewrite for listings that already have the data.
+    backfill_missing = "--backfill-missing" in sys.argv
     config = load_config(dotenv_values(".env"))
     db_conn = get_connection(DB_PATH)
     # Snapshot BEFORE any upserts this run touch the DB -- including the
@@ -194,8 +210,19 @@ def main() -> None:
                     f"{len(present_listings)} active/pinned listings this run"
                 )
 
+            if backfill_missing:
+                stale = [
+                    listing for listing in to_process
+                    if needs_field_backfill(STORE_DIR, listing.listing_id, BACKFILL_FIELDS)
+                ]
+                print(
+                    f"--backfill-missing: {len(stale)} of {len(to_process)} listings "
+                    f"are missing one of {', '.join(BACKFILL_FIELDS)}"
+                )
+                to_process = stale
+
             for listing in to_process:
-                if not force and is_scraped(STORE_DIR, listing.listing_id):
+                if not force and not backfill_missing and is_scraped(STORE_DIR, listing.listing_id):
                     print(f"skip (already scraped): {listing.address}")
                     continue
                 try:

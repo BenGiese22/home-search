@@ -24,6 +24,22 @@ def render_gallery(listings: list[Listing], photos_root: Path, gallery_dir: Path
         # Omitted entirely when unknown -- showing "HOA: unknown" on ~95%
         # of listings would be noise, but a confirmed absence is worth
         # calling out since it's a genuine positive.
+        tax_html = (
+            "" if listing.tax_annual is None
+            else f"\n          <p>Taxes ${listing.tax_annual:,.0f}/yr</p>"
+        )
+        if listing.sqft_above_grade is None:
+            finished_html = ""
+        else:
+            finished = listing.sqft_above_grade + (listing.sqft_below_grade or 0)
+            basement = "no basement" if listing.sqft_below_grade is None else (
+                f"{listing.sqft_below_grade:,} finished below grade"
+            )
+            finished_html = f"\n          <p>{finished:,} sqft finished &middot; {basement}</p>"
+        outdoor_html = (
+            f"\n          <p>Outdoor: {html.escape(', '.join(listing.outdoor_spaces))}</p>"
+            if listing.outdoor_spaces else ""
+        )
         if listing.hoa_annual is None:
             hoa_html = ""
         elif listing.hoa_annual == 0:
@@ -37,7 +53,7 @@ def render_gallery(listings: list[Listing], photos_root: Path, gallery_dir: Path
           <h2>{address}, {city}, {state} {zip_code}</h2>
           <p>{price} &middot; {listing.beds} bd &middot; {listing.baths} ba &middot; {listing.sqft} sqft &middot; {listing.lot_sqft} lot sqft &middot; {listing.parking_spaces} parking</p>
           <p>{description}</p>
-          <p>Amenities: {amenities}</p>{hoa_html}
+          <p>Amenities: {amenities}</p>{hoa_html}{tax_html}{finished_html}{outdoor_html}
           <p><a href="{listing_url}">View on Compass</a></p>
           <div class="photos">{photos_html}</div>
         </section>"""
