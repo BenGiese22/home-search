@@ -1,5 +1,6 @@
 # score_photos.py
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -280,11 +281,24 @@ def main() -> None:
         print(f"resuming {len(submitted_batches)} already-submitted batch(es) (found {BATCH_STATE_PATH})")
 
     listings_by_id = {row["listing_id"]: row for row in query_listings(conn)}
+    # --rescore-all re-scores every listing, not just those without a score.
+    # Needed whenever the prompt or the rubric changes: without it, a corpus
+    # ends up scored under two different prompts, and a ranking built on a
+    # mixed rubric is wrong in a way nothing surfaces. It costs real money
+    # (every listing pays the vision API again), so it is opt-in.
+    # already_submitted_ids is still honoured -- the checkpoint's whole job is
+    # making sure an interrupted run never pays for the same listing twice.
+    rescore_all = "--rescore-all" in sys.argv
+    candidate_ids = (
+        list(listings_by_id) if rescore_all else get_listing_ids_missing_visual_score(conn)
+    )
     missing_ids = [
         listing_id
-        for listing_id in get_listing_ids_missing_visual_score(conn)
+        for listing_id in candidate_ids
         if listing_id not in already_submitted_ids
     ]
+    if rescore_all:
+        print(f"--rescore-all: re-scoring {len(missing_ids)} listing(s)")
 
     pending_entries = []  # (listing_id, request, garage_expected, size_estimate)
     for listing_id in missing_ids:
