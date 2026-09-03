@@ -5,12 +5,11 @@ from pathlib import Path
 from playwright.sync_api import Page
 
 from src.auth import launch_authenticated_page
-from src.backfill import dedupe_by_listing_id
 from src.config import load_config, load_env
 from src.turso_db import stage_connection
 from src.db import get_pinned_listing_ids, upsert_listing
 from src.photos import download_photos
-from src.scraper import fetch_collection_listings
+from src.scraper import fetch_collection_tabs
 from src.store import is_scraped, save_listing
 
 DATA_DIR = Path("data")
@@ -52,13 +51,12 @@ def main() -> None:
     pinned_ids = get_pinned_listing_ids(db_conn)
 
     with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
-        try:
-            fetched = fetch_collection_listings(page, config.collection_url)
-        except Exception as exc:
-            print(f"failed to fetch collection {config.collection_url}: {exc}")
-            fetched = []
-
-        fetched = dedupe_by_listing_id(fetched)
+        fetch = fetch_collection_tabs(
+            page, config.collection_url, config.collection_tabs
+        )
+        for tab, exc in fetch.errors.items():
+            print(f"failed to fetch collection/{tab}: {exc}")
+        fetched = fetch.listings
         print(f"fetched {len(fetched)} listings from the collection\n")
 
         fetch_bytes = _build_fetch_bytes(page)

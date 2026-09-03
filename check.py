@@ -4,9 +4,9 @@ from src.auth import launch_authenticated_page
 from src.config import load_config, load_env
 from src.turso_db import stage_connection
 from src.db import get_pinned_listing_ids, get_price_snapshot, upsert_listing
-from src.diff import compute_changes, format_report, run_delisting
+from src.diff import collection_fetch_is_trustworthy, compute_changes, format_report, run_delisting
 from src.models import is_active_status
-from src.scraper import derive_pinned_ids_from_urls, fetch_collection_listings
+from src.scraper import derive_pinned_ids_from_urls, fetch_collection_tabs
 
 DATA_DIR = Path("data")
 PHOTOS_DIR = DATA_DIR / "photos"
@@ -32,13 +32,17 @@ def main() -> None:
     before = get_price_snapshot(db_conn)
 
     with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
-        try:
-            fetched = fetch_collection_listings(page, config.collection_url)
-            fetch_succeeded = True
-        except Exception as exc:
-            print(f"failed to fetch collection {config.collection_url}: {exc}")
-            fetched = []
-            fetch_succeeded = False
+        fetch = fetch_collection_tabs(
+            page, config.collection_url, config.collection_tabs
+        )
+        for tab, count in fetch.counts.items():
+            print(f"collection/{tab} returned {count} listings")
+        for tab, exc in fetch.errors.items():
+            print(f"failed to fetch collection/{tab}: {exc}")
+        fetched = fetch.listings
+        # Without this check.py would treat every favorites-only listing as
+        # absent and delist it -- it runs the same cascade scrape.py does.
+        fetch_succeeded = collection_fetch_is_trustworthy(fetch, before)
 
     # A listing whose fresh status comes back non-Active (Expired, Sold,
     # Withdrawn, ...) is treated as absent from the collection for

@@ -658,3 +658,66 @@ canary is the real decision**, and gate 4 needs a throwaway database.
 Nothing here argues for building the cron and the runner before the canary
 has run, because the canary is the cheap way to learn the one thing that
 would make the whole phase pointless.
+
+## 2026-09-03 — Favorites were never being scraped
+
+Ben asked whether the `/favorites` tab was being picked up alongside
+`/matches`. It was not, and had never been.
+
+Compass serves every tab of a collection — `/matches`, `/favorites`,
+`/notInterested` — from one collection ID. The tab is chosen by a
+`listingsFilter` integer inside the API query, not by the URL path.
+`fetch_collection_listings` hardcoded `listingsFilter: 0`, and
+`extract_collection_id` kept only the ID and threw the path away. So
+`COMPASS_COLLECTION_URL` could be pointed at `/favorites` and would keep
+returning matches, silently. That is the part worth remembering: the config
+looked like it worked.
+
+Verified live by intercepting the SPA's own requests:
+
+| tab | listingsFilter | reviewStage | count |
+|---|---|---|---|
+| matches | 0 | 0 | 149 |
+| favorites | 1 | 2 | 26 |
+| (unnamed) | 2 | 3 | 22 |
+| notInterested | 3 | 1 | 277 |
+
+26 favorites were missing; 11 still active, 10 of those absent from the DB
+entirely and never scored or published.
+
+### Decisions
+
+**The URL is validated, not obeyed.** Tabs come from `COLLECTION_TABS` in
+code, defaulting to `favorites,matches`, overridable with
+`COMPASS_COLLECTION_TABS`. The URL's tab segment is checked and a wrong one
+raises. Deriving the filter from the path was rejected: the requirement is a
+*set* of tabs against one ID, and an untouched `/matches` `.env` has to start
+fetching favorites — which already contradicts literal URL semantics. Naming
+`notInterested` anywhere raises rather than falling back to matches; silently
+fetching something else is the exact bug being removed.
+
+**Favorites outranks matches on dedup.** Only Ben or Megan move a listing
+into favorites, and only they move it back out; matches is just "the saved
+search matched it". Config orders tabs by `TAB_PRECEDENCE` before fetching,
+so first-wins dedup keeps the favorites copy however the tabs were typed.
+
+**Delisting trusts a fetch only when every tab succeeded.** `any()` is
+provably unsafe: favorites failing while matches succeeds makes all 10
+favorites-only listings look delisted, and 10/159 = 6% sails under
+`MAX_DELISTED_FRACTION` — wiping the bucket, then re-adding them next run
+with photos re-downloaded and scores lost. The reverse case only survives by
+the accident that 139/159 trips the fraction. A tab returning zero listings
+counts as failed for the same reason: an empty 200 OK is invisible to a
+global fraction when the empty tab is the small one.
+
+**`check.py` shipped in the same change.** It runs the same delisting
+cascade off its own fetch. Teaching only `scrape.py` about favorites would
+have left `check.py` deleting all 10 on its next run — 6%, under the
+breaker. `backfill_photos.py` fetches too and moved over with it.
+
+### Residual gap
+
+A tab returning *anomalously few but non-zero* results (2 of 11 favorites) is
+still under-detected by the global fraction. A real per-tab denominator needs
+the source tab persisted per listing, which is a schema change against Turso.
+Recorded in `backlog.md` rather than built.

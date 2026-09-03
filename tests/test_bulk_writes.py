@@ -358,3 +358,36 @@ def test_delisting_still_works_without_a_hosted_photos_table(tmp_path):
     bulk_delete_listings(conn, ["L0001"])  # must not raise
 
     assert query_listings(conn) == []
+
+
+# --- duplicates across collection tabs -------------------------------------
+
+def test_duplicate_listing_in_one_batch_doubles_child_rows():
+    """Why dedup must happen before the upsert, not just before the diff.
+
+    `listings` is INSERT OR REPLACE on a primary key, so a duplicate is
+    harmless there. `amenities` and `photo_urls` have no unique constraint
+    (see _SCHEMA), so the same listing twice in one batch silently doubles
+    both. A listing sitting in favorites and matches at once -- 12307 Utica
+    Street, today -- is exactly that input.
+    """
+    conn = _fk_conn()
+    listing = _listing(1, amenities=3, photos=4)
+
+    bulk_upsert_listings(conn, [listing, listing])
+
+    assert conn.execute("SELECT COUNT(*) FROM listings").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM amenities").fetchone()[0] == 6
+    assert conn.execute("SELECT COUNT(*) FROM photo_urls").fetchone()[0] == 8
+
+
+def test_dedupe_before_upsert_keeps_child_rows_correct():
+    from src.backfill import dedupe_by_listing_id
+
+    conn = _fk_conn()
+    listing = _listing(1, amenities=3, photos=4)
+
+    bulk_upsert_listings(conn, dedupe_by_listing_id([listing, listing]))
+
+    assert conn.execute("SELECT COUNT(*) FROM amenities").fetchone()[0] == 3
+    assert conn.execute("SELECT COUNT(*) FROM photo_urls").fetchone()[0] == 4

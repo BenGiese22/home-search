@@ -73,6 +73,35 @@ def format_report(report: ChangeReport) -> str:
     return "\n".join(lines)
 
 
+def collection_fetch_is_trustworthy(fetch, before) -> bool:
+    """Whether a multi-tab collection fetch is complete enough to delist from.
+
+    This computes the `fetch_succeeded` flag that should_apply_delisting
+    already gates on; the fraction check below is unchanged and still applies
+    on top of it.
+
+    The rule is `all tabs succeeded`, and the asymmetry matters. Suppose
+    favorites (~26) fails while matches (~149) succeeds: the merged fetch is
+    just the matches, so every favorites-only listing looks delisted -- but
+    that is only ~6% of everything tracked, which sails under
+    MAX_DELISTED_FRACTION and would wipe the entire favorites bucket. The next
+    run would re-add them as new listings, re-downloading photos and losing
+    their scores. The reverse case (matches fails) only survives today by the
+    accident that 139/159 happens to trip the fraction.
+
+    A tab returning zero listings gets the same treatment for the same reason:
+    an empty 200 OK -- the exact failure the fraction guard was built for --
+    is invisible to a global fraction when the empty tab is the small one. Not
+    delisting for a run is cheap; deleting a bucket's photos and scores is not.
+    """
+    if fetch.errors:
+        return False
+    # Bootstrap: nothing tracked yet, so there is nothing to wrongly delete.
+    if before and any(count == 0 for count in fetch.counts.values()):
+        return False
+    return True
+
+
 MAX_DELISTED_FRACTION = 0.5
 
 

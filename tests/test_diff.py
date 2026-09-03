@@ -2,6 +2,7 @@ from pathlib import Path
 
 from src.db import get_connection, query_listings, upsert_listing
 from src.diff import (
+    collection_fetch_is_trustworthy,
     apply_delisting,
     compute_changes,
     format_report,
@@ -341,3 +342,93 @@ def test_files_are_not_removed_for_a_listing_whose_db_delete_failed(tmp_path, mo
 
     assert (photos_dir / "01.jpg").exists(), "photos removed for a listing still in the db"
     assert [row["listing_id"] for row in query_listings(conn)] == [SAMPLE.listing_id]
+
+
+# --- multi-tab fetch trust -------------------------------------------------
+#
+# The delisting cascade acts on "listings that were tracked and are no longer
+# in the fetch". With two tabs, a tab that merely failed produces exactly that
+# input for its whole bucket, so the trust gate below is what stands between a
+# flaky request and deleting every favorite's rows, photos and scores.
+
+class StubFetch:
+    def __init__(self, counts, errors=None):
+        self.counts = counts
+        self.errors = errors or {}
+
+
+MATCH_IDS = [f"m{i}" for i in range(149)]
+FAV_ONLY_IDS = [f"f{i}" for i in range(10)]
+
+
+def _snapshot(ids):
+    return {lid: ("$650,000", 650000.0) for lid in ids}
+
+
+def test_every_tab_ok_is_trustworthy():
+    fetch = StubFetch(counts={"favorites": 26, "matches": 149})
+    assert collection_fetch_is_trustworthy(fetch, _snapshot(MATCH_IDS)) is True
+
+
+def test_any_failed_tab_is_not_trustworthy():
+    fetch = StubFetch(counts={"matches": 149}, errors={"favorites": "boom"})
+    assert collection_fetch_is_trustworthy(fetch, _snapshot(MATCH_IDS)) is False
+
+
+def test_empty_tab_with_listings_already_tracked_is_not_trustworthy():
+    """A 200 OK returning zero listings is the failure the fraction guard was
+    built for, but an empty favorites tab is only ~6% of everything tracked --
+    invisible to a global fraction."""
+    fetch = StubFetch(counts={"favorites": 0, "matches": 149})
+    assert collection_fetch_is_trustworthy(fetch, _snapshot(MATCH_IDS)) is False
+
+
+def test_empty_tab_on_a_cold_start_is_trustworthy():
+    fetch = StubFetch(counts={"favorites": 0, "matches": 0})
+    assert collection_fetch_is_trustworthy(fetch, before={}) is True
+
+
+def test_failed_favorites_tab_cannot_delist_the_favorites_bucket():
+    """The regression guard. Favorites fails, matches succeeds: all 10
+    favorites-only listings look delisted, and 10/159 = 6% sails under
+    MAX_DELISTED_FRACTION. Only the trust gate stops the wipe."""
+    before = _snapshot(MATCH_IDS + FAV_ONLY_IDS)
+    fetched = [Listing(**{**SAMPLE.__dict__, "listing_id": lid}) for lid in MATCH_IDS]
+    report = compute_changes(fetched, before)
+
+    assert set(report.delisted_ids) == set(FAV_ONLY_IDS)
+    # The fraction check alone would happily allow it ...
+    assert should_apply_delisting(True, report, before, frozenset()) is True
+    # ... so the trust gate is what has to say no.
+    fetch = StubFetch(counts={"matches": 149}, errors={"favorites": "boom"})
+    trustworthy = collection_fetch_is_trustworthy(fetch, before)
+    assert should_apply_delisting(trustworthy, report, before, frozenset()) is False
+
+
+def test_failed_matches_tab_cannot_delist_either():
+    """The mirror case survives today only by the accident that 149/159 trips
+    the fraction. Do not rely on that proportion holding."""
+    before = _snapshot(MATCH_IDS + FAV_ONLY_IDS)
+    fetched = [Listing(**{**SAMPLE.__dict__, "listing_id": lid}) for lid in FAV_ONLY_IDS]
+    report = compute_changes(fetched, before)
+    fetch = StubFetch(counts={"favorites": 10}, errors={"matches": "boom"})
+    trustworthy = collection_fetch_is_trustworthy(fetch, before)
+    assert should_apply_delisting(trustworthy, report, before, frozenset()) is False
+
+
+def test_first_run_with_favorites_adds_without_delisting():
+    """Rolling this out is purely additive: favorites only widen the fetched
+    set, so nothing looks absent and the breaker never engages."""
+    before = _snapshot(MATCH_IDS)
+    fetched = [
+        Listing(**{**SAMPLE.__dict__, "listing_id": lid})
+        for lid in FAV_ONLY_IDS + MATCH_IDS
+    ]
+    report = compute_changes(fetched, before)
+
+    assert {l.listing_id for l in report.new_listings} == set(FAV_ONLY_IDS)
+    assert report.delisted_ids == []
+    fetch = StubFetch(counts={"favorites": 26, "matches": 149})
+    assert should_apply_delisting(
+        collection_fetch_is_trustworthy(fetch, before), report, before, frozenset()
+    ) is True
