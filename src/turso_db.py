@@ -161,6 +161,82 @@ def ensure_schema(conn) -> None:
         conn.commit()
 
 
+# A libsql stream is server-side state addressed by a "baton". The server
+# drops an idle one, and the next statement then fails with
+# "HTTP status 404: stream not found". The driver resets its baton on any
+# failure and documents that the next statement opens a fresh stream,
+# explicitly leaving the retry decision to the application -- this is that
+# decision.
+#
+# Found by gate 4, not by reasoning: a sandbox scrape bulk-wrote 88 listings,
+# spent minutes downloading photos, and died on the query_listings() that
+# starts the upload step. It is timing-dependent, which is why the first run
+# passed and the second failed. score_photos.py is the worst case -- a vision
+# batch can idle for hours before it writes anything.
+STREAM_GONE_MARKERS = frozenset({
+    "stream not found",
+    "stream expired",
+    "invalid baton",
+    "baton not found",
+})
+
+
+def is_stream_gone(exc: Exception) -> bool:
+    """True when this error means the server dropped our stream, rather than
+    the statement itself being wrong. Deliberately narrow: retrying a
+    constraint violation or a bad table name just fails twice and muddies the
+    traceback."""
+    message = str(exc).lower()
+    return any(marker in message for marker in STREAM_GONE_MARKERS)
+
+
+class _StreamRecoveringConnection:
+    """Retries a statement once when the server dropped an idle stream.
+
+    Never retries inside a transaction. When a stream dies the server rolls
+    its transaction back, so re-running one statement of a multi-statement
+    write would commit a fragment of it -- a listings row whose amenities
+    never landed. Failing loudly is correct there: every write in this
+    project is an idempotent upsert, so repeating the run converges, while a
+    half-applied batch does not announce itself.
+    """
+
+    def __init__(self, conn):
+        object.__setattr__(self, "_conn", conn)
+
+    def execute(self, sql, parameters=()):
+        conn = self._conn
+        in_transaction = getattr(conn, "in_transaction", False)
+        try:
+            return conn.execute(sql, parameters)
+        except Exception as exc:
+            if in_transaction or not is_stream_gone(exc):
+                raise
+            # The driver has already discarded the dead baton, so this call
+            # opens a fresh stream. One retry only: a stream that will not
+            # come back is a real outage, and retrying forever would hang.
+            return conn.execute(sql, parameters)
+
+    # Everything else is the underlying connection's own behaviour.
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __setattr__(self, name, value):
+        setattr(self._conn, name, value)
+
+    def __enter__(self):
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, *exc_info):
+        return self._conn.__exit__(*exc_info)
+
+
+def with_stream_recovery(conn):
+    """Wrap a connection so an expired stream costs one retry, not a run."""
+    return _StreamRecoveringConnection(conn)
+
+
 def stage_connection(
     env: Mapping[str, str] | None = None,
     connect_fn: Callable = turso_serverless.connect,
@@ -178,7 +254,7 @@ def stage_connection(
     looks like when it goes unnoticed; three seconds a stage to make that
     structurally impossible is the right trade.
     """
-    conn = connect(env, connect_fn)
+    conn = with_stream_recovery(connect(env, connect_fn))
     ensure_schema(conn)
     return conn
 
