@@ -5,6 +5,7 @@ from collections.abc import Collection
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.backfill import dedupe_by_listing_id
 from src.commute import CommuteResult
 from src.models import Listing
 from src.scoring import ScoreResult
@@ -373,9 +374,20 @@ def bulk_upsert_listings(
     pinned_ids must carry the CURRENT pin status of every listing in the
     batch, for the same reason upsert_listing takes is_pinned: this is a full
     row replace, so a listing absent from pinned_ids is actively un-pinned.
+
+    Duplicates are removed first. `listings` is INSERT OR REPLACE on a primary
+    key so a repeat is harmless there, but `amenities` and `photo_urls` have
+    no unique constraint -- the same listing twice would silently double both,
+    with no error and no constraint violation to notice. That is not a
+    hypothetical: a listing can sit in the favorites and matches tabs at once,
+    and both copies arrive in one batch. Callers deduping first is not enough
+    protection for a failure this quiet. First-wins, matching
+    dedupe_by_listing_id, so the two dedup paths can never disagree about
+    which copy survives.
     """
     if not listings:
         return
+    listings = dedupe_by_listing_id(listings)
     pinned = set(pinned_ids)
     listing_ids = [listing.listing_id for listing in listings]
 
