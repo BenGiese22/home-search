@@ -362,14 +362,17 @@ def test_delisting_still_works_without_a_hosted_photos_table(tmp_path):
 
 # --- duplicates across collection tabs -------------------------------------
 
-def test_duplicate_listing_in_one_batch_doubles_child_rows():
-    """Why dedup must happen before the upsert, not just before the diff.
-
-    `listings` is INSERT OR REPLACE on a primary key, so a duplicate is
+def test_a_duplicate_listing_in_one_batch_does_not_double_child_rows():
+    """`listings` is INSERT OR REPLACE on a primary key, so a duplicate is
     harmless there. `amenities` and `photo_urls` have no unique constraint
-    (see _SCHEMA), so the same listing twice in one batch silently doubles
-    both. A listing sitting in favorites and matches at once -- 12307 Utica
-    Street, today -- is exactly that input.
+    (see _SCHEMA), so a naive implementation silently doubles both -- and a
+    listing sitting in favorites and matches at once is exactly that input.
+
+    This used to be the documented behaviour, with every caller responsible
+    for deduping first. That contract is too easy to break now that a listing
+    legitimately appears in two tabs, and the failure is silent: no error, no
+    constraint, just a listing whose amenities are all duplicated. The
+    function dedupes internally instead.
     """
     conn = _fk_conn()
     listing = _listing(1, amenities=3, photos=4)
@@ -377,8 +380,25 @@ def test_duplicate_listing_in_one_batch_doubles_child_rows():
     bulk_upsert_listings(conn, [listing, listing])
 
     assert conn.execute("SELECT COUNT(*) FROM listings").fetchone()[0] == 1
-    assert conn.execute("SELECT COUNT(*) FROM amenities").fetchone()[0] == 6
-    assert conn.execute("SELECT COUNT(*) FROM photo_urls").fetchone()[0] == 8
+    assert conn.execute("SELECT COUNT(*) FROM amenities").fetchone()[0] == 3
+    assert conn.execute("SELECT COUNT(*) FROM photo_urls").fetchone()[0] == 4
+
+
+def test_internal_dedup_keeps_the_first_copy_like_dedupe_by_listing_id():
+    """First-wins, matching src.backfill.dedupe_by_listing_id, so the two
+    dedup paths cannot disagree about which copy survives. fetch_collection_tabs
+    orders favorites ahead of matches deliberately."""
+    conn = _fk_conn()
+    first = _listing(1, amenities=2, photos=2)
+    first.address = "FAVORITES COPY"
+    second = _listing(1, amenities=5, photos=5)
+    second.address = "MATCHES COPY"
+
+    bulk_upsert_listings(conn, [first, second])
+
+    row = conn.execute("SELECT address FROM listings WHERE listing_id='L0001'").fetchone()
+    assert row["address"] == "FAVORITES COPY"
+    assert conn.execute("SELECT COUNT(*) FROM amenities").fetchone()[0] == 2
 
 
 def test_dedupe_before_upsert_keeps_child_rows_correct():

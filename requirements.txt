@@ -1,7 +1,12 @@
-playwright==1.47.0
-python-dotenv==1.0.1
-beautifulsoup4==4.12.3
-requests==2.32.3
-pytest==8.3.3
-anthropic==0.116.0
-turso_serverless==0.1.0
+# Floors, not pins. The pinned versions could not install on the Vercel
+# Sandbox image's Python 3.14: playwright 1.47.0 pulls a greenlet with no
+# 3.14 wheel, the build fails, and because pip aborts the whole file
+# NOTHING else installs either -- a one-line pin taking down every
+# dependency. Verified working in a sandbox at playwright 1.62.
+playwright>=1.50
+python-dotenv>=1.0.1
+beautifulsoup4>=4.12.3
+requests>=2.32.3
+pytest>=8.3.3
+anthropic>=0.116.0
+turso_serverless>=0.1.0
