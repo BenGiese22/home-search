@@ -16,7 +16,7 @@ from src.db import (
     query_listings,
     upsert_visual_score,
 )
-from src.photos import count_downloaded_photos
+from src.photos import PHOTO_GLOB, count_downloaded_photos
 from src.vision import (
     MIN_PHOTOS_FOR_VISION_SCORING,
     VISUAL_SCORE_SCHEMA,
@@ -310,7 +310,10 @@ def main() -> None:
                 f"{MIN_PHOTOS_FOR_VISION_SCORING})"
             )
             continue
-        photo_paths = sorted((PHOTOS_DIR / listing_id).glob("*.jpg"))
+        # PHOTO_GLOB, not *.jpg: an un-migrated NN.jpg may be a previous
+        # listing's photo at this id, and sending it to the vision API
+        # would score the wrong house and cost real money doing it.
+        photo_paths = sorted((PHOTOS_DIR / listing_id).glob(PHOTO_GLOB))
         amenities = get_amenities(conn, listing_id)
         garage_expected = row["parking_spaces"] > 0
         request = build_batch_request(listing_id, row, amenities, photo_paths)

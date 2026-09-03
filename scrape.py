@@ -19,7 +19,7 @@ from src.db import (
 from src.diff import collection_fetch_is_trustworthy, compute_changes, run_delisting
 from src.gallery import write_gallery
 from src.models import Listing, select_present_listings
-from src.photo_upload import upload_photos
+from src.photo_upload import get_photo_urls_by_listing, upload_photos
 from src.photos import download_photos
 from src.scraper import (
     derive_listing_id_from_url,
@@ -135,16 +135,22 @@ def _upload_photos_for(db_conn) -> None:
     this reuses that connection rather than opening a second one. An upload
     problem must not fail the scrape -- the listings and photos are already
     safely written, and the next run retries.
+
+    The stage passes the current photo URLs, not just the listing ids: a
+    photo's identity is its source URL, and without the map the upload would
+    fall back to "position N is already hosted" -- the key that let 6085 West
+    82nd Drive keep 44 photos from its previous listing. One extra statement
+    for the whole corpus.
     """
     env = load_env()
     if not env.get("BLOB_READ_WRITE_TOKEN"):
         print("skipping photo upload: BLOB_READ_WRITE_TOKEN is not set")
         return
-    listing_ids = [row["listing_id"] for row in query_listings(db_conn)]
-    if not listing_ids:
+    photo_urls = get_photo_urls_by_listing(db_conn)
+    if not photo_urls:
         return
     uploaded, failed = upload_photos(
-        db_conn, PHOTOS_DIR, listing_ids,
+        db_conn, PHOTOS_DIR, photo_urls,
         env["BLOB_READ_WRITE_TOKEN"],
         max_per_listing=MAX_PHOTOS_PER_LISTING,
     )
@@ -325,9 +331,15 @@ def main() -> None:
             report = compute_changes(
                 present_listings, before, pinned_ids=frozenset(pinned_ids)
             )
+            # The blob token is passed so a delisted listing's hosted photos
+            # are reclaimed rather than stranded -- hosted_photos.blob_url is
+            # the only record of them, and pruning the rows without it is how
+            # 1,813 orphans (~371 MB) accumulated. Absent (no token
+            # configured), the URLs are printed instead of lost.
             run_delisting(
                 db_conn, PHOTOS_DIR, STORE_DIR, fetch_succeeded, report, before,
                 frozenset(pinned_ids),
+                blob_token=load_env().get("BLOB_READ_WRITE_TOKEN"),
             )
 
     _upload_photos_for(db_conn)

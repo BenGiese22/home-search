@@ -17,15 +17,19 @@ it is the SDK's internal API and is not in the public REST docs.
 import json
 import sqlite3
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 import requests
 
 import src.blob_upload as blob_upload
+from src.photos import photo_filename
 from src.blob_upload import (
     BLOB_API_URL,
     BLOB_API_VERSION,
+    DELETE_CHUNK_SIZE,
     already_uploaded,
+    delete_blobs,
     upload_photo,
 )
 from src.turso_db import ensure_schema
@@ -63,9 +67,16 @@ class _Response:
         return self._payload
 
 
+# The photo's source URL is its identity: the Blob pathname carries
+# sha1(url)[:8] so a replaced photo lands on a NEW pathname instead of
+# overwriting the old one behind Blob's CDN cache (default max-age one month),
+# which would have left the viewer showing the old image anyway.
+SOURCE_URL = "https://cdn.example.com/abc/1.jpg"
+
+
 @pytest.fixture
 def photo(tmp_path) -> Path:
-    p = tmp_path / "01.jpg"
+    p = tmp_path / photo_filename(1, SOURCE_URL)
     p.write_bytes(b"\xff\xd8\xff-not-really-a-jpeg")
     return p
 
@@ -103,25 +114,41 @@ def test_already_uploaded_true_after_a_row_exists():
 def test_upload_photo_puts_to_the_blob_api_with_the_pathname(photo):
     put, calls = _capture()
 
-    upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+    upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
     assert len(calls) == 1
     assert calls[0]["url"].startswith(BLOB_API_URL)
-    assert "pathname=photos%2Fabc%2F01.jpg" in calls[0]["url"]
+    expected = quote(f"photos/abc/{photo_filename(1, SOURCE_URL)}", safe="")
+    assert f"pathname={expected}" in calls[0]["url"]
 
 
 def test_pathname_is_zero_padded_by_position(photo):
     put, calls = _capture()
 
-    upload_photo(photo, "abc", 7, rw_token=TOKEN, put=put)
+    upload_photo(photo, "abc", 7, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
-    assert "pathname=photos%2Fabc%2F07.jpg" in calls[0]["url"]
+    assert "pathname=photos%2Fabc%2F07-" in calls[0]["url"]
+
+
+def test_a_changed_photo_gets_a_new_pathname_not_an_overwrite(photo):
+    """An overwrite would sit behind Blob's CDN cache -- default
+    cacheControlMaxAge is one month -- so the viewer would keep serving the
+    old image even though the row and the bytes were both replaced."""
+    put, calls = _capture()
+
+    upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
+    upload_photo(
+        photo, "abc", 1, rw_token=TOKEN,
+        source_url="https://cdn.example.com/abc/DIFFERENT.jpg", put=put,
+    )
+
+    assert calls[0]["url"] != calls[1]["url"]
 
 
 def test_the_photo_bytes_are_the_request_body(photo):
     put, calls = _capture()
 
-    upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+    upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
     assert calls[0]["data"] == photo.read_bytes()
 
@@ -129,7 +156,7 @@ def test_the_photo_bytes_are_the_request_body(photo):
 def test_authorization_is_a_bearer_read_write_token(photo):
     put, calls = _capture()
 
-    upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+    upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
     assert calls[0]["headers"]["authorization"] == f"Bearer {TOKEN}"
 
@@ -138,7 +165,7 @@ def test_api_version_header_is_sent(photo):
     """The Blob API is versioned and rejects requests without it."""
     put, calls = _capture()
 
-    upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+    upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
     assert calls[0]["headers"]["x-api-version"] == BLOB_API_VERSION
 
@@ -148,7 +175,7 @@ def test_store_id_is_parsed_out_of_the_token(photo):
     index 3. The API wants it as its own header."""
     put, calls = _capture()
 
-    upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+    upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
     assert calls[0]["headers"]["x-vercel-blob-store-id"] == STORE_ID
 
@@ -158,7 +185,7 @@ def test_access_is_public_and_overwrite_is_allowed(photo):
     keeps a rerun safe after a listing's photo changes."""
     put, calls = _capture()
 
-    upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+    upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
     assert calls[0]["headers"]["x-vercel-blob-access"] == "public"
     assert calls[0]["headers"]["x-allow-overwrite"] == "1"
@@ -167,7 +194,7 @@ def test_access_is_public_and_overwrite_is_allowed(photo):
 def test_content_type_is_jpeg(photo):
     put, calls = _capture()
 
-    upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+    upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
     assert calls[0]["headers"]["x-content-type"] == "image/jpeg"
 
@@ -176,7 +203,7 @@ def test_a_request_timeout_is_always_set(photo):
     """No timeout means a stalled upload hangs the whole publish forever."""
     put, calls = _capture()
 
-    upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+    upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
     assert calls[0]["timeout"] is not None
 
@@ -190,7 +217,7 @@ def test_exactly_one_http_request_per_photo(photo):
     means one request, one operation."""
     put, calls = _capture()
 
-    upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+    upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
     assert len(calls) == 1
 
@@ -198,7 +225,7 @@ def test_exactly_one_http_request_per_photo(photo):
 def test_no_multipart_parameters_are_sent(photo):
     put, calls = _capture()
 
-    upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+    upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
     assert "multipart" not in calls[0]["url"].lower()
     assert not any("multipart" in k.lower() for k in calls[0]["headers"])
@@ -221,7 +248,7 @@ def test_a_non_2xx_response_raises_runtime_error(photo):
         return _Response(status_code=403, payload={"error": {"code": "forbidden"}})
 
     with pytest.raises(RuntimeError, match="403"):
-        upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+        upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
 
 def test_the_error_message_carries_the_response_body(photo):
@@ -229,7 +256,7 @@ def test_the_error_message_carries_the_response_body(photo):
         return _Response(status_code=401, payload=None, text="invalid token")
 
     with pytest.raises(RuntimeError, match="invalid token"):
-        upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+        upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
 
 def test_a_network_error_becomes_a_runtime_error(photo):
@@ -239,7 +266,7 @@ def test_a_network_error_becomes_a_runtime_error(photo):
         raise requests.ConnectionError("connection reset")
 
     with pytest.raises(RuntimeError, match="connection reset"):
-        upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+        upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
 
 def test_a_response_with_no_url_raises_instead_of_returning_empty(photo):
@@ -249,7 +276,7 @@ def test_a_response_with_no_url_raises_instead_of_returning_empty(photo):
         return _Response(payload={"pathname": "photos/abc/01.jpg"})
 
     with pytest.raises(RuntimeError, match="no blob URL"):
-        upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+        upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
 
 def test_an_empty_url_string_raises(photo):
@@ -257,7 +284,7 @@ def test_an_empty_url_string_raises(photo):
         return _Response(payload={"url": ""})
 
     with pytest.raises(RuntimeError, match="no blob URL"):
-        upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+        upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
 
 def test_an_unparseable_success_body_raises(photo):
@@ -265,7 +292,7 @@ def test_an_unparseable_success_body_raises(photo):
         return _Response(payload=None, text="<html>gateway timeout</html>")
 
     with pytest.raises(RuntimeError, match="no blob URL"):
-        upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+        upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
 
 def test_a_missing_local_file_raises_before_any_request(photo, tmp_path):
@@ -276,7 +303,10 @@ def test_a_missing_local_file_raises_before_any_request(photo, tmp_path):
         return _Response()
 
     with pytest.raises((FileNotFoundError, RuntimeError)):
-        upload_photo(tmp_path / "gone.jpg", "abc", 1, rw_token=TOKEN, put=put)
+        upload_photo(
+            tmp_path / "gone.jpg", "abc", 1, rw_token=TOKEN,
+            source_url=SOURCE_URL, put=put,
+        )
     assert calls == [], "a missing file must not burn an operation"
 
 
@@ -288,7 +318,7 @@ def test_upload_photo_returns_the_url_from_the_response(photo):
             "url": "https://str12345.public.blob.vercel-storage.com/photos/abc/01.jpg"
         })
 
-    url = upload_photo(photo, "abc", 1, rw_token=TOKEN, put=put)
+    url = upload_photo(photo, "abc", 1, rw_token=TOKEN, source_url=SOURCE_URL, put=put)
 
     assert url == "https://str12345.public.blob.vercel-storage.com/photos/abc/01.jpg"
 
@@ -303,3 +333,109 @@ def test_nothing_shells_out_to_the_vercel_cli_any_more():
         source = Path(entry).read_text()
         assert "shutil.which" not in source
         assert 'which("vercel")' not in source
+
+
+# --- deleting blobs -------------------------------------------------------
+#
+# Nothing in this project could delete a blob until now: hosted_photos.blob_url
+# is the only record of what exists in the store, so pruning rows stranded the
+# blobs. 1,813 orphans (~371 MB) accumulated that way and had to be exported
+# and cleaned by hand. The contract below is @vercel/blob 2.8.0's `del()`
+# (dist/index.js) plus requestApi's headers (dist/chunk-YYMLUMXS.js).
+
+def _capture_post():
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return _Response()
+
+    return fake_post, calls
+
+
+def test_delete_blobs_posts_to_the_sdks_delete_endpoint():
+    post, calls = _capture_post()
+
+    delete_blobs(["https://blob/a.jpg"], TOKEN, post=post)
+
+    assert len(calls) == 1
+    assert calls[0]["url"] == f"{BLOB_API_URL}/delete"
+
+
+def test_the_urls_are_the_json_body_under_a_urls_key():
+    post, calls = _capture_post()
+
+    delete_blobs(["https://blob/a.jpg", "https://blob/b.jpg"], TOKEN, post=post)
+
+    assert json.loads(calls[0]["data"]) == {
+        "urls": ["https://blob/a.jpg", "https://blob/b.jpg"]
+    }
+
+
+def test_delete_sends_the_same_auth_version_and_store_headers_as_upload():
+    post, calls = _capture_post()
+
+    delete_blobs(["https://blob/a.jpg"], TOKEN, post=post)
+
+    headers = calls[0]["headers"]
+    assert headers["authorization"] == f"Bearer {TOKEN}"
+    assert headers["x-api-version"] == BLOB_API_VERSION
+    assert headers["x-vercel-blob-store-id"] == STORE_ID
+    assert headers["content-type"] == "application/json"
+
+
+def test_delete_always_sets_a_timeout():
+    post, calls = _capture_post()
+
+    delete_blobs(["https://blob/a.jpg"], TOKEN, post=post)
+
+    assert calls[0]["timeout"] is not None
+
+
+def test_deleting_nothing_makes_no_request():
+    post, calls = _capture_post()
+
+    delete_blobs([], TOKEN, post=post)
+
+    assert calls == []
+
+
+def test_urls_are_chunked_so_one_request_never_carries_the_whole_corpus():
+    post, calls = _capture_post()
+    urls = [f"https://blob/{i}.jpg" for i in range(DELETE_CHUNK_SIZE * 2 + 1)]
+
+    delete_blobs(urls, TOKEN, post=post)
+
+    assert len(calls) == 3
+    assert all(
+        len(json.loads(c["data"])["urls"]) <= DELETE_CHUNK_SIZE for c in calls
+    )
+    sent = [u for c in calls for u in json.loads(c["data"])["urls"]]
+    assert sent == urls
+
+
+def test_a_non_2xx_delete_response_raises_runtime_error():
+    def post(url, **kwargs):
+        return _Response(status_code=403, text="forbidden")
+
+    with pytest.raises(RuntimeError) as exc:
+        delete_blobs(["https://blob/a.jpg"], TOKEN, post=post)
+
+    assert "403" in str(exc.value)
+
+
+def test_a_network_error_during_delete_becomes_a_runtime_error():
+    def post(url, **kwargs):
+        raise requests.ConnectionError("boom")
+
+    with pytest.raises(RuntimeError):
+        delete_blobs(["https://blob/a.jpg"], TOKEN, post=post)
+
+
+def test_the_delete_endpoint_is_not_the_bare_upload_endpoint():
+    """A POST to the upload URL is a different operation entirely."""
+    post, calls = _capture_post()
+
+    delete_blobs(["https://blob/a.jpg"], TOKEN, post=post)
+
+    assert calls[0]["url"].endswith("/delete")
