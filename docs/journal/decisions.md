@@ -568,3 +568,93 @@ the first time.
   layout/circulation and staging-detection findings were never folded into
   the shipped rubric — still an open gap in what gets scored, just not an
   incomplete-run problem anymore.
+
+## 2026-09-03 — Phase 3 gates: two pass cleanly, one is blocked, one needs two weeks
+
+Ran the gates from issue #24 against a real Vercel Sandbox in `iad1`
+(egress `54.162.144.92`, an AWS datacenter IP) and, as a control, from the
+laptop's residential IP (`24.9.167.51`). Same script both places, so the
+only variable is the egress IP. Scripts kept in `ops/spikes/`.
+
+**Total cost: 36.4s active CPU, 229.8s wall, ≈ $0.007.** The 2026-08-30
+spike cost $0.03–0.05; this was cheaper because nothing needed reinstalling
+after the measurements were taken.
+
+### Gate 2 — Nominatim/OSRM from a cloud IP: PASS
+
+Twelve geocodes at the documented 1 req/sec, with the pipeline's real
+User-Agent (`home-search/1.0 (bengiese22@gmail.com)`): **12/12 resolved,
+all HTTP 200, zero 429 or 403.** OSRM routing returned `Ok`, 11.5 mi /
+18.1 min.
+
+The stronger evidence is the control: the datacenter run returned
+coordinates **identical to the residential run, digit for digit**, and the
+one address that failed to geocode failed from *both* IPs — it is an
+address Nominatim genuinely does not know, not throttling. That also
+explains part of the 12 `geocode_failed` rows currently in Turso. No
+evidence of the per-IP penalty the gate was written to look for.
+
+### Gate 3 — Compass photo CDN from a cloud IP: PASS
+
+Both sampled photos returned HTTP 200, `image/jpeg`, valid JPEG magic
+bytes, and **byte-identical sizes from both IPs** (359,448 and 328,369).
+
+Worth recording because it changes an assumption: the plan expected photo
+downloads to need the authenticated Playwright page context, which is why
+it thought they would "probably" pass. They do not — `www.compass.com/m/...`
+serves **unauthenticated**. That makes this gate a much weaker risk than it
+looked, and it means a cloud runner does not need a Compass session merely
+to fetch images.
+
+### Gate 4 — full supervised run against a throwaway Turso DB: BLOCKED
+
+Not attempted. Creating a throwaway database needs a Turso **platform** API
+token; `.env` holds only `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`, which
+authenticate against the existing database and cannot create another. The
+gate deliberately says "throwaway", so running the pipeline against the
+real database from an unproven environment would defeat its purpose. Needs
+a `turso auth` login or a platform token before it can run.
+
+### Gate 1 — reCAPTCHA durability: cannot be cleared in one session
+
+Two weeks of scheduled runs by construction. One same-day data point: from
+the datacenter IP, Chromium loaded `https://www.compass.com/login/` with
+HTTP 200 and no interactive challenge, consistent with 2026-08-30. That
+confirms the earlier result still holds; it says nothing about durability,
+which is the entire question.
+
+### Incidental findings that change the plan
+
+- **Chromium install takes 25s, not the 2–3 min the plan assumed** — a 6x
+  improvement, on `vercel/sandbox/universal` with Python 3.14.4. This
+  materially weakens the argument for snapshot management.
+- **Sandbox persistence is now the default** ("no manual snapshot management
+  needed"). Phase 3 step 3's snapshot-expiry strategy, and its cold-install
+  fallback, are probably obsolete — a stopped sandbox snapshots itself and
+  `--keep-last-snapshots` handles retention. Re-read
+  `/docs/sandbox/concepts/persistent-sandboxes` before building it.
+- **There is a Python Sandbox SDK** (`vercel.sandbox` in the `vercel`
+  package). The plan assumed the JS SDK because "Workflow DevKit is
+  TypeScript-only"; that reasoning does not apply to Sandbox, so the runner
+  could be Python.
+- **Vercel CLI 59.5.0 cannot talk to Sandbox** — `/v3/sandboxes` returns
+  `{"error":{"code":"forbidden","invalidToken":true}}` while `vercel whoami`
+  and `projects ls` work fine on the same token. 59.11.2 works. Use
+  `npx vercel@latest` rather than debugging the token.
+- **`turso.io` has no A record.** A reachability check against the apex
+  domain fails everywhere, not just in a sandbox; the real DB host
+  (`aws-us-east-1.turso.io`) resolves fine from `iad1`. Noted because it
+  looked briefly like an egress block and is an easy trap to fall into
+  twice.
+
+### Recommendation: partial go
+
+The two gates that could actually fail did not, and both failed *softer*
+than expected — Nominatim shows no per-IP penalty at this volume, and the
+photo CDN needs no session at all. Neither is a reason to hold Phase 3.
+
+What still gates it is unchanged and unhurried: **the two-week reCAPTCHA
+canary is the real decision**, and gate 4 needs a throwaway database.
+Nothing here argues for building the cron and the runner before the canary
+has run, because the canary is the cheap way to learn the one thing that
+would make the whole phase pointless.
