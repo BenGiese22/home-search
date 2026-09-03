@@ -1,9 +1,13 @@
 import json
 import re
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from urllib.parse import quote
 
 from playwright.sync_api import Page
 
+from src.backfill import dedupe_by_listing_id
+from src.config import COLLECTION_TABS
 from src.json_extract import find_listing_dicts_in_html
 from src.listing_parser import parse_listing_object
 from src.models import Listing
@@ -71,7 +75,9 @@ def parse_collection_response(response_json: dict) -> list[Listing]:
     return listings
 
 
-def fetch_collection_listings(page: Page, collection_url: str) -> list[Listing]:
+def fetch_collection_listings(
+    page: Page, collection_url: str, listings_filter: int = 0
+) -> list[Listing]:
     """Fetch every listing in a Compass collection via its internal
     paginated API and return them as fully-parsed Listings.
 
@@ -87,6 +93,14 @@ def fetch_collection_listings(page: Page, collection_url: str) -> list[Listing]:
     authenticated request context (cookies), which Playwright's
     `page.request` shares with the browser session automatically.
     """
+    if listings_filter not in COLLECTION_TABS.values():
+        # Guards the one value that must never be fetched (3 = notInterested)
+        # and any typo, before a request goes out.
+        raise ValueError(
+            f"refusing to fetch listingsFilter {listings_filter}; "
+            f"expected one of {sorted(COLLECTION_TABS.values())}"
+        )
+
     collection_id = extract_collection_id(collection_url)
 
     all_listings: list[Listing] = []
@@ -99,7 +113,7 @@ def fetch_collection_listings(page: Page, collection_url: str) -> list[Listing]:
                 "collectionId": collection_id,
                 "pagination": {"skip": skip, "limit": limit},
                 "query": {
-                    "listingsFilter": 0,
+                    "listingsFilter": listings_filter,
                     "sort": {"collectionListingsSortOrder": 1},
                     "searchCriteria": {},
                     "enrichments": [0, 1, 2],
@@ -116,4 +130,68 @@ def fetch_collection_listings(page: Page, collection_url: str) -> list[Listing]:
         all_listings.extend(parse_collection_response(data))
         skip += limit
 
+    # A short read means pagination stopped early (a dropped page, a shape
+    # change). Returning it silently would look exactly like listings having
+    # left the collection, which is the input the delisting cascade acts on.
+    if len(all_listings) != total:
+        raise ValueError(
+            f"collection returned {len(all_listings)} listings but reported "
+            f"totalListings={total}"
+        )
+
     return all_listings
+
+
+@dataclass(frozen=True)
+class CollectionFetch:
+    """The result of fetching one or more tabs of a single collection.
+
+    Carries per-tab outcomes rather than a single bool because the delisting
+    cascade needs to know whether *every* tab was accounted for: a tab that
+    failed while another succeeded looks identical, downstream, to that tab's
+    listings having been removed by a human.
+    """
+
+    listings: list[Listing] = field(default_factory=list)
+    counts: dict[str, int] = field(default_factory=dict)   # tab -> raw count, successes only
+    errors: dict[str, str] = field(default_factory=dict)   # tab -> error text
+
+    @property
+    def failed_tabs(self) -> frozenset[str]:
+        return frozenset(self.errors)
+
+
+def fetch_collection_tabs(
+    page: Page, collection_url: str, tabs: Sequence[str]
+) -> CollectionFetch:
+    """Fetch each named tab of a collection and merge them into one list.
+
+    Tabs are fetched in the order given -- config orders them by precedence --
+    and deduped first-wins, so a listing sitting in both favorites and matches
+    keeps its favorites copy.
+
+    One tab failing does not abort the others: partial data is still worth
+    upserting. It does mark the fetch untrustworthy for delisting purposes,
+    which is what collection_fetch_is_trustworthy reads.
+    """
+    for tab in tabs:
+        if tab not in COLLECTION_TABS:
+            raise ValueError(
+                f"unknown collection tab {tab!r}; expected one of {sorted(COLLECTION_TABS)}"
+            )
+
+    merged: list[Listing] = []
+    counts: dict[str, int] = {}
+    errors: dict[str, str] = {}
+    for tab in tabs:
+        try:
+            listings = fetch_collection_listings(page, collection_url, COLLECTION_TABS[tab])
+        except Exception as exc:
+            errors[tab] = str(exc)
+            continue
+        counts[tab] = len(listings)
+        merged.extend(listings)
+
+    return CollectionFetch(
+        listings=dedupe_by_listing_id(merged), counts=counts, errors=errors
+    )

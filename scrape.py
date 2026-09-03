@@ -16,7 +16,7 @@ from src.db import (
     query_listings,
     upsert_listing,
 )
-from src.diff import compute_changes, run_delisting
+from src.diff import collection_fetch_is_trustworthy, compute_changes, run_delisting
 from src.gallery import write_gallery
 from src.models import Listing, is_active_status
 from src.photo_upload import upload_photos
@@ -24,7 +24,7 @@ from src.photos import download_photos
 from src.scraper import (
     derive_listing_id_from_url,
     derive_pinned_ids_from_urls,
-    fetch_collection_listings,
+    fetch_collection_tabs,
     scrape_listing,
 )
 from src.store import is_scraped, load_all_listings, needs_field_backfill, save_listing
@@ -220,20 +220,22 @@ def main() -> None:
                 continue
 
         if config.collection_url:
-            try:
-                collection_listings = fetch_collection_listings(page, config.collection_url)
-                print(f"collection returned {len(collection_listings)} listings")
-                fetch_succeeded = True
-            except Exception as exc:
-                print(f"failed to fetch collection {config.collection_url}: {exc}")
-                collection_listings = []
-                fetch_succeeded = False
+            fetch = fetch_collection_tabs(
+                page, config.collection_url, config.collection_tabs
+            )
+            for tab, count in fetch.counts.items():
+                print(f"collection/{tab} returned {count} listings")
+            for tab, exc in fetch.errors.items():
+                print(f"failed to fetch collection/{tab}: {exc}")
+            # Already deduped across tabs, favorites copy winning.
+            collection_listings = fetch.listings
+            fetch_succeeded = collection_fetch_is_trustworthy(fetch, before)
 
             # A listing whose fresh status comes back non-Active (Expired,
             # Sold, Withdrawn, ...) is treated as absent from the
             # collection for every purpose below -- upserting, photo/JSON
             # saving, and delisting -- exactly like one that dropped out of
-            # the collection API's results entirely, going through the same
+            # every fetched tab entirely, going through the same
             # reviewed, circuit-breaker-protected removal path rather than
             # new logic. Pinned listings are exempt, same as delisting
             # already exempts them: an explicit pin means Ben wants it

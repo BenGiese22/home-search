@@ -173,3 +173,16 @@ other's fixes.
   correctly after the next `scrape.py` run; only the narrow
   post-migration/pre-rerun window would be uncovered for that specific
   listing.
+
+## Per-tab delisting denominator
+
+`should_apply_delisting` measures delistings as a fraction of everything
+tracked. With favorites (~26) and matches (~149) merged, a favorites tab
+returning anomalously few but non-zero results — 2 of 11 — is under the
+global threshold and would delist the rest of the bucket. The zero-result
+gate in `collection_fetch_is_trustworthy` catches only the empty case.
+
+A real fix needs last run's per-tab id sets to give each tab its own
+denominator: either a `source_tabs` column on `listings` (schema change,
+Turso mirror included) or a small JSON sidecar in `data/`. Not built —
+the empty-tab case is the one actually observed in the wild.
