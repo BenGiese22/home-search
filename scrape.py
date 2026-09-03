@@ -18,7 +18,7 @@ from src.db import (
 )
 from src.diff import collection_fetch_is_trustworthy, compute_changes, run_delisting
 from src.gallery import write_gallery
-from src.models import Listing, is_active_status
+from src.models import Listing, select_present_listings
 from src.photo_upload import upload_photos
 from src.photos import download_photos
 from src.scraper import (
@@ -239,11 +239,12 @@ def main() -> None:
             # reviewed, circuit-breaker-protected removal path rather than
             # new logic. Pinned listings are exempt, same as delisting
             # already exempts them: an explicit pin means Ben wants it
-            # tracked regardless of what the MLS status says.
-            present_listings = [
-                listing for listing in collection_listings
-                if listing.listing_id in pinned_ids or is_active_status(listing.localized_status)
-            ]
+            # tracked regardless of what the MLS status says. A favorite
+            # that has gone Pending is exempt too -- see
+            # select_present_listings and issue #50.
+            present_listings = select_present_listings(
+                collection_listings, pinned_ids, fetch.favorite_ids
+            )
             inactive_count = len(collection_listings) - len(present_listings)
             if inactive_count:
                 print(f"{inactive_count} listing(s) no longer active (expired/sold/withdrawn), excluding")

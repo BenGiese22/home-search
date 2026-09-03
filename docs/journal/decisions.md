@@ -721,3 +721,45 @@ A tab returning *anomalously few but non-zero* results (2 of 11 favorites) is
 still under-detected by the global fraction. A real per-tab denominator needs
 the source tab persisted per listing, which is a schema change against Turso.
 Recorded in `backlog.md` rather than built.
+
+## 2026-09-03 — A favorite that goes Pending is no longer deleted
+
+Follow-up to the favorites work above, and to issue #50.
+
+`is_active_status` excludes Pending, which Ben confirmed on 2026-08-27 after
+seeing a mixed batch of statuses. That call still stands for listings in
+general. It was made before favorites were fetched at all, though, and a
+favorite is a different kind of object: only Ben or Megan put a listing
+there, and only they take it out. Until now it was the strongest interest
+signal in the system and the least protected — pins were exempt from status,
+favorites were not — so a favorite going under contract was hard-deleted
+along with its photos and its paid vision scoring.
+
+**Decision: Pending favorites are exempt. Closed, Expired and Withdrawn
+favorites are not.** Pending deals fall through and return to Active, so
+deleting one throws away work that will be needed again shortly. A Closed or
+Expired favorite is genuinely gone, and exempting those too would accumulate
+dead listings forever. Ben's call, given the options.
+
+Scoped deliberately: `is_active_status` is untouched, and the exemption lives
+in a new `select_present_listings` alongside a narrow `is_pending_status`.
+Folding Pending into `is_active_status` would have silently reverted the
+2026-08-27 decision for every listing.
+
+`select_present_listings` is one function used by both `scrape.py` and
+`check.py` rather than the same comprehension written twice. Both delist off
+this decision, and a listing `check.py` considers absent is hard-deleted —
+that exact drift is what made favorites deletable by `check.py` before they
+were ever fetched.
+
+`CollectionFetch` now carries `tab_ids`, so the fetch layer knows which
+listings are favorites. When the favorites tab fails, `favorite_ids` is empty
+rather than wrong — and that run is already untrustworthy for delisting via
+`collection_fetch_is_trustworthy`, so a failed tab cannot turn a favorite
+back into a deletable match.
+
+Live effect at the time of the change: 5 Pending favorites that had already
+been dropped come back (6085 West 82nd Drive, 12306 Deerfield Way, 3331 West
+10th Ave Place, 950 Laurel Street, 9862 Independence Street), and nothing is
+delisted. Two others that looked at risk (2765 Canossa Drive, 10538 Kipling
+Place) turned out to be pinned already.
