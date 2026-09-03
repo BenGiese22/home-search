@@ -27,7 +27,9 @@ from src.photos import photo_filename
 from src.blob_upload import (
     BLOB_API_URL,
     BLOB_API_VERSION,
+    DELETE_CHUNK_SIZE,
     already_uploaded,
+    delete_blobs,
     upload_photo,
 )
 from src.turso_db import ensure_schema
@@ -331,3 +333,109 @@ def test_nothing_shells_out_to_the_vercel_cli_any_more():
         source = Path(entry).read_text()
         assert "shutil.which" not in source
         assert 'which("vercel")' not in source
+
+
+# --- deleting blobs -------------------------------------------------------
+#
+# Nothing in this project could delete a blob until now: hosted_photos.blob_url
+# is the only record of what exists in the store, so pruning rows stranded the
+# blobs. 1,813 orphans (~371 MB) accumulated that way and had to be exported
+# and cleaned by hand. The contract below is @vercel/blob 2.8.0's `del()`
+# (dist/index.js) plus requestApi's headers (dist/chunk-YYMLUMXS.js).
+
+def _capture_post():
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return _Response()
+
+    return fake_post, calls
+
+
+def test_delete_blobs_posts_to_the_sdks_delete_endpoint():
+    post, calls = _capture_post()
+
+    delete_blobs(["https://blob/a.jpg"], TOKEN, post=post)
+
+    assert len(calls) == 1
+    assert calls[0]["url"] == f"{BLOB_API_URL}/delete"
+
+
+def test_the_urls_are_the_json_body_under_a_urls_key():
+    post, calls = _capture_post()
+
+    delete_blobs(["https://blob/a.jpg", "https://blob/b.jpg"], TOKEN, post=post)
+
+    assert json.loads(calls[0]["data"]) == {
+        "urls": ["https://blob/a.jpg", "https://blob/b.jpg"]
+    }
+
+
+def test_delete_sends_the_same_auth_version_and_store_headers_as_upload():
+    post, calls = _capture_post()
+
+    delete_blobs(["https://blob/a.jpg"], TOKEN, post=post)
+
+    headers = calls[0]["headers"]
+    assert headers["authorization"] == f"Bearer {TOKEN}"
+    assert headers["x-api-version"] == BLOB_API_VERSION
+    assert headers["x-vercel-blob-store-id"] == STORE_ID
+    assert headers["content-type"] == "application/json"
+
+
+def test_delete_always_sets_a_timeout():
+    post, calls = _capture_post()
+
+    delete_blobs(["https://blob/a.jpg"], TOKEN, post=post)
+
+    assert calls[0]["timeout"] is not None
+
+
+def test_deleting_nothing_makes_no_request():
+    post, calls = _capture_post()
+
+    delete_blobs([], TOKEN, post=post)
+
+    assert calls == []
+
+
+def test_urls_are_chunked_so_one_request_never_carries_the_whole_corpus():
+    post, calls = _capture_post()
+    urls = [f"https://blob/{i}.jpg" for i in range(DELETE_CHUNK_SIZE * 2 + 1)]
+
+    delete_blobs(urls, TOKEN, post=post)
+
+    assert len(calls) == 3
+    assert all(
+        len(json.loads(c["data"])["urls"]) <= DELETE_CHUNK_SIZE for c in calls
+    )
+    sent = [u for c in calls for u in json.loads(c["data"])["urls"]]
+    assert sent == urls
+
+
+def test_a_non_2xx_delete_response_raises_runtime_error():
+    def post(url, **kwargs):
+        return _Response(status_code=403, text="forbidden")
+
+    with pytest.raises(RuntimeError) as exc:
+        delete_blobs(["https://blob/a.jpg"], TOKEN, post=post)
+
+    assert "403" in str(exc.value)
+
+
+def test_a_network_error_during_delete_becomes_a_runtime_error():
+    def post(url, **kwargs):
+        raise requests.ConnectionError("boom")
+
+    with pytest.raises(RuntimeError):
+        delete_blobs(["https://blob/a.jpg"], TOKEN, post=post)
+
+
+def test_the_delete_endpoint_is_not_the_bare_upload_endpoint():
+    """A POST to the upload URL is a different operation entirely."""
+    post, calls = _capture_post()
+
+    delete_blobs(["https://blob/a.jpg"], TOKEN, post=post)
+
+    assert calls[0]["url"].endswith("/delete")

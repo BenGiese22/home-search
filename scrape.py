@@ -331,9 +331,15 @@ def main() -> None:
             report = compute_changes(
                 present_listings, before, pinned_ids=frozenset(pinned_ids)
             )
+            # The blob token is passed so a delisted listing's hosted photos
+            # are reclaimed rather than stranded -- hosted_photos.blob_url is
+            # the only record of them, and pruning the rows without it is how
+            # 1,813 orphans (~371 MB) accumulated. Absent (no token
+            # configured), the URLs are printed instead of lost.
             run_delisting(
                 db_conn, PHOTOS_DIR, STORE_DIR, fetch_succeeded, report, before,
                 frozenset(pinned_ids),
+                blob_token=load_env().get("BLOB_READ_WRITE_TOKEN"),
             )
 
     _upload_photos_for(db_conn)

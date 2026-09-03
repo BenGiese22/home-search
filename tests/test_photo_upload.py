@@ -463,6 +463,85 @@ def test_the_shared_connection_is_never_used_from_a_worker_thread(photos, urls):
     assert any(t != main_thread for t in seen), "uploads should run on worker threads"
 
 
+def test_the_superseded_blob_is_deleted_after_its_replacement_row_is_written(tmp_path):
+    conn = _conn()
+    d = tmp_path / "aaa"
+    d.mkdir()
+    (d / _name("aaa", 1)).write_bytes(b"x")
+    _host(conn, "aaa", 1, "https://cdn.example.com/aaa/OLD.jpg", "https://blob/old.jpg")
+    rows_at_delete_time = []
+
+    def delete_fn(urls, token):
+        rows_at_delete_time.append(
+            conn.execute(
+                "SELECT source_url FROM hosted_photos WHERE listing_id = 'aaa'"
+            ).fetchone()["source_url"]
+        )
+
+    upload_photos(
+        conn, tmp_path, _urls(aaa=1), "tok", upload_fn=_ok, delete_fn=delete_fn
+    )
+
+    assert rows_at_delete_time == [_url("aaa", 1)], (
+        "the replacement row must be written before its predecessor's blob goes"
+    )
+
+
+def test_nothing_is_deleted_for_a_photo_that_was_never_hosted(photos, urls):
+    conn = _conn()
+    deleted = []
+
+    upload_photos(
+        conn, photos, urls, "tok", upload_fn=_ok,
+        delete_fn=lambda u, t: deleted.extend(u),
+    )
+
+    assert deleted == []
+
+
+def test_a_failed_upload_leaves_its_predecessors_blob_alone(tmp_path):
+    """The old blob is still the one the row points at, so deleting it would
+    break the viewer for a photo that never got replaced."""
+    conn = _conn()
+    d = tmp_path / "aaa"
+    d.mkdir()
+    (d / _name("aaa", 1)).write_bytes(b"x")
+    _host(conn, "aaa", 1, "https://cdn.example.com/aaa/OLD.jpg", "https://blob/old.jpg")
+    deleted = []
+
+    def boom(*args):
+        raise RuntimeError("500")
+
+    upload_photos(
+        conn, tmp_path, _urls(aaa=1), "tok", upload_fn=boom,
+        delete_fn=lambda u, t: deleted.extend(u),
+    )
+
+    assert deleted == []
+    row = conn.execute("SELECT blob_url FROM hosted_photos").fetchone()
+    assert row["blob_url"] == "https://blob/old.jpg"
+
+
+def test_a_failed_blob_delete_prints_the_url_and_does_not_fail_the_run(tmp_path, capsys):
+    """A stranded blob costs a fraction of a cent; a failed scrape costs the
+    run. The URL is printed because nothing else records it any more."""
+    conn = _conn()
+    d = tmp_path / "aaa"
+    d.mkdir()
+    (d / _name("aaa", 1)).write_bytes(b"x")
+    _host(conn, "aaa", 1, "https://cdn.example.com/aaa/OLD.jpg", "https://blob/old.jpg")
+
+    def boom(urls, token):
+        raise RuntimeError("HTTP 500")
+
+    uploaded, failed = upload_photos(
+        conn, tmp_path, _urls(aaa=1), "tok", upload_fn=_ok, delete_fn=boom
+    )
+
+    assert (uploaded, failed) == (1, 0)
+    assert "https://blob/old.jpg" in capsys.readouterr().out
+
+
 def test_scrape_uploads_photos_within_its_own_stage():
     """Acceptance criterion for #21: the scrape stage, not publish.py."""
     source = Path("scrape.py").read_text()

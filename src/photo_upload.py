@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, NamedTuple
 
-from src.blob_upload import upload_photo
+from src.blob_upload import delete_blobs, upload_photo
 from src.photos import photo_filename
 from src.turso_db import chunk_size
 
@@ -155,18 +155,27 @@ def _record(conn, recorded: list[tuple[str, int, str, str]]) -> None:
             )
 
 
-def _retire_blobs(urls: list[str]) -> None:
+def _retire_blobs(urls: list[str], rw_token: str, delete_fn: Callable) -> None:
     """Blobs whose hosted_photos row has just been overwritten by a
     replacement upload.
 
     Called only AFTER the replacement row is written, so a failure here can
     only ever strand a blob -- it can never leave a row pointing at a blob
-    that no longer exists. Commit 3 of this task wires src.blob_upload.
-    delete_blobs in behind this seam; until then the URLs are printed so
-    they are recoverable rather than lost silently.
+    that no longer exists. Content-keyed pathnames make this a routine event
+    rather than a rare one: every changed photo produces a new blob and
+    orphans the old one, and nothing else in the project records what is in
+    the store. Failures are printed with their URLs, never raised: a stranded
+    blob costs a fraction of a cent, and failing the scrape over one would
+    cost the whole run.
     """
-    for url in urls:
-        print(f"  superseded blob (not yet deleted): {url}")
+    if not urls:
+        return
+    try:
+        delete_fn(urls, rw_token)
+    except Exception as exc:
+        print(f"  failed to delete {len(urls)} superseded blob(s) ({exc}):")
+        for url in urls:
+            print(f"    {url}")
 
 
 def upload_photos(
@@ -177,6 +186,7 @@ def upload_photos(
     max_per_listing: int = 0,
     upload_fn: Callable = upload_photo,
     workers: int = UPLOAD_WORKERS,
+    delete_fn: Callable = delete_blobs,
 ) -> tuple[int, int]:
     """Uploads every photo not hosted under its current URL and records it.
 
@@ -227,12 +237,12 @@ def upload_photos(
             # which is correct but wastes operations.
             if len(recorded) >= flush_every:
                 _record(conn, recorded)
-                _retire_blobs(superseded)
+                _retire_blobs(superseded, rw_token, delete_fn)
                 recorded = []
                 superseded = []
 
     _record(conn, recorded)
-    _retire_blobs(superseded)
+    _retire_blobs(superseded, rw_token, delete_fn)
 
     uploaded = len(pending) - failed
     return uploaded, failed

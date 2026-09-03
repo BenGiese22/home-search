@@ -1,7 +1,9 @@
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
+from src.blob_upload import delete_blobs
 from src.db import bulk_delete_listings, delete_listing, parse_price
 from src.models import Listing
 from src.photos import delete_photos
@@ -132,17 +134,64 @@ def should_apply_delisting(
     return len(report.delisted_ids) / eligible <= MAX_DELISTED_FRACTION
 
 
+def _hosted_blob_urls(
+    conn: sqlite3.Connection, listing_ids: list[str]
+) -> dict[str, list[str]]:
+    """The blob URLs of the doomed listings' hosted photos, keyed by listing.
+
+    ONE statement for the whole batch, taken BEFORE the prune -- once the rows
+    are gone there is no record anywhere of what those blobs were. Returns an
+    empty mapping when the table does not exist, which is the local schema
+    (hosted_photos lives only in the hosted one), so a local run is not broken
+    by a table it never had.
+    """
+    if not listing_ids:
+        return {}
+    existing = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if "hosted_photos" not in existing:
+        return {}
+    placeholders = ", ".join("?" for _ in listing_ids)
+    by_listing: dict[str, list[str]] = {}
+    for row in conn.execute(
+        f"SELECT listing_id, blob_url FROM hosted_photos "
+        f"WHERE listing_id IN ({placeholders})",
+        tuple(listing_ids),
+    ):
+        if row[1]:
+            by_listing.setdefault(row[0], []).append(row[1])
+    return by_listing
+
+
 def apply_delisting(
-    conn: sqlite3.Connection, photos_dir: Path, store_dir: Path, delisted_ids: list[str]
+    conn: sqlite3.Connection,
+    photos_dir: Path,
+    store_dir: Path,
+    delisted_ids: list[str],
+    blob_token: str | None = None,
+    delete_fn: Callable[[list[str], str], None] = delete_blobs,
 ) -> None:
     """Removes each delisted listing everywhere it's stored: the DB row and
-    its children, downloaded photos, and the JSON store file. Prints one
-    line per listing removed. Shared by scrape.py and check.py so the
-    cascade only lives in one place. A failure on one listing (e.g. a
-    locked database) is logged and skipped rather than aborting the rest
-    of the batch, matching every other per-item loop in this codebase."""
+    its children, downloaded photos, the JSON store file, and now the blobs
+    its hosted_photos rows pointed at. Prints one line per listing removed.
+    Shared by scrape.py and check.py so the cascade only lives in one place.
+    A failure on one listing (e.g. a locked database) is logged and skipped
+    rather than aborting the rest of the batch, matching every other per-item
+    loop in this codebase.
+
+    The blob URLs are read first, in one statement, because pruning the rows
+    destroys the only record of them -- that is how 1,813 blobs (~371 MB)
+    were stranded. The DELETE still happens before the blob delete, though:
+    a row pointing at a blob that no longer exists is a broken image in the
+    viewer, while a blob with no row is only wasted bytes. Blob failures are
+    printed, never raised; without a blob_token (a --skip-photos dev run) the
+    URLs are printed instead of deleted, so they are never lost silently.
+    """
     if not delisted_ids:
         return
+    blob_urls = _hosted_blob_urls(conn, delisted_ids)
     # Fast path: one statement per table, child-first, rather than a
     # delete_listing() per listing -- against Turso the per-listing form is
     # ~7 round-trips each.
@@ -176,6 +225,29 @@ def apply_delisting(
             continue
         print(f"delisted: {listing_id}")
 
+    # Only for listings whose rows actually went. A listing still in the
+    # database must keep its images, exactly as it keeps its photos on disk.
+    doomed_blobs = [url for listing_id in removed for url in blob_urls.get(listing_id, [])]
+    if not doomed_blobs:
+        return
+    if blob_token is None:
+        print(
+            f"no blob token: {len(doomed_blobs)} blob(s) left in the store for "
+            "delisted listings. Their rows are gone, so these URLs are the "
+            "only remaining handle on them:"
+        )
+        for url in doomed_blobs:
+            print(f"  {url}")
+        return
+    try:
+        delete_fn(doomed_blobs, blob_token)
+    except Exception as exc:
+        print(f"failed to delete {len(doomed_blobs)} blob(s) ({exc}); "
+              "their rows are already gone, so these URLs are the only "
+              "remaining handle on them:")
+        for url in doomed_blobs:
+            print(f"  {url}")
+
 
 def run_delisting(
     conn: sqlite3.Connection,
@@ -185,13 +257,22 @@ def run_delisting(
     report: ChangeReport,
     before: dict[str, tuple[str, float | None]],
     pinned_ids: frozenset[str],
+    blob_token: str | None = None,
+    delete_fn: Callable[[list[str], str], None] = delete_blobs,
 ) -> None:
     """Decides whether it's safe to act on report.delisted_ids and, if so,
     removes them everywhere. Centralizes the should_apply_delisting +
     apply_delisting + skip-message flow so scrape.py and check.py share
-    one implementation instead of duplicating it."""
+    one implementation instead of duplicating it.
+
+    blob_token is optional so a caller with no Blob credentials (a
+    --skip-photos run) still delists -- it just prints the stranded URLs
+    rather than reclaiming them."""
     if should_apply_delisting(fetch_succeeded, report, before, pinned_ids):
-        apply_delisting(conn, photos_dir, store_dir, report.delisted_ids)
+        apply_delisting(
+            conn, photos_dir, store_dir, report.delisted_ids,
+            blob_token=blob_token, delete_fn=delete_fn,
+        )
     elif report.delisted_ids:
         print(
             f"skipping delisted-listing cleanup ({len(report.delisted_ids)} would be "

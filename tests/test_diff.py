@@ -1,6 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from src.db import get_connection, query_listings, upsert_listing
+from src.turso_db import ensure_schema
 from src.diff import (
     collection_fetch_is_trustworthy,
     apply_delisting,
@@ -432,3 +435,182 @@ def test_first_run_with_favorites_adds_without_delisting():
     assert should_apply_delisting(
         collection_fetch_is_trustworthy(fetch, before), report, before, frozenset()
     ) is True
+
+
+# --- delisting reclaims the blobs ------------------------------------------
+#
+# hosted_photos.blob_url is the only record of what exists in the Vercel Blob
+# store, so pruning the rows without deleting the blobs strands them forever.
+# 1,813 orphans (~371 MB) accumulated that way. The rule the tests below pin:
+# never delete a hosted_photos row without first deleting or printing its blob.
+
+def _hosted_conn(tmp_path: Path):
+    """A connection carrying the hosted schema, so hosted_photos exists --
+    the local schema has no such table."""
+    conn = get_connection(tmp_path / "listings.db")
+    ensure_schema(conn)
+    return conn
+
+
+def _host(conn, listing_id: str, position: int, blob_url: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO hosted_photos "
+        "(listing_id, position, blob_url, source_url) VALUES (?, ?, ?, ?)",
+        (listing_id, position, blob_url, f"https://cdn/{listing_id}/{position}.jpg"),
+    )
+    conn.commit()
+
+
+def test_delisting_deletes_the_listings_blobs(tmp_path: Path):
+    conn = _hosted_conn(tmp_path)
+    upsert_listing(conn, SAMPLE)
+    _host(conn, SAMPLE.listing_id, 1, "https://blob/a.jpg")
+    _host(conn, SAMPLE.listing_id, 2, "https://blob/b.jpg")
+    deleted = []
+
+    apply_delisting(
+        conn, tmp_path / "photos", tmp_path / "listings", [SAMPLE.listing_id],
+        blob_token="tok",
+        delete_fn=lambda urls, token: deleted.extend(urls),
+    )
+
+    assert sorted(deleted) == ["https://blob/a.jpg", "https://blob/b.jpg"]
+    assert conn.execute("SELECT * FROM hosted_photos").fetchall() == []
+
+
+def test_the_blob_urls_are_read_in_one_statement(tmp_path: Path):
+    """Every Turso statement is a ~240ms round-trip; a per-listing read here
+    would put the delisting cascade back where the batched delete rescued it
+    from."""
+    conn = _hosted_conn(tmp_path)
+    ids = []
+    for n in range(20):
+        listing_id = f"L{n:04d}"
+        ids.append(listing_id)
+        upsert_listing(conn, Listing(**{**SAMPLE.__dict__, "listing_id": listing_id}))
+        _host(conn, listing_id, 1, f"https://blob/{n}.jpg")
+
+    statements = []
+    conn.set_trace_callback(statements.append)
+    apply_delisting(
+        conn, tmp_path / "photos", tmp_path / "listings", ids,
+        blob_token="tok", delete_fn=lambda urls, token: None,
+    )
+    conn.set_trace_callback(None)
+
+    reads = [s for s in statements if s.strip().upper().startswith("SELECT")
+             and "hosted_photos" in s]
+    assert len(reads) == 1, reads
+
+
+def test_the_rows_go_before_the_blobs(tmp_path: Path):
+    """Deliberate ordering. A row pointing at a blob that no longer exists is
+    a broken image in the viewer; a blob with no row is just wasted bytes."""
+    conn = _hosted_conn(tmp_path)
+    upsert_listing(conn, SAMPLE)
+    _host(conn, SAMPLE.listing_id, 1, "https://blob/a.jpg")
+    rows_at_delete_time = []
+
+    def delete_fn(urls, token):
+        rows_at_delete_time.extend(conn.execute("SELECT * FROM hosted_photos"))
+
+    apply_delisting(
+        conn, tmp_path / "photos", tmp_path / "listings", [SAMPLE.listing_id],
+        blob_token="tok", delete_fn=delete_fn,
+    )
+
+    assert rows_at_delete_time == []
+
+
+def test_a_failed_blob_delete_prints_the_urls_and_does_not_raise(tmp_path, capsys):
+    """A stranded blob is cheap; a failed pipeline run is not. But the URLs
+    are the only handle left on those blobs, so they get printed."""
+    conn = _hosted_conn(tmp_path)
+    upsert_listing(conn, SAMPLE)
+    _host(conn, SAMPLE.listing_id, 1, "https://blob/a.jpg")
+
+    def boom(urls, token):
+        raise RuntimeError("HTTP 500")
+
+    apply_delisting(
+        conn, tmp_path / "photos", tmp_path / "listings", [SAMPLE.listing_id],
+        blob_token="tok", delete_fn=boom,
+    )
+
+    out = capsys.readouterr().out
+    assert "https://blob/a.jpg" in out
+    assert query_listings(conn) == []
+
+
+def test_without_a_blob_token_the_urls_are_printed_not_dropped(tmp_path, capsys):
+    """A --skip-photos dev run has no RW token. The rows still go, so the
+    URLs have to survive somewhere a human can see them."""
+    conn = _hosted_conn(tmp_path)
+    upsert_listing(conn, SAMPLE)
+    _host(conn, SAMPLE.listing_id, 1, "https://blob/a.jpg")
+
+    apply_delisting(
+        conn, tmp_path / "photos", tmp_path / "listings", [SAMPLE.listing_id],
+        blob_token=None,
+        delete_fn=lambda urls, token: pytest.fail("must not delete without a token"),
+    )
+
+    assert "https://blob/a.jpg" in capsys.readouterr().out
+
+
+def test_blobs_are_kept_for_a_listing_whose_row_survived(tmp_path, monkeypatch):
+    """Same rule as the photos on disk: if the listing is still tracked, its
+    images must stay. Deleting them would leave a live listing broken."""
+    from src import diff as diff_module
+
+    conn = _hosted_conn(tmp_path)
+    upsert_listing(conn, SAMPLE)
+    _host(conn, SAMPLE.listing_id, 1, "https://blob/a.jpg")
+
+    def failing(conn, *args):
+        raise Exception("database is locked")
+
+    monkeypatch.setattr(diff_module, "bulk_delete_listings", failing)
+    monkeypatch.setattr(diff_module, "delete_listing", failing)
+    deleted = []
+
+    apply_delisting(
+        conn, tmp_path / "photos", tmp_path / "listings", [SAMPLE.listing_id],
+        blob_token="tok", delete_fn=lambda urls, token: deleted.extend(urls),
+    )
+
+    assert deleted == []
+
+
+def test_delisting_without_a_hosted_photos_table_still_works(tmp_path: Path):
+    """The local schema has no hosted_photos; the blob read must not be the
+    thing that breaks a local run."""
+    conn = get_connection(tmp_path / "listings.db")
+    upsert_listing(conn, SAMPLE)
+
+    apply_delisting(
+        conn, tmp_path / "photos", tmp_path / "listings", [SAMPLE.listing_id],
+        blob_token="tok",
+        delete_fn=lambda urls, token: pytest.fail("nothing hosted to delete"),
+    )
+
+    assert query_listings(conn) == []
+
+
+def test_run_delisting_passes_the_blob_token_through(tmp_path: Path):
+    conn = _hosted_conn(tmp_path)
+    upsert_listing(conn, SAMPLE)
+    _host(conn, SAMPLE.listing_id, 1, "https://blob/a.jpg")
+    before = {SAMPLE.listing_id: (SAMPLE.price, 650000.0), "kept": ("$1", 1.0)}
+    report = compute_changes(
+        [Listing(**{**SAMPLE.__dict__, "listing_id": "kept"})], before
+    )
+    seen = []
+
+    run_delisting(
+        conn, tmp_path / "photos", tmp_path / "listings", True, report, before,
+        frozenset(), blob_token="tok",
+        delete_fn=lambda urls, token: seen.append((urls, token)),
+    )
+
+    assert seen == [(["https://blob/a.jpg"], "tok")]

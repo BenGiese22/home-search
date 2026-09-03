@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlencode
@@ -21,6 +22,16 @@ BLOB_API_VERSION = "12"
 # whole publish indefinitely, holding the pipeline flock behind it.
 UPLOAD_TIMEOUT_SECONDS = (10, 120)
 
+# A delete carries no body beyond a list of URLs, so it finishes far sooner
+# than an upload -- but it still gets an explicit timeout for the same reason.
+DELETE_TIMEOUT_SECONDS = (10, 60)
+
+# URLs per delete request. The SDK declares no limit and neither does the
+# endpoint, so this is a self-imposed bound: it keeps one request's body small
+# and keeps a single failure from taking the whole batch down with it. The
+# orphan sweep that will use this function has ~1,800 URLs to get through.
+DELETE_CHUNK_SIZE = 100
+
 
 def already_uploaded(conn, listing_id: str, position: int) -> bool:
     row = conn.execute(
@@ -38,6 +49,66 @@ def _store_id_from_token(rw_token: str) -> str:
     guess made here."""
     parts = rw_token.split("_")
     return parts[3] if len(parts) > 3 else ""
+
+
+def delete_blobs(
+    urls: list[str],
+    rw_token: str,
+    post: Callable = requests.post,
+) -> None:
+    """Deletes blobs from the store by URL.
+
+    This project could not delete a blob until this function existed. It
+    uploaded and forgot, and `hosted_photos.blob_url` is the only record of
+    what is in the store -- so every pruned row stranded its blob permanently.
+    1,813 orphans (~371 MB) had built up before they were exported to
+    `data/archive/orphaned-hosted-photos-20260903.json` and cleaned by hand.
+    The rule that follows: never delete a hosted_photos row without first
+    deleting or exporting its blob.
+
+    The contract is @vercel/blob 2.8.0's `del()` as bundled with the installed
+    Vercel CLI -- `POST {BLOB_API_URL}/delete` with a JSON `{urls}` body
+    (dist/index.js, `del`), carrying the same authorization, `x-api-version`
+    and `x-vercel-blob-store-id` headers every other call sends
+    (dist/chunk-YYMLUMXS.js, `requestApi`). Like the upload endpoint this is
+    the SDK's internal API and is not in the published REST docs; re-read
+    those symbols rather than guessing if it ever starts failing.
+
+    Chunked at DELETE_CHUNK_SIZE. Raises RuntimeError on any failure, matching
+    upload_photo, so callers have one exception type to catch -- and every
+    caller in this project catches it, because a stranded blob is cheap and a
+    failed pipeline run is not.
+    """
+    if not urls:
+        return
+
+    headers = {
+        "authorization": f"Bearer {rw_token}",
+        "x-api-version": BLOB_API_VERSION,
+        "x-vercel-blob-store-id": _store_id_from_token(rw_token),
+        "content-type": "application/json",
+    }
+
+    for start in range(0, len(urls), DELETE_CHUNK_SIZE):
+        chunk = urls[start:start + DELETE_CHUNK_SIZE]
+        try:
+            response = post(
+                f"{BLOB_API_URL}/delete",
+                data=json.dumps({"urls": chunk}),
+                headers=headers,
+                timeout=DELETE_TIMEOUT_SECONDS,
+            )
+        except requests.RequestException as exc:
+            raise RuntimeError(
+                f"blob delete failed for {len(chunk)} url(s) "
+                f"({type(exc).__name__}: {exc})"
+            ) from exc
+
+        if not 200 <= response.status_code < 300:
+            raise RuntimeError(
+                f"blob delete failed for {len(chunk)} url(s) "
+                f"(HTTP {response.status_code}): {response.text[:200]}"
+            )
 
 
 def upload_photo(
