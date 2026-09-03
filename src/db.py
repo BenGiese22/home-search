@@ -698,12 +698,29 @@ def delete_listing(conn: sqlite3.Connection, listing_id: str) -> None:
 
     Keep this list in step with _SCHEMA: visual_scores was added to the schema
     long after this function and went unnoticed here for months, orphaning one
-    row per delisting."""
+    row per delisting.
+
+    hosted_photos is included for the same reason bulk_delete_listings
+    includes it, and the omission here was the same bug a second time. This
+    is the fallback the batched delete drops to when it fails, so it runs
+    precisely when something has already gone wrong -- and it was doing a
+    quietly less complete delete than the path it stands in for. It declares
+    no foreign key and lives only in the hosted schema, so orphaning it fails
+    silently: the rows linger, their blobs are never reclaimed, and
+    collect_pending_photos goes on believing those photos are hosted.
+
+    Filtered to the tables that actually exist, so the local schema (which
+    has no hosted_photos) still works."""
+    existing = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
     with conn:
         # Child-first, derived from the schema rather than hand-listed --
         # see tables_child_first().
-        for table in tables_child_first():
-            conn.execute(f"DELETE FROM {table} WHERE listing_id = ?", (listing_id,))
+        for table in tables_child_first(extra_tables=("hosted_photos",)):
+            if table in existing:
+                conn.execute(f"DELETE FROM {table} WHERE listing_id = ?", (listing_id,))
 
 
 def delete_orphaned_rows(conn: sqlite3.Connection) -> dict[str, int]:
