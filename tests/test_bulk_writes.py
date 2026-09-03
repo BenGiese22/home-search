@@ -18,6 +18,7 @@ from src.db import (
     _SCHEMA,
     bulk_delete_listings,
     bulk_upsert_listings,
+    delete_listing,
     get_amenities_by_listing,
     get_connection,
     query_listings,
@@ -411,3 +412,76 @@ def test_dedupe_before_upsert_keeps_child_rows_correct():
 
     assert conn.execute("SELECT COUNT(*) FROM amenities").fetchone()[0] == 3
     assert conn.execute("SELECT COUNT(*) FROM photo_urls").fetchone()[0] == 4
+
+
+def test_single_listing_fallback_also_prunes_hosted_photos():
+    """The gap that actually orphaned rows in production.
+
+    bulk_delete_listings included hosted_photos; delete_listing did not. That
+    matters because delete_listing is the fallback run_delisting drops to when
+    the batched delete fails -- so it runs precisely when something has
+    already gone wrong, and it was doing a quietly less complete delete than
+    the path it stands in for.
+
+    Observed live: a stream-expiry 404 (see #51) failed the batched delete
+    mid-run, the fallback removed 48 listings one at a time, and left 1,813
+    hosted_photos rows behind whose blobs are never reclaimed and which
+    collect_pending_photos still counts as hosted.
+    """
+    conn = _turso_shaped_conn()
+    bulk_upsert_listings(conn, [_listing(1), _listing(2)])
+    conn.execute("INSERT INTO hosted_photos VALUES ('L0001', 1, 'https://blob/a.jpg')")
+    conn.execute("INSERT INTO hosted_photos VALUES ('L0002', 1, 'https://blob/b.jpg')")
+    conn.commit()
+
+    delete_listing(conn, "L0001")
+
+    remaining = [r["listing_id"] for r in conn.execute("SELECT * FROM hosted_photos")]
+    assert remaining == ["L0002"], "fallback delete left orphaned hosted_photos rows"
+
+
+def test_single_listing_fallback_works_without_a_hosted_photos_table(tmp_path):
+    """The local schema has no hosted_photos -- same tolerance the batched
+    path already has."""
+    conn = get_connection(tmp_path / "db.sqlite")
+    bulk_upsert_listings(conn, [_listing(1)])
+
+    delete_listing(conn, "L0001")  # must not raise
+
+    assert query_listings(conn) == []
+
+
+def test_both_delete_paths_leave_the_database_in_the_same_state():
+    """The two paths must not drift again. run_delisting picks between them
+    based on whether the batch succeeded, so which one ran must never be
+    observable afterwards -- that divergence is exactly this bug.
+
+    Compared by outcome rather than by table list: a shared helper returning
+    the same names proves nothing if only one caller passes extra_tables,
+    which is precisely how these two drifted apart.
+    """
+    def _populate(conn):
+        bulk_upsert_listings(conn, [_listing(1), _listing(2)])
+        conn.execute("INSERT INTO hosted_photos VALUES ('L0001', 1, 'https://blob/a.jpg')")
+        conn.execute("INSERT INTO hosted_photos VALUES ('L0002', 1, 'https://blob/b.jpg')")
+        conn.commit()
+
+    def _snapshot(conn):
+        tables = sorted(
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")
+        )
+        return {
+            t: sorted(map(tuple, conn.execute(f"SELECT * FROM {t}").fetchall()))
+            for t in tables
+        }
+
+    batched = _turso_shaped_conn()
+    _populate(batched)
+    bulk_delete_listings(batched, ["L0001"])
+
+    fallback = _turso_shaped_conn()
+    _populate(fallback)
+    delete_listing(fallback, "L0001")
+
+    assert _snapshot(batched) == _snapshot(fallback)
