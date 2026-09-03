@@ -57,11 +57,20 @@ def connect(
     conn.row_factory = ROW_FACTORY
     return conn
 
+# source_url is what a hosted photo actually IS. (listing_id, position) is
+# only where it sits: a listing can relist under the same id with entirely
+# different photos in the same positions, and the upload skip believed them
+# identical -- 6085 West 82nd Drive came back with 44 stale rows that all
+# matched positionally. Added as a nullable column so _migrate_missing_columns
+# can ALTER an existing table into it; ops/backfill_hosted_source_urls.py
+# fills the pre-existing rows, and until it runs a NULL means "identity
+# unknown", which collect_pending_photos treats as needing re-upload.
 TURSO_SCHEMA_EXTRA = """
 CREATE TABLE IF NOT EXISTS hosted_photos (
     listing_id TEXT NOT NULL,
     position INTEGER NOT NULL,
     blob_url TEXT NOT NULL,
+    source_url TEXT,
     PRIMARY KEY (listing_id, position)
 );
 """

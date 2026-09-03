@@ -4,6 +4,8 @@ from urllib.parse import urlencode
 
 import requests
 
+from src.photos import photo_filename
+
 # The Vercel Blob upload endpoint, its API version, and the header names below
 # are @vercel/blob's internal contract, not the public REST API -- they are not
 # in the published docs. Read out of @vercel/blob 2.8.0 as bundled with the
@@ -43,6 +45,7 @@ def upload_photo(
     listing_id: str,
     position: int,
     rw_token: str,
+    source_url: str,
     put: Callable = requests.put,
 ) -> str:
     """Uploads one photo to Vercel Blob with a single-part REST PUT and
@@ -54,6 +57,13 @@ def upload_photo(
     A 3,000-photo backfill cost 11,000 operations against a 2,000/month
     budget and suspended the store for 30 days. One PUT is one operation.
 
+    The pathname carries sha1(source_url)[:8], so a photo that CHANGED at a
+    position lands on a new pathname rather than overwriting the old one.
+    That is deliberate: an overwrite sits behind Blob's CDN cache (default
+    cacheControlMaxAge is one month) and the viewer would go on serving the
+    old image even though the bytes and the row were both replaced. The old
+    blob is deleted by the caller once the replacement row is written.
+
     `put` is injected so tests never touch the network, the same seam the
     subprocess version used for `run`.
 
@@ -62,7 +72,7 @@ def upload_photo(
     catch. publish.py depends on that: a failed upload must record no
     hosted_photos row so a rerun retries it.
     """
-    pathname = f"photos/{listing_id}/{position:02d}.jpg"
+    pathname = f"photos/{listing_id}/{photo_filename(position, source_url)}"
     # Read before requesting: a missing file must not burn an operation.
     body = local_path.read_bytes()
 

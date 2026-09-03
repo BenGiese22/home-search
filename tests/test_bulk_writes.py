@@ -340,8 +340,14 @@ def test_delisting_prunes_hosted_photos(tmp_path):
     """
     conn = _turso_shaped_conn()
     bulk_upsert_listings(conn, [_listing(1), _listing(2)])
-    conn.execute("INSERT INTO hosted_photos VALUES ('L0001', 1, 'https://blob/a.jpg')")
-    conn.execute("INSERT INTO hosted_photos VALUES ('L0002', 1, 'https://blob/b.jpg')")
+    conn.execute(
+        "INSERT INTO hosted_photos (listing_id, position, blob_url, source_url) "
+        "VALUES ('L0001', 1, 'https://blob/a.jpg', 'https://cdn/a.jpg')"
+    )
+    conn.execute(
+        "INSERT INTO hosted_photos (listing_id, position, blob_url, source_url) "
+        "VALUES ('L0002', 1, 'https://blob/b.jpg', 'https://cdn/b.jpg')"
+    )
     conn.commit()
 
     bulk_delete_listings(conn, ["L0001"])
@@ -430,8 +436,14 @@ def test_single_listing_fallback_also_prunes_hosted_photos():
     """
     conn = _turso_shaped_conn()
     bulk_upsert_listings(conn, [_listing(1), _listing(2)])
-    conn.execute("INSERT INTO hosted_photos VALUES ('L0001', 1, 'https://blob/a.jpg')")
-    conn.execute("INSERT INTO hosted_photos VALUES ('L0002', 1, 'https://blob/b.jpg')")
+    conn.execute(
+        "INSERT INTO hosted_photos (listing_id, position, blob_url, source_url) "
+        "VALUES ('L0001', 1, 'https://blob/a.jpg', 'https://cdn/a.jpg')"
+    )
+    conn.execute(
+        "INSERT INTO hosted_photos (listing_id, position, blob_url, source_url) "
+        "VALUES ('L0002', 1, 'https://blob/b.jpg', 'https://cdn/b.jpg')"
+    )
     conn.commit()
 
     delete_listing(conn, "L0001")
@@ -462,8 +474,14 @@ def test_both_delete_paths_leave_the_database_in_the_same_state():
     """
     def _populate(conn):
         bulk_upsert_listings(conn, [_listing(1), _listing(2)])
-        conn.execute("INSERT INTO hosted_photos VALUES ('L0001', 1, 'https://blob/a.jpg')")
-        conn.execute("INSERT INTO hosted_photos VALUES ('L0002', 1, 'https://blob/b.jpg')")
+        conn.execute(
+        "INSERT INTO hosted_photos (listing_id, position, blob_url, source_url) "
+        "VALUES ('L0001', 1, 'https://blob/a.jpg', 'https://cdn/a.jpg')"
+    )
+        conn.execute(
+        "INSERT INTO hosted_photos (listing_id, position, blob_url, source_url) "
+        "VALUES ('L0002', 1, 'https://blob/b.jpg', 'https://cdn/b.jpg')"
+    )
         conn.commit()
 
     def _snapshot(conn):
