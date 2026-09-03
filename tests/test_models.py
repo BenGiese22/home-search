@@ -1,4 +1,5 @@
-from src.models import Listing, is_active_status
+import pytest
+from src.models import Listing, is_active_status, is_pending_status, select_present_listings
 
 
 def test_listing_construction():
@@ -91,3 +92,62 @@ def test_listing_hoa_annual_defaults_to_none_for_backward_compatible_constructio
         listing_url="https://example.com/1",
     )
     assert listing.hoa_annual is None
+
+
+# --- the favorites Pending exemption (issue #50) ---------------------------
+
+def _l(listing_id, status):
+    return Listing(
+        listing_id=listing_id, address=f"{listing_id} St", city="Arvada", state="CO",
+        zip_code="80003", price="$600,000", beds=3, baths=2.0, sqft=2000,
+        lot_sqft=7000, parking_spaces=2, year_built=2000, description="d",
+        amenities=[], photo_urls=[], listing_url="https://example.com/x",
+        localized_status=status,
+    )
+
+
+@pytest.mark.parametrize(
+    "status, expected",
+    [("Pending", True), ("Pending / Backup", True), ("Active", False),
+     ("Closed", False), ("Expired", False), ("", False)],
+)
+def test_is_pending_status(status, expected):
+    assert is_pending_status(status) == expected
+
+
+def test_pending_favorite_is_kept():
+    """The whole point of #50: a favorite that goes under contract keeps its
+    row, photos and paid vision scoring, because Pending deals fall through."""
+    kept = select_present_listings(
+        [_l("fav", "Pending")], pinned_ids=frozenset(), favorite_ids=frozenset({"fav"})
+    )
+    assert [l.listing_id for l in kept] == ["fav"]
+
+
+def test_pending_non_favorite_is_still_excluded():
+    """Ben's 2026-08-27 call stands for listings generally -- the exemption is
+    scoped to favorites, not a change to is_active_status."""
+    assert select_present_listings(
+        [_l("match", "Pending")], pinned_ids=frozenset(), favorite_ids=frozenset()
+    ) == []
+
+
+@pytest.mark.parametrize("status", ["Closed", "Expired", "Withdrawn"])
+def test_dead_favorite_is_still_excluded(status):
+    """Pending only. A Closed or Expired favorite is genuinely gone and would
+    otherwise accumulate forever."""
+    assert select_present_listings(
+        [_l("fav", status)], pinned_ids=frozenset(), favorite_ids=frozenset({"fav"})
+    ) == []
+
+
+def test_active_and_pinned_paths_are_unchanged():
+    listings = [_l("active", "Active"), _l("coming", "Coming Soon"),
+                _l("pinned", "Expired"), _l("dead", "Closed")]
+    kept = select_present_listings(listings, pinned_ids=frozenset({"pinned"}))
+    assert [l.listing_id for l in kept] == ["active", "coming", "pinned"]
+
+
+def test_favorite_ids_defaults_to_empty():
+    """Callers that pass no favorites get exactly the old behaviour."""
+    assert select_present_listings([_l("fav", "Pending")], pinned_ids=frozenset()) == []

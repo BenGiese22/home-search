@@ -245,3 +245,27 @@ def test_fetch_collection_tabs_rejects_unknown_tab_before_requesting(fake_parse)
     with pytest.raises(ValueError, match="notInterested"):
         fetch_collection_tabs(page, COLLECTION_URL, ("matches", "notInterested"))
     assert page.filters_requested == []
+
+
+def test_fetch_records_which_listings_came_from_which_tab(fake_parse):
+    page = FakePage({0: ["m1"], 1: ["f1", "f2"]})
+    fetch = fetch_collection_tabs(page, COLLECTION_URL, ("favorites", "matches"))
+    assert fetch.tab_ids == {"favorites": frozenset({"f1", "f2"}),
+                             "matches": frozenset({"m1"})}
+    assert fetch.favorite_ids == frozenset({"f1", "f2"})
+
+
+def test_favorite_ids_is_empty_when_the_favorites_tab_failed(fake_parse):
+    """A failed tab must not quietly strip the Pending exemption and turn a
+    favorite back into a deletable match. It cannot here: the run is already
+    untrustworthy for delisting, and favorite_ids is empty rather than wrong."""
+    page = FakePage({0: ["m1"], 1: ["f1"]}, raise_for={1})
+    fetch = fetch_collection_tabs(page, COLLECTION_URL, ("favorites", "matches"))
+    assert fetch.favorite_ids == frozenset()
+    assert fetch.failed_tabs == frozenset({"favorites"})
+
+
+def test_favorite_ids_is_empty_when_favorites_was_not_requested(fake_parse):
+    page = FakePage({0: ["m1"]})
+    fetch = fetch_collection_tabs(page, COLLECTION_URL, ("matches",))
+    assert fetch.favorite_ids == frozenset()

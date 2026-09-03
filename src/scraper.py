@@ -155,10 +155,18 @@ class CollectionFetch:
     listings: list[Listing] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)   # tab -> raw count, successes only
     errors: dict[str, str] = field(default_factory=dict)   # tab -> error text
+    tab_ids: dict[str, frozenset[str]] = field(default_factory=dict)  # tab -> listing ids
 
     @property
     def failed_tabs(self) -> frozenset[str]:
         return frozenset(self.errors)
+
+    @property
+    def favorite_ids(self) -> frozenset[str]:
+        """Which listings are favorites, for the Pending exemption. Empty when
+        the favorites tab was not fetched or failed -- so a failed tab can
+        never make a favorite look like a plain match and get it deleted."""
+        return self.tab_ids.get("favorites", frozenset())
 
 
 def fetch_collection_tabs(
@@ -183,6 +191,7 @@ def fetch_collection_tabs(
     merged: list[Listing] = []
     counts: dict[str, int] = {}
     errors: dict[str, str] = {}
+    tab_ids: dict[str, frozenset[str]] = {}
     for tab in tabs:
         try:
             listings = fetch_collection_listings(page, collection_url, COLLECTION_TABS[tab])
@@ -190,8 +199,12 @@ def fetch_collection_tabs(
             errors[tab] = str(exc)
             continue
         counts[tab] = len(listings)
+        tab_ids[tab] = frozenset(listing.listing_id for listing in listings)
         merged.extend(listings)
 
     return CollectionFetch(
-        listings=dedupe_by_listing_id(merged), counts=counts, errors=errors
+        listings=dedupe_by_listing_id(merged),
+        counts=counts,
+        errors=errors,
+        tab_ids=tab_ids,
     )

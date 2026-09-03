@@ -76,3 +76,46 @@ def is_active_status(localized_status: str) -> bool:
         or localized_status.startswith("Active")
         or localized_status == "Coming Soon"
     )
+
+
+def is_pending_status(localized_status: str) -> bool:
+    """True for a listing under contract but not yet closed.
+
+    Kept separate from is_active_status rather than folded into it: Ben's
+    2026-08-27 call was that Pending is excluded for listings generally, and
+    that still holds. This exists only so favorites can be treated
+    differently -- see select_present_listings.
+    """
+    return bool(localized_status) and localized_status.startswith("Pending")
+
+
+def select_present_listings(listings, pinned_ids, favorite_ids=frozenset()):
+    """The listings worth keeping in the dataset this run.
+
+    One function because both scrape.py and check.py delist off this decision
+    and they must not drift: a listing that check.py considers absent gets
+    hard-deleted, rows, photos and paid vision scores together. That drift is
+    exactly what made favorites deletable before they were ever fetched.
+
+    Three ways to stay:
+
+    - pinned, which overrides status entirely (an explicit pin means Ben wants
+      it tracked whatever the MLS says);
+    - an active status, per is_active_status;
+    - a favorite that has gone Pending. A favorite is the strongest interest
+      signal in the system and was, until this, the least protected -- only
+      Ben or Megan move a listing into favorites, and only they move it back
+      out. Pending deals fall through and return to Active, so deleting one
+      throws away photos and vision scoring that will be needed again in a
+      fortnight. Deliberately Pending only: a Closed or Expired favorite is
+      genuinely gone and would otherwise accumulate forever (issue #50).
+    """
+    return [
+        listing for listing in listings
+        if listing.listing_id in pinned_ids
+        or is_active_status(listing.localized_status)
+        or (
+            listing.listing_id in favorite_ids
+            and is_pending_status(listing.localized_status)
+        )
+    ]

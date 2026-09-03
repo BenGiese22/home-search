@@ -5,7 +5,7 @@ from src.config import load_config, load_env
 from src.turso_db import stage_connection
 from src.db import get_pinned_listing_ids, get_price_snapshot, upsert_listing
 from src.diff import collection_fetch_is_trustworthy, compute_changes, format_report, run_delisting
-from src.models import is_active_status
+from src.models import select_present_listings
 from src.scraper import derive_pinned_ids_from_urls, fetch_collection_tabs
 
 DATA_DIR = Path("data")
@@ -49,10 +49,7 @@ def main() -> None:
     # upserting and delisting purposes alike, exactly like one that dropped
     # out of the collection API's results entirely -- see scrape.py's
     # matching logic for the full rationale. Pinned listings are exempt.
-    present = [
-        listing for listing in fetched
-        if listing.listing_id in pinned_ids or is_active_status(listing.localized_status)
-    ]
+    present = select_present_listings(fetched, pinned_ids, fetch.favorite_ids)
 
     # Deliberately loop over `present`, not the raw `fetched` list: an
     # inactive, non-pinned listing must never be upserted here, even for the
