@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from src.photo_upload import collect_pending_photos, upload_photos
+from src.photos import photo_filename
 from src.turso_db import ensure_schema
 
 
@@ -28,13 +29,23 @@ def _conn() -> sqlite3.Connection:
     return conn
 
 
+def _url(listing_id: str, position: int) -> str:
+    """A stable fake source URL per (listing, position), so tests can build
+    the same content-keyed filename the pipeline would."""
+    return f"https://cdn.example.com/{listing_id}/{position}.jpg"
+
+
+def _name(listing_id: str, position: int) -> str:
+    return photo_filename(position, _url(listing_id, position))
+
+
 @pytest.fixture
 def photos(tmp_path) -> Path:
     for listing_id, count in (("aaa", 3), ("bbb", 2)):
         d = tmp_path / listing_id
         d.mkdir()
         for i in range(1, count + 1):
-            (d / f"{i:02d}.jpg").write_bytes(b"jpeg")
+            (d / _name(listing_id, i)).write_bytes(b"jpeg")
     return tmp_path
 
 
@@ -74,7 +85,7 @@ def test_the_single_query_holds_as_the_corpus_grows(tmp_path):
         d = tmp_path / f"L{n}"
         d.mkdir()
         for i in range(1, 21):
-            (d / f"{i:02d}.jpg").write_bytes(b"x")
+            (d / _name(f"L{n}", i)).write_bytes(b"x")
 
     with _Counter(conn) as statements:
         pending = collect_pending_photos(conn, tmp_path, [f"L{n}" for n in range(40)])
@@ -98,10 +109,13 @@ def test_a_listing_with_no_photo_directory_is_skipped(photos):
     assert collect_pending_photos(_conn(), photos, ["missing"]) == []
 
 
-def test_a_photo_named_oddly_is_skipped_not_fatal(tmp_path):
+def test_an_old_format_file_is_never_uploaded(tmp_path):
+    """A leftover NN.jpg predates the content-keyed rename and may belong to
+    a previous listing at this id -- uploading it is the stale-photo bug."""
     d = tmp_path / "aaa"
     d.mkdir()
-    (d / "01.jpg").write_bytes(b"x")
+    (d / _name("aaa", 1)).write_bytes(b"x")
+    (d / "02.jpg").write_bytes(b"x")
     (d / "cover.jpg").write_bytes(b"x")
 
     pending = collect_pending_photos(_conn(), tmp_path, ["aaa"])
@@ -113,7 +127,7 @@ def test_the_per_listing_cap_is_honoured(tmp_path):
     d = tmp_path / "aaa"
     d.mkdir()
     for i in range(1, 21):
-        (d / f"{i:02d}.jpg").write_bytes(b"x")
+        (d / _name("aaa", i)).write_bytes(b"x")
 
     pending = collect_pending_photos(_conn(), tmp_path, ["aaa"], max_per_listing=8)
 
@@ -124,7 +138,7 @@ def test_a_cap_of_zero_means_no_cap(tmp_path):
     d = tmp_path / "aaa"
     d.mkdir()
     for i in range(1, 13):
-        (d / f"{i:02d}.jpg").write_bytes(b"x")
+        (d / _name("aaa", i)).write_bytes(b"x")
 
     assert len(collect_pending_photos(_conn(), tmp_path, ["aaa"], max_per_listing=0)) == 12
 
@@ -206,7 +220,7 @@ def test_recording_is_batched_not_one_statement_per_photo(tmp_path):
     d = tmp_path / "aaa"
     d.mkdir()
     for i in range(1, 121):
-        (d / f"{i:02d}.jpg").write_bytes(b"x")
+        (d / _name("aaa", i)).write_bytes(b"x")
     conn = _conn()
 
     with _Counter(conn) as statements:

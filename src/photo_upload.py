@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 from src.blob_upload import upload_photo
+from src.photos import PHOTO_GLOB, parse_photo_filename
 from src.turso_db import chunk_size
 
 # Uploads are independent -- each writes its own pathname -- so they
@@ -48,15 +49,20 @@ def collect_pending_photos(
         photo_dir = photos_dir / listing_id
         if not photo_dir.exists():
             continue
-        photo_paths = sorted(photo_dir.glob("*.jpg"))
+        # PHOTO_GLOB rather than *.jpg so an un-migrated NN.jpg is never
+        # uploaded: it may be a previous listing's photo at this id.
+        photo_paths = sorted(photo_dir.glob(PHOTO_GLOB))
         if max_per_listing > 0:
             photo_paths = photo_paths[:max_per_listing]
         for photo_path in photo_paths:
-            try:
-                position = int(photo_path.stem)
-            except ValueError:
-                print(f"  {listing_id}/{photo_path.name}: skipped (name is not NN.jpg)")
+            parsed = parse_photo_filename(photo_path.name)
+            if parsed is None:
+                print(
+                    f"  {listing_id}/{photo_path.name}: skipped "
+                    "(name is not NN-<hash8>.jpg)"
+                )
                 continue
+            position, _ = parsed
             if (listing_id, position) in already:
                 continue
             pending.append((listing_id, position, photo_path))
