@@ -65,7 +65,14 @@ def main() -> None:
         upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
 
     report = compute_changes(present, before, pinned_ids=pinned_ids)
-    run_delisting(db_conn, PHOTOS_DIR, STORE_DIR, fetch_succeeded, report, before, pinned_ids)
+    run_delisting(
+        db_conn, PHOTOS_DIR, STORE_DIR, fetch_succeeded, report, before, pinned_ids,
+        # Without this, a delisting that happens to run through check.py
+        # deletes the hosted_photos rows and strands their blobs -- the same
+        # asymmetry that let 1,813 orphans accumulate when bulk_delete_listings
+        # pruned hosted_photos and delete_listing did not.
+        blob_token=load_env().get("BLOB_READ_WRITE_TOKEN"),
+    )
 
     db_conn.close()
 

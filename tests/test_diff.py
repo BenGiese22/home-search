@@ -614,3 +614,37 @@ def test_run_delisting_passes_the_blob_token_through(tmp_path: Path):
     )
 
     assert seen == [(["https://blob/a.jpg"], "tok")]
+
+
+def test_every_delisting_entry_point_passes_a_blob_token():
+    """The asymmetry that already cost this project 1,813 orphaned rows.
+
+    `run_delisting` reclaims a delisted listing's blobs only when it is given
+    a token; without one it prints the URLs and moves on. scrape.py passed
+    one and check.py did not, so a delisting that happened to run through
+    check.py stranded its blobs -- the same shape as bulk_delete_listings
+    pruning hosted_photos while delete_listing did not.
+
+    Checked by parsing each entry point rather than scanning its text: both
+    files also *mention* run_delisting() in comments, and a text window is
+    the wrong tool twice over -- it matches prose, and it silently misses a
+    keyword pushed past the window by an intervening comment. A third caller
+    that forgets the token fails here.
+    """
+    import ast
+    from pathlib import Path
+
+    for entry in ("scrape.py", "check.py"):
+        tree = ast.parse(Path(entry).read_text(), entry)
+        calls = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "run_delisting"
+        ]
+        assert calls, f"{entry} does not call run_delisting"
+        assert all(
+            any(kw.arg == "blob_token" for kw in call.keywords) for call in calls
+        ), (
+            f"{entry} calls run_delisting without blob_token, so a delisting "
+            f"through it strands the blobs whose rows it deletes"
+        )
