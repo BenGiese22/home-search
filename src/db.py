@@ -447,6 +447,182 @@ def bulk_delete_listings(conn, listing_ids: list[str]) -> None:
                 _delete_where_listing_in(conn, table, listing_ids)
 
 
+def hosted_photo_index(conn) -> dict[tuple[str, int], str | None]:
+    """Every hosted photo's identity in ONE statement:
+    `(listing_id, position) -> source_url`.
+
+    A NULL source_url is preserved as None rather than dropped. NULL means
+    the row predates the column, i.e. identity UNKNOWN -- which must not be
+    mistaken either for a real URL or for the row being absent. Callers treat
+    unknown as "does not match", so the photo re-uploads rather than being
+    assumed current.
+    """
+    return {
+        (row[0], int(row[1])): row[2]
+        for row in conn.execute(
+            "SELECT listing_id, position, source_url FROM hosted_photos"
+        )
+    }
+
+
+def needs_photo_work(listing: Listing, hosted_index: dict) -> bool:
+    """True when any of this listing's CURRENT photo URLs is not already
+    hosted under that exact URL. Pure -- the caller does the one read.
+
+    This replaces `is_scraped()`, which asked whether a JSON file existed on
+    disk. That question is unanswerable in a sandbox with no persistent
+    disk, where every listing looks unscraped and the run re-downloads the
+    whole corpus. The question that survives is "does the database already
+    have this listing's current photos", which both execution homes can ask.
+
+    Driven by the listing's URLs, not by the hosted rows: a hosted row at a
+    position the listing no longer serves is stale, and stale rows must not
+    make a listing look complete.
+    """
+    return any(
+        hosted_index.get((listing.listing_id, position)) != url
+        for position, url in enumerate(listing.photo_urls, start=1)
+    )
+
+
+def get_photo_urls_by_listing(conn) -> dict[str, list[str]]:
+    """Every listing's photo URLs in ONE statement, in position order.
+
+    LEFT JOIN from listings so a listing with no photo_urls rows still gets a
+    key with an empty list -- callers index this dict directly, and a missing
+    key would be a KeyError mid-scrape rather than "no photos". Same idiom as
+    get_amenities_by_listing.
+    """
+    by_listing: dict[str, list[str]] = {}
+    for row in conn.execute(
+        """
+        SELECT l.listing_id AS listing_id, p.url AS url
+        FROM listings l
+        LEFT JOIN photo_urls p ON p.listing_id = l.listing_id
+        ORDER BY l.listing_id, p.position
+        """
+    ):
+        urls = by_listing.setdefault(row["listing_id"], [])
+        if row["url"] is not None:
+            urls.append(row["url"])
+    return by_listing
+
+
+def listing_ids_with_any_hosted_or_no_urls(conn) -> frozenset[str]:
+    """Listings that need no photo pre-fetch: either something is already
+    hosted for them, or they have no photo URLs at all.
+
+    A deliberately WEAK gate, and only for the explicit-URL loop, which has
+    to decide whether to open a listing's detail page before it knows the
+    listing's URLs. It cannot use needs_photo_work -- that needs the URLs
+    this fetch would obtain. Absence from this set means "worth fetching",
+    never "definitely incomplete"; the real decision is made afterwards.
+    """
+    return frozenset(
+        row[0]
+        for row in conn.execute(
+            """
+            SELECT l.listing_id
+            FROM listings l
+            LEFT JOIN hosted_photos h ON h.listing_id = l.listing_id
+            LEFT JOIN photo_urls p ON p.listing_id = l.listing_id
+            GROUP BY l.listing_id
+            HAVING COUNT(h.listing_id) > 0 OR COUNT(p.listing_id) = 0
+            """
+        )
+    )
+
+
+def get_listing_ids_missing_fields(
+    conn, fields: tuple[str, ...]
+) -> list[str]:
+    """Listings where ANY of `fields` is NULL, in ONE statement.
+
+    Replaces needs_field_backfill(), which read each listing's stored JSON
+    off disk -- one file open per listing, and nothing at all in a sandbox.
+
+    Field names are interpolated into SQL because a column name cannot be a
+    bound parameter, so they are validated against the schema's own column
+    list first. That is the whole defence: anything not literally a column of
+    `listings` raises before a statement is built.
+    """
+    valid = _parse_listing_columns()
+    unknown = [f for f in fields if f not in valid]
+    if unknown:
+        raise ValueError(
+            f"unknown listings column(s): {unknown}. "
+            f"Fields are interpolated into SQL and must be real column names."
+        )
+    if not fields:
+        return []
+    where = " OR ".join(f"{f} IS NULL" for f in fields)
+    return [
+        row[0]
+        for row in conn.execute(
+            f"SELECT listing_id FROM listings WHERE {where} ORDER BY listing_id"
+        )
+    ]
+
+
+def _parse_listing_columns() -> frozenset[str]:
+    """The `listings` column names, read out of _SCHEMA rather than from a
+    live connection, so validation does not cost a round-trip."""
+    body = re.search(
+        r"CREATE TABLE IF NOT EXISTS\s+listings\s*\((.*?)\n\s*\)", _SCHEMA, re.DOTALL
+    ).group(1)
+    names = set()
+    for part in body.split(","):
+        token = part.strip().split(None, 1)
+        if token and token[0].upper() not in {
+            "PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT"
+        }:
+            names.add(token[0])
+    return frozenset(names)
+
+
+def listings_from_rows(
+    rows,
+    amenities_by_id: dict[str, list[str]],
+    photo_urls_by_id: dict[str, list[str]],
+) -> list[Listing]:
+    """Rebuild Listing objects from a listings SELECT plus two set-at-a-time
+    child reads. Pure: makes no queries of its own.
+
+    Moved from score.py's _row_to_listing, which left photo_urls empty
+    because scoring never needed them. scrape.py's gates do, so this fills
+    them -- along with property_type and localized_status, which the scoring
+    version also dropped.
+    """
+    return [
+        Listing(
+            listing_id=row["listing_id"],
+            address=row["address"],
+            city=row["city"],
+            state=row["state"],
+            zip_code=row["zip_code"],
+            price=row["price"],
+            beds=row["beds"],
+            baths=row["baths"],
+            sqft=row["sqft"],
+            lot_sqft=row["lot_sqft"],
+            parking_spaces=row["parking_spaces"],
+            year_built=row["year_built"],
+            description=row["description"],
+            amenities=amenities_by_id.get(row["listing_id"], []),
+            photo_urls=photo_urls_by_id.get(row["listing_id"], []),
+            listing_url=row["listing_url"],
+            property_type=row["property_type"] or "",
+            localized_status=row["localized_status"] or "",
+            hoa_annual=row["hoa_annual"],
+            tax_annual=row["tax_annual"],
+            sqft_above_grade=row["sqft_above_grade"],
+            sqft_below_grade=row["sqft_below_grade"],
+            outdoor_spaces=json.loads(row["outdoor_spaces"] or "[]"),
+        )
+        for row in rows
+    ]
+
+
 def get_pinned_listing_ids(conn: sqlite3.Connection) -> frozenset[str]:
     """Listing_ids currently marked is_pinned — tracked individually via
     LISTING_URLS rather than discovered through the collection, and

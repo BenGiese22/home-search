@@ -1,5 +1,4 @@
 import csv
-import json
 import sys
 from pathlib import Path
 
@@ -8,10 +7,10 @@ from src.db import (
     get_amenities_by_listing,
     get_commutes_by_listing,
     get_visual_scores_by_listing,
+    listings_from_rows,
     query_listings,
     upsert_scores,
 )
-from src.models import Listing
 from src.scoring import compute_collection_stats, finished_sqft, score_listing
 
 DATA_DIR = Path("data")
@@ -66,32 +65,6 @@ def write_ranked_csv(ranked: list[tuple], csv_path: Path) -> None:
             ])
 
 
-def _row_to_listing(row, amenities: list[str]) -> Listing:
-    return Listing(
-        listing_id=row["listing_id"],
-        address=row["address"],
-        city=row["city"],
-        state=row["state"],
-        zip_code=row["zip_code"],
-        price=row["price"],
-        beds=row["beds"],
-        baths=row["baths"],
-        sqft=row["sqft"],
-        lot_sqft=row["lot_sqft"],
-        parking_spaces=row["parking_spaces"],
-        year_built=row["year_built"],
-        description=row["description"],
-        amenities=amenities,
-        photo_urls=[],
-        listing_url=row["listing_url"],
-        hoa_annual=row["hoa_annual"],
-        tax_annual=row["tax_annual"],
-        sqft_above_grade=row["sqft_above_grade"],
-        sqft_below_grade=row["sqft_below_grade"],
-        outdoor_spaces=json.loads(row["outdoor_spaces"] or "[]"),
-    )
-
-
 def main() -> None:
     sort_by_value = "--sort-by-value" in sys.argv
 
@@ -105,7 +78,7 @@ def main() -> None:
     commute_by_id = get_commutes_by_listing(conn)
     visual_by_id = get_visual_scores_by_listing(conn)
 
-    listings = [_row_to_listing(row, amenities_by_id.get(row["listing_id"], [])) for row in rows]
+    listings = listings_from_rows(rows, amenities_by_id, {})
     price_numeric_by_id = {row["listing_id"]: row["price_numeric"] for row in rows}
 
     # Normalize against finished area, matching what score_sqft now scores --
