@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, NamedTuple
 
+from src.db import get_photo_urls_by_listing  # noqa: F401  (re-exported: ops/ scripts and scrape.py import it from here historically)
 from src.blob_upload import delete_blobs, upload_photo
 from src.photos import photo_filename
 from src.turso_db import chunk_size
@@ -50,31 +51,6 @@ class PendingPhoto(NamedTuple):
     path: Path
     source_url: str
     superseded_blob_url: str | None
-
-
-def get_photo_urls_by_listing(conn) -> dict[str, list[str]]:
-    """Every listing's photo URLs in ONE statement, in position order,
-    keyed by listing_id. A listing with no photo_urls rows still gets a key
-    with an empty list, so callers can index the dict directly.
-
-    B1 moves this to src/db.py under the same name, alongside the other
-    set-based queries; it lives here until then so B0 does not collide with
-    that task inside src/db.py. Same LEFT JOIN idiom as
-    get_amenities_by_listing.
-    """
-    by_listing: dict[str, list[str]] = {}
-    for row in conn.execute(
-        """
-        SELECT l.listing_id AS listing_id, p.url AS url
-        FROM listings l
-        LEFT JOIN photo_urls p ON p.listing_id = l.listing_id
-        ORDER BY l.listing_id, p.position
-        """
-    ):
-        urls = by_listing.setdefault(row["listing_id"], [])
-        if row["url"] is not None:
-            urls.append(row["url"])
-    return by_listing
 
 
 def collect_pending_photos(
