@@ -232,3 +232,67 @@ def test_revalidate_is_called_with_the_configured_url_and_secret(monkeypatch):
 
     assert _REAL_DEFAULT_REVALIDATE() is True
     assert captured == {"url": "https://short-list.example", "secret": "s3cret"}
+
+
+# --- stage-specific flag forwarding -------------------------------------
+#
+# scrape_flags exists because scrape.py has options a caller wants to reach.
+# Every other stage had none, so there was no general mechanism -- and then
+# compute_commutes.py grew --force, which is the only way to re-measure the
+# corpus after changing how a commute is computed. Stage.forwards is that
+# mechanism: a pipeline-level trigger maps to one stage's flag.
+
+
+def test_a_forwarded_trigger_reaches_only_the_stage_that_declares_it():
+    runner = Runner()
+    run_pipeline(build_plan(), runner=runner, forwarded=["--force-commutes"])
+    commutes_argv = next(a for a in runner.calls if a[1] == "compute_commutes.py")
+    assert "--force" in commutes_argv
+    for argv in runner.calls:
+        if argv[1] != "compute_commutes.py":
+            assert "--force" not in argv
+
+
+def test_a_trigger_no_stage_declares_is_ignored():
+    runner = Runner()
+    run_pipeline(build_plan(), runner=runner, forwarded=["--force-nothing"])
+    for argv in runner.calls:
+        assert argv[2:] == []
+
+
+def test_nothing_is_forwarded_when_the_trigger_is_absent():
+    runner = Runner()
+    run_pipeline(build_plan(), runner=runner)
+    for argv in runner.calls:
+        assert argv[2:] == []
+
+
+def test_dry_run_shows_the_forwarded_flag_and_still_runs_nothing(capsys):
+    runner = Runner()
+    run_pipeline(build_plan(), runner=runner, dry_run=True, forwarded=["--force-commutes"])
+    out = capsys.readouterr().out
+    assert "compute_commutes.py --force" in out
+    assert runner.calls == []
+
+
+def test_a_single_stage_run_still_forwards():
+    """--only=commutes --force-commutes is how a re-measure would be asked
+    for by hand; the trigger must survive the narrowed plan."""
+    runner = Runner()
+    run_pipeline(build_plan(only="commutes"), runner=runner, forwarded=["--force-commutes"])
+    assert runner.calls[0][2:] == ["--force"]
+
+
+def test_collect_forwarded_reads_the_triggers_off_the_command_line():
+    assert pipeline._collect_forwarded(["--force-commutes"]) == ["--force-commutes"]
+    assert pipeline._collect_forwarded(["--max-age=5h"]) == []
+
+
+def test_force_commutes_is_not_mistaken_for_the_scrape_force_flag():
+    """SCRAPE_FLAGS contains --force. A prefix match would send scrape.py a
+    --force it never asked for, re-fetching every photo in the corpus."""
+    assert "--force-commutes" not in pipeline.SCRAPE_FLAGS
+    argv = ["--force-commutes"]
+    scrape_flags = [a for a in argv if a in pipeline.SCRAPE_FLAGS]
+    scrape_flags += [a for a in argv if a.startswith(pipeline.SCRAPE_FLAG_PREFIXES)]
+    assert scrape_flags == []
