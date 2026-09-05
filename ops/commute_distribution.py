@@ -19,6 +19,11 @@ distribution rather than guesses to bake into the change that produced it:
    meant to keep one missing field from tanking a composite, but if every
    routed listing scores above 50 then "neutral" is really "last".
 
+The intent, the argument on both sides of the threshold question, and the one
+normalisation that must NOT be used are written up in
+`docs/commute-scoring.md`. Read that before changing a threshold on the
+strength of a number this prints.
+
 **Read-only.** `connect()` rather than `stage_connection()`, so it cannot
 reach `ensure_schema` and alter a table on the way past, and it issues
 nothing but SELECTs.
@@ -145,6 +150,12 @@ def main() -> int:
 
     print("\n" + "=" * 70)
     print("AGAINST THE CURVE  (thresholds unchanged: 20 / 30 / 40 min)")
+    if new and max(new) <= 30.0:
+        print(
+            f"  NOTE: nothing in the corpus exceeds {max(new):.1f} min, so the 30"
+            "\n  and 40 breakpoints are dead against this data -- a curve"
+            "\n  documented as four segments is behaving as two."
+        )
     labels = ["<=20 -> 100", "20-30", "30-40", ">40 -> 0"]
     old_bands, new_bands = band_counts(old), band_counts(new)
     print(f"  {'band':14} {'before':>8} {'after':>8}")
@@ -187,7 +198,13 @@ def main() -> int:
             f"  {share:.0%} of the corpus still sits in the flat region, so the"
             "\n  commute factor remains closer to a constant than to a signal."
             "\n  Recalibrating the thresholds is worth proposing -- but it is now"
-            "\n  a question about the curve, not about the data."
+            "\n  a question about the curve, not about the data, and it is Ben"
+            "\n  and Megan's call rather than the code's: it reorders houses"
+            "\n  they are choosing between."
+            "\n"
+            "\n  Read docs/commute-scoring.md before acting on this. It carries"
+            "\n  the argument for leaving the threshold alone -- which is not"
+            "\n  weak -- and names the one normalisation that must not be used."
         )
     else:
         print(
