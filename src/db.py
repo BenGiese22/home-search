@@ -2,6 +2,7 @@ import json
 import re
 import sqlite3
 from collections.abc import Collection
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -689,6 +690,177 @@ def clear_vision_batch(conn, batch_id: str) -> None:
     """
     with conn:
         conn.execute("DELETE FROM vision_batches WHERE batch_id = ?", (batch_id,))
+
+
+# The cross-home run lock.
+#
+# pipeline.py's fcntl.flock is per-machine. It was the whole answer while one
+# laptop was the only execution home; it sees nothing of a Vercel Sandbox run
+# and a sandbox sees nothing of it. The two are complementary and both stay:
+# flock is instant and free for the same-machine case, this covers the case
+# flock structurally cannot.
+#
+# It is a LEASE, not a lock, because there is no reliable "runner died"
+# signal across homes -- a closed laptop lid and a sandbox reaped at its 3h
+# limit both leave the row behind, and a plain lock would then block the
+# other home forever.
+#
+# Every operation below is exactly one statement. Acquire is a single
+# conditional upsert whose atomicity is the statement's own: SQLite applies
+# it as one unit, so of two homes issuing it concurrently one lands first and
+# the other's ON CONFLICT branch sees the lease it lost to. A read-then-write
+# ("is it free? then take it") would not be a lock at all -- both homes can
+# read "free" before either writes -- and BEGIN IMMEDIATE is not available to
+# fix that here: turso_serverless emits BEGIN <isolation_level> with
+# isolation_level defaulting to DEFERRED, which takes no write lock until its
+# first write. tests/test_pipeline_lock.py pins that driver behaviour so a
+# future default of IMMEDIATE fails loudly rather than being silently relied
+# on.
+
+PIPELINE_LOCK_NAME = "pipeline"
+
+# How long a lease is good for without renewal.
+#
+# Bounded below by the longest single stage: pipeline.py renews between
+# stages, but nothing renews *during* one, and score_photos.py polls a vision
+# batch for hours. A lease shorter than that expires mid-run and lets the
+# other home in, which is the failure this exists to prevent, arriving late.
+#
+# Bounded above by how long a crashed runner may block the other home. The
+# pipeline already tolerates six hours of staleness (pipeline.py's
+# DEFAULT_MAX_AGE_HOURS), so an abandoned lease costs at most one skipped
+# trigger before the next one gets in.
+#
+# Six hours is where those two bounds meet.
+DEFAULT_LEASE_SECONDS = 6 * 3600
+
+
+@dataclass(frozen=True)
+class Lease:
+    """The lease in force after an acquire attempt -- ours if we won, the
+    other home's if we lost, which is why `mine` is a field and not the
+    return value: the loser needs the holder's identity to say anything
+    useful before exiting."""
+
+    token: str
+    held_by: str
+    acquired_at: str
+    expires_at: str
+    mine: bool
+
+
+# `datetime('now')` rather than a bound timestamp, everywhere. The two homes
+# are different machines; if each stamped and compared the lease from its own
+# clock, a laptop running a few minutes fast would read a live sandbox lease
+# as expired and take it. Inside the statement, both homes are measured
+# against the one clock they share. SQLite fixes 'now' for the duration of a
+# single statement, so the three uses below cannot disagree with each other.
+_LEASE_EXPIRED = "pipeline_lock.expires_at <= datetime('now')"
+
+# The conditional upsert. Insert when no row exists; on conflict, overwrite
+# each column only if the stored lease has expired, and otherwise leave it
+# exactly as it was. RETURNING then reports the resulting row either way, so
+# a loser learns who holds the lease from the same round-trip rather than a
+# follow-up SELECT.
+_ACQUIRE_SQL = f"""
+INSERT INTO pipeline_lock (lock_name, lease_token, held_by, acquired_at, expires_at)
+VALUES (?, ?, ?, datetime('now'), datetime('now', ?))
+ON CONFLICT(lock_name) DO UPDATE SET
+    lease_token = CASE WHEN {_LEASE_EXPIRED}
+                       THEN excluded.lease_token ELSE pipeline_lock.lease_token END,
+    held_by     = CASE WHEN {_LEASE_EXPIRED}
+                       THEN excluded.held_by     ELSE pipeline_lock.held_by END,
+    acquired_at = CASE WHEN {_LEASE_EXPIRED}
+                       THEN excluded.acquired_at ELSE pipeline_lock.acquired_at END,
+    expires_at  = CASE WHEN {_LEASE_EXPIRED}
+                       THEN excluded.expires_at  ELSE pipeline_lock.expires_at END
+RETURNING lease_token, held_by, acquired_at, expires_at
+"""
+
+
+def acquire_pipeline_lease(
+    conn,
+    held_by: str,
+    token: str,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
+) -> Lease:
+    """Try to take the cross-home run lease, in ONE statement.
+
+    `held_by` is the execution home (a hostname or HOME_SEARCH_HOME) and is
+    only ever read by a human. `token` identifies this RUN and is the thing
+    ownership is decided on -- a second process on the same home is still a
+    second run, and keying on the home name would let a restarted laptop run
+    steal its own predecessor's lease.
+
+    Returns the lease now in force. `lease.mine` is the answer; when it is
+    False, the rest of the fields describe the run that beat us.
+    """
+    row = conn.execute(
+        _ACQUIRE_SQL, (PIPELINE_LOCK_NAME, token, held_by, f"+{int(lease_seconds)} seconds")
+    ).fetchone()
+    # Read the winner back out of the row rather than trusting rowcount:
+    # turso_serverless reports rowcount as -1 for any statement that returns
+    # columns, and what it would report for an upsert that updated nothing is
+    # not something this project has verified against the server. A returned
+    # token is positive evidence and means the same thing on both drivers.
+    if hasattr(conn, "commit"):
+        conn.commit()
+    return Lease(
+        token=row["lease_token"],
+        held_by=row["held_by"],
+        acquired_at=row["acquired_at"],
+        expires_at=row["expires_at"],
+        mine=row["lease_token"] == token,
+    )
+
+
+def renew_pipeline_lease(
+    conn, token: str, lease_seconds: int = DEFAULT_LEASE_SECONDS
+) -> bool:
+    """Push our own lease's expiry out, in ONE statement.
+
+    Called between stages, so a full run may outlast a single lease without
+    the lock going stale under it. Guarded on the token, so it can only ever
+    extend the lease it was given -- never adopt one that expired and was
+    taken by the other home in the meantime.
+
+    False means we no longer hold it. That is worth shouting about but is not
+    itself grounds to abort: by then the other home is already running, and
+    stopping half way through leaves the data in a worse state than finishing.
+    """
+    cursor = conn.execute(
+        "UPDATE pipeline_lock SET expires_at = datetime('now', ?) "
+        "WHERE lock_name = ? AND lease_token = ? "
+        "RETURNING lease_token",
+        (f"+{int(lease_seconds)} seconds", PIPELINE_LOCK_NAME, token),
+    )
+    renewed = cursor.fetchone() is not None
+    if hasattr(conn, "commit"):
+        conn.commit()
+    return renewed
+
+
+def release_pipeline_lease(conn, token: str) -> bool:
+    """Give the lease up, in ONE statement.
+
+    Idempotent, because it runs from a finally block that a crash path can
+    reach after the lease is already gone -- releasing nothing returns False
+    rather than raising.
+
+    The token guard is the load-bearing part. A run whose lease expired and
+    was taken over by the other home must not delete the NEW holder's row on
+    its way out; that would hand a third trigger the lock while two runs are
+    still live.
+    """
+    cursor = conn.execute(
+        "DELETE FROM pipeline_lock WHERE lock_name = ? AND lease_token = ? "
+        "RETURNING lease_token",
+        (PIPELINE_LOCK_NAME, token),
+    )
+    released = cursor.fetchone() is not None
+    if hasattr(conn, "commit"):
+        conn.commit()
+    return released
 
 
 def get_pinned_listing_ids(conn: sqlite3.Connection) -> frozenset[str]:

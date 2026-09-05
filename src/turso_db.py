@@ -65,7 +65,36 @@ def connect(
 # can ALTER an existing table into it; ops/backfill_hosted_source_urls.py
 # fills the pre-existing rows, and until it runs a NULL means "identity
 # unknown", which collect_pending_photos treats as needing re-upload.
+#
+# pipeline_lock is the cross-home run lock. `pipeline.py`'s fcntl.flock is
+# per-machine and cannot see the other execution home, so once the Phase 3
+# cron is live two runs against one database are possible and nothing stops
+# them. The concrete damage is not duplicated effort: the photo migration
+# had a window in which a concurrent scrape would have re-downloaded ~700 MB
+# from Compass, which is the exact traffic profile the reCAPTCHA durability
+# canary is measuring.
+#
+# lock_name is the primary key and there is only ever one value in it, which
+# is what turns "who wins" into a conflict the database resolves rather than
+# one the application has to. lease_token identifies the RUN, not the home:
+# a restarted laptop run must not quietly steal its own predecessor's lease.
+# Every timestamp is written by datetime('now') inside the statement, i.e.
+# the database's clock, because the two homes' clocks are not the same clock.
+#
+# Deliberately NOT keyed on listing_id, for the same reason as
+# vision_batches: tables_child_first and delete_orphaned_rows both discover
+# child tables by that column, and a lock enrolled in the delisting cascade
+# would be deleted out from under a live run by an unrelated listing going
+# away.
 TURSO_SCHEMA_EXTRA = """
+CREATE TABLE IF NOT EXISTS pipeline_lock (
+    lock_name TEXT PRIMARY KEY,
+    lease_token TEXT NOT NULL,
+    held_by TEXT NOT NULL,
+    acquired_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS vision_batches (
     batch_id TEXT PRIMARY KEY,
     garage_expected_by_id TEXT NOT NULL,
