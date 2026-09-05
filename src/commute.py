@@ -21,6 +21,58 @@ def geocode(address: str, http_get: Callable[[str], list[dict]]) -> Coordinates 
         return None
 
 
+def geocode_census(address: str, http_get: Callable[[str], dict]) -> Coordinates | None:
+    """Resolve an address via the US Census Bureau geocoder.
+
+    Keyless, free, and complete for US residential addresses in a way
+    Nominatim is not: Nominatim depends on OpenStreetMap having the address
+    mapped, while Census interpolates from TIGER line files, which cover
+    every US street. That difference is not academic -- 11 listings in this
+    corpus had no coordinates at all because Nominatim did not know them,
+    and Census resolves 11 of 11.
+
+    Deliberately a FALLBACK rather than a replacement. Census only knows
+    street addresses: it returns nothing for a POI name like
+    "Medtronic, Lafayette, CO", which is how the destinations are expressed.
+    Nominatim stays the primary for that reason.
+    """
+    url = (
+        "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
+        f"?address={quote(address)}&benchmark=Public_AR_Current&format=json"
+    )
+    payload = http_get(url)
+    try:
+        matches = payload["result"]["addressMatches"]
+    except (KeyError, TypeError):
+        return None
+    if not matches:
+        return None
+    try:
+        coords = matches[0]["coordinates"]
+        # Census names them x/y, not lon/lat. x is longitude.
+        return (float(coords["y"]), float(coords["x"]))
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+def geocode_with_fallback(
+    address: str,
+    primary: Callable[[str], Coordinates | None],
+    fallback: Callable[[str], Coordinates | None],
+) -> tuple[Coordinates | None, bool]:
+    """Try the primary geocoder, then the fallback. Returns (coords, used_fallback).
+
+    `used_fallback` is reported rather than swallowed so a run can say how
+    often the primary is failing. A fallback that quietly carries the whole
+    corpus is a different situation from one that catches a straggler, and
+    the log line is the only thing that would ever surface the difference.
+    """
+    coords = primary(address)
+    if coords is not None:
+        return coords, False
+    return fallback(address), True
+
+
 def route_miles_minutes(
     origin: Coordinates,
     destination: Coordinates,

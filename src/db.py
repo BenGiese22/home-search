@@ -951,7 +951,7 @@ def get_commutes_by_listing(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
 
 
 def get_listing_ids_missing_commute(
-    conn: sqlite3.Connection, retry_failed: bool = True
+    conn: sqlite3.Connection, retry_failed: bool = True, force: bool = False
 ) -> list[str]:
     """Listings whose commute still needs computing — no row at all, or a
     row that never produced a usable result.
@@ -968,6 +968,21 @@ def get_listing_ids_missing_commute(
     exactly that state. Pass retry_failed=False for a run that should only
     pick up genuinely new listings.
     """
+    if force:
+        # Every listing, whether or not it already has a usable row.
+        #
+        # Needed because nothing else invalidates a commute row: there is no
+        # TTL and no source check, so a complete row computed under an old
+        # provider is never re-selected and would keep its stale duration
+        # forever. Changing how commutes are measured is exactly the case
+        # this exists for.
+        return [
+            row["listing_id"]
+            for row in conn.execute(
+                "SELECT listing_id FROM listings ORDER BY listing_id"
+            ).fetchall()
+        ]
+
     if retry_failed:
         rows = conn.execute(
             """
