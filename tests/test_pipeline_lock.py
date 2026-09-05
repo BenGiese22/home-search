@@ -2,9 +2,9 @@
 
 `pipeline.py` has always guarded concurrency with `fcntl.flock` on
 `data/.pipeline.lock`. That is per-machine, and it was correct while one
-laptop was the only execution home. Turso is now the single source of truth
+desktop was the only execution home. Turso is now the single source of truth
 and Phase 3 adds a second home (a Vercel Sandbox), which cannot see a flock
-on the laptop's filesystem and vice versa.
+on the desktop's filesystem and vice versa.
 
 The damage from two overlapping runs is not "duplicate work is wasteful".
 The photo migration had a window in which every `hosted_photos` row read
@@ -72,17 +72,17 @@ def _expire_the_lease(conn) -> None:
 # --- taking the lease ----------------------------------------------------
 
 def test_a_free_lease_is_taken_by_the_asker():
-    lease = acquire_pipeline_lease(_conn(), "laptop", "token-a")
+    lease = acquire_pipeline_lease(_conn(), "desktop", "token-a")
 
     assert lease.mine is True
-    assert lease.held_by == "laptop"
+    assert lease.held_by == "desktop"
     assert lease.token == "token-a"
 
 
 def test_a_second_home_loses_the_race():
     """The whole point. Two homes racing must not both win."""
     conn = _conn()
-    acquire_pipeline_lease(conn, "laptop", "token-a")
+    acquire_pipeline_lease(conn, "desktop", "token-a")
 
     lost = acquire_pipeline_lease(conn, "sandbox", "token-b")
 
@@ -93,11 +93,11 @@ def test_the_loser_is_told_which_home_holds_it_and_since_when():
     """An operator staring at "exiting" needs to know where the other run
     is, otherwise the only recourse is to guess."""
     conn = _conn()
-    won = acquire_pipeline_lease(conn, "laptop", "token-a")
+    won = acquire_pipeline_lease(conn, "desktop", "token-a")
 
     lost = acquire_pipeline_lease(conn, "sandbox", "token-b")
 
-    assert lost.held_by == "laptop"
+    assert lost.held_by == "desktop"
     assert lost.acquired_at == won.acquired_at
     assert lost.token == "token-a"
 
@@ -106,7 +106,7 @@ def test_losing_does_not_disturb_the_holder():
     """A failed acquire must not extend, shorten, or rewrite the lease it
     failed to take."""
     conn = _conn()
-    held = acquire_pipeline_lease(conn, "laptop", "token-a")
+    held = acquire_pipeline_lease(conn, "desktop", "token-a")
 
     acquire_pipeline_lease(conn, "sandbox", "token-b", lease_seconds=99999)
 
@@ -119,7 +119,7 @@ def test_an_expired_lease_is_free_for_the_other_home():
     """A runner that crashes -- lid closed, sandbox reaped at its 3h limit --
     must not deadlock the other home forever."""
     conn = _conn()
-    acquire_pipeline_lease(conn, "laptop", "token-a")
+    acquire_pipeline_lease(conn, "desktop", "token-a")
     _expire_the_lease(conn)
 
     lease = acquire_pipeline_lease(conn, "sandbox", "token-b")
@@ -130,12 +130,12 @@ def test_an_expired_lease_is_free_for_the_other_home():
 
 def test_an_unexpired_lease_is_still_held_after_the_original_home_asks_again():
     """A second process on the SAME home is still a second run. Identity is
-    the per-run token, not the home name, or a restarted laptop run would
+    the per-run token, not the home name, or a restarted desktop run would
     quietly steal its own predecessor's lease."""
     conn = _conn()
-    acquire_pipeline_lease(conn, "laptop", "token-a")
+    acquire_pipeline_lease(conn, "desktop", "token-a")
 
-    second = acquire_pipeline_lease(conn, "laptop", "token-a-second-process")
+    second = acquire_pipeline_lease(conn, "desktop", "token-a-second-process")
 
     assert second.mine is False
     assert second.token == "token-a"
@@ -152,7 +152,7 @@ def test_the_default_lease_covers_the_longest_stage():
 
 def test_the_holder_can_renew_its_own_lease():
     conn = _conn()
-    taken = acquire_pipeline_lease(conn, "laptop", "token-a", lease_seconds=60)
+    taken = acquire_pipeline_lease(conn, "desktop", "token-a", lease_seconds=60)
 
     assert renew_pipeline_lease(conn, "token-a", lease_seconds=99999) is True
 
@@ -162,7 +162,7 @@ def test_the_holder_can_renew_its_own_lease():
 
 def test_renewing_someone_elses_lease_is_refused():
     conn = _conn()
-    held = acquire_pipeline_lease(conn, "laptop", "token-a")
+    held = acquire_pipeline_lease(conn, "desktop", "token-a")
 
     assert renew_pipeline_lease(conn, "token-b", lease_seconds=99999) is False
 
@@ -178,7 +178,7 @@ def test_renewing_a_lease_nobody_holds_is_refused_not_an_error():
 
 def test_the_holder_releases_and_the_lock_is_free_again():
     conn = _conn()
-    acquire_pipeline_lease(conn, "laptop", "token-a")
+    acquire_pipeline_lease(conn, "desktop", "token-a")
 
     assert release_pipeline_lease(conn, "token-a") is True
 
@@ -190,7 +190,7 @@ def test_releasing_someone_elses_lease_is_refused():
     taken by the other home must not free the new holder's lease on its way
     out -- that would hand a third run the lock while two are live."""
     conn = _conn()
-    acquire_pipeline_lease(conn, "laptop", "token-a")
+    acquire_pipeline_lease(conn, "desktop", "token-a")
 
     assert release_pipeline_lease(conn, "token-b") is False
 
@@ -202,7 +202,7 @@ def test_releasing_twice_is_idempotent():
     """Release runs in a finally block, and a crash path can reach it after
     the lease is already gone."""
     conn = _conn()
-    acquire_pipeline_lease(conn, "laptop", "token-a")
+    acquire_pipeline_lease(conn, "desktop", "token-a")
 
     assert release_pipeline_lease(conn, "token-a") is True
     assert release_pipeline_lease(conn, "token-a") is False
@@ -222,7 +222,7 @@ def test_acquire_is_one_statement_and_never_reads_first():
     conn = _conn()
 
     with _Counted(conn) as statements:
-        acquire_pipeline_lease(conn, "laptop", "token-a")
+        acquire_pipeline_lease(conn, "desktop", "token-a")
 
     assert len(_starting(statements, "INSERT")) == 1
     assert _starting(statements, "SELECT") == []
@@ -233,19 +233,19 @@ def test_a_lost_acquire_is_also_one_statement():
     """The loser learns who holds the lease from the same statement, not
     from a follow-up SELECT."""
     conn = _conn()
-    acquire_pipeline_lease(conn, "laptop", "token-a")
+    acquire_pipeline_lease(conn, "desktop", "token-a")
 
     with _Counted(conn) as statements:
         lost = acquire_pipeline_lease(conn, "sandbox", "token-b")
 
-    assert lost.held_by == "laptop"
+    assert lost.held_by == "desktop"
     assert len(_starting(statements, "INSERT")) == 1
     assert _starting(statements, "SELECT") == []
 
 
 def test_renew_and_release_are_one_statement_each():
     conn = _conn()
-    acquire_pipeline_lease(conn, "laptop", "token-a")
+    acquire_pipeline_lease(conn, "desktop", "token-a")
 
     with _Counted(conn) as statements:
         renew_pipeline_lease(conn, "token-a")
@@ -262,14 +262,14 @@ def test_renew_and_release_are_one_statement_each():
 
 def test_expiry_is_measured_by_the_databases_clock_not_the_callers():
     """The two homes are different machines. If each stamped the lease from
-    its own clock, a laptop running a few minutes fast would read a live
+    its own clock, a desktop running a few minutes fast would read a live
     sandbox lease as expired and take it. Every timestamp in this table is
     written by datetime('now') inside the statement, so both homes are
     compared against the one clock they share."""
     conn = _conn()
 
     with _Counted(conn) as statements:
-        acquire_pipeline_lease(conn, "laptop", "token-a")
+        acquire_pipeline_lease(conn, "desktop", "token-a")
 
     sql = _starting(statements, "INSERT")[0]
     # A caller-supplied timestamp would have been bound as a parameter and
@@ -290,7 +290,7 @@ def test_pipeline_lock_is_not_treated_as_a_listing_child_table():
 
 def test_the_orphan_sweep_ignores_it():
     conn = _conn()
-    acquire_pipeline_lease(conn, "laptop", "token-a")
+    acquire_pipeline_lease(conn, "desktop", "token-a")
 
     removed = delete_orphaned_rows(conn)
 
@@ -386,20 +386,20 @@ def test_a_returned_row_not_rowcount_is_what_says_we_won():
 # --- a lease is not a substitute for the flock ---------------------------
 
 def test_two_homes_and_one_database_is_the_scenario_this_covers():
-    """End to end, in the shape the incident would take: the laptop starts a
+    """End to end, in the shape the incident would take: the desktop starts a
     run, the cloud cron fires ten minutes later, and the cloud run must find
     the lock taken rather than start a second scrape."""
-    laptop = _conn()
-    cloud = laptop  # one database, which is the entire point
+    desktop = _conn()
+    cloud = desktop  # one database, which is the entire point
 
-    laptop_lease = acquire_pipeline_lease(laptop, "laptop", "run-1")
+    desktop_lease = acquire_pipeline_lease(desktop, "desktop", "run-1")
     cloud_lease = acquire_pipeline_lease(cloud, "sandbox", "run-2")
 
-    assert laptop_lease.mine and not cloud_lease.mine
-    assert cloud_lease.held_by == "laptop"
+    assert desktop_lease.mine and not cloud_lease.mine
+    assert cloud_lease.held_by == "desktop"
 
-    # The laptop finishes; the next cloud trigger gets in.
-    release_pipeline_lease(laptop, "run-1")
+    # The desktop finishes; the next cloud trigger gets in.
+    release_pipeline_lease(desktop, "run-1")
     assert acquire_pipeline_lease(cloud, "sandbox", "run-3").mine is True
 
 
@@ -410,7 +410,7 @@ def test_no_operation_loops_over_rows(keyword):
     twice cost this project minutes it could not spare."""
     conn = _conn()
     with _Counted(conn) as statements:
-        acquire_pipeline_lease(conn, "laptop", "token-a")
+        acquire_pipeline_lease(conn, "desktop", "token-a")
         renew_pipeline_lease(conn, "token-a")
         release_pipeline_lease(conn, "token-a")
 

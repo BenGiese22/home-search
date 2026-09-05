@@ -80,7 +80,7 @@ destroyed at the end.
 
 The spike unblocks **Option A** (everything in a scheduled Sandbox). A fourth
 option was also put on the table with measured facts from the short-list
-build: **laptop keeps the browser, cloud keeps the data** — scraping stays
+build: **desktop keeps the browser, cloud keeps the data** — scraping stays
 local/residential, but every stage writes DIRECTLY to hosted Turso as the
 single source of truth, and `publish.py`'s mirror is deleted. This is not the
 rejected "B2 hybrid" (which kept local SQLite *and* added a handoff); it
@@ -88,7 +88,7 @@ eliminates the second database entirely.
 
 | | Option A (full Sandbox) | Option Four (local scrape → direct Turso) |
 | --- | --- | --- |
-| Runs with laptop off | **Yes** (the headline feature) | No (systemd timer, laptop must be on) |
+| Runs with desktop off | **Yes** (the headline feature) | No (systemd timer, desktop must be on) |
 | Compass risk | New: scheduled datacenter sessions, score drift unknown | **Zero delta** — same residential IP + session as today |
 | Databases | One (Turso) after this plan | **One (Turso)** |
 | FK divergence (bit twice; PR #9) | Fixed — one DB | Fixed — one DB |
@@ -110,7 +110,7 @@ sequencing; it is strictly better engineering:
   `src/turso_restore.py` (hydrate a fresh local DB each run) exists only
   because the stages are local-SQLite-centric. Once the stages speak Turso
   natively there is nothing to restore: an ephemeral sandbox connects to the
-  same DB the laptop does. Option A shrinks from a state re-architecture to
+  same DB the desktop does. Option A shrinks from a state re-architecture to
   "run the same pipeline somewhere else + persist two small files."
 - If Compass's tolerance ever degrades, Phase 3 is simply never built, and
   nothing is stranded.
@@ -175,7 +175,7 @@ loops."
    bulk write — instead of `upsert_listing` per listing inside the loop
    (which against Turso would be ~645 round-trips ≈ 2.6 min every run).
    Price-snapshot read is already one query. `is_scraped()` and the JSON
-   store are untouched — the laptop's disk still exists in this option.
+   store are untouched — the desktop's disk still exists in this option.
    Delisting: `run_delisting` must prune child-first; `tables_child_first()`
    already provides the order (audit `src/diff.py` uses it against the
    Turso connection).
@@ -212,7 +212,7 @@ the Option C plan keeps the schedule.
 
 ## 5. Phase 3 (optional) — lift execution into the Sandbox (Option A)
 
-Build only if laptop-off scheduling is actually wanted once Phase 2 lands.
+Build only if desktop-off scheduling is actually wanted once Phase 2 lands.
 After Phase 2 this is small:
 
 1. **Trigger**: `vercel.json` cron (start 6-hourly) in the **short-list**
@@ -272,6 +272,6 @@ sandbox pipeline run against a throwaway Turso DB.
   by the compat layer and its tests.
 - Turso free-tier row-read/write quotas: the viewer plus a 6-hourly pipeline
   is well inside them today, but re-check when photos/backfills run.
-- Concurrent writers (laptop run overlapping a sandbox run in Phase 3):
+- Concurrent writers (desktop run overlapping a sandbox run in Phase 3):
   upserts make this safe but wasteful; keep the flock locally and stagger
   the cron, or gate on a `pipeline_runs` row in Turso if it ever matters.

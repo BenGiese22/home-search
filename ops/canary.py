@@ -47,7 +47,7 @@ def egress_ip(get: Callable = requests.get) -> str:
     false alarm about the thing the canary exists to detect.
 
     Worth recording because it is the one variable the sandbox changes. Every
-    scrape from a laptop came from a residential address; these come from a
+    scrape from a desktop came from a residential address; these come from a
     datacenter range, and if Compass ever starts treating the two differently
     this line is what says so.
     """

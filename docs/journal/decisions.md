@@ -573,7 +573,7 @@ the first time.
 
 Ran the gates from issue #24 against a real Vercel Sandbox in `iad1`
 (egress `54.162.144.92`, an AWS datacenter IP) and, as a control, from the
-laptop's residential IP (`24.9.167.51`). Same script both places, so the
+desktop's residential IP (`24.9.167.51`). Same script both places, so the
 only variable is the egress IP. Scripts kept in `ops/spikes/`.
 
 **Total cost: 36.4s active CPU, 229.8s wall, ≈ $0.007.** The 2026-08-30

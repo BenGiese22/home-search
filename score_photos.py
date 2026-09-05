@@ -72,7 +72,7 @@ REQUEST_OVERHEAD_BYTES = 5_000
 # needs submitting on resume, so nothing is submitted (and paid for) twice.
 # It used to live here, as a file. It now lives in Turso -- see
 # src/db.py's load_vision_batches for why: a file can only ever protect one
-# machine, and both execution homes share one database, so a laptop run
+# machine, and both execution homes share one database, so a desktop run
 # interrupted mid-batch would leave a cloud run free to resubmit and pay
 # again. This path survives only so a legacy file can be migrated once.
 LEGACY_BATCH_STATE_PATH = DATA_DIR / ".photo_scoring_batch_state.json"

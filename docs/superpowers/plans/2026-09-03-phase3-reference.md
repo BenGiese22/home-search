@@ -16,14 +16,14 @@ Sandbox called `home-search-pipeline`, pulls `main` of the public
 Compass session file if the sandbox has lost it, and starts
 `ops/sandbox/run.py pipeline` **detached**. The function returns in seconds.
 Inside the sandbox, `pipeline.py` runs the four stages against the same Turso
-database the laptop uses, POSTs the viewer's revalidate hook, posts a summary
+database the desktop uses, POSTs the viewer's revalidate hook, posts a summary
 to ntfy, and writes a `done` marker. Every ten minutes `/api/pipeline/reap`
 looks at the markers: when the run is done it copies the refreshed session
 out to a private Blob store and **stops** the sandbox (which snapshots its
 disk); if a run has been going for more than three hours it stops it and
 alerts. The sandbox never holds a Vercel or private-store credential; the
 functions do all Vercel-side I/O with their own auto-refreshing OIDC token.
-The laptop's systemd timer keeps working unchanged against the same database
+The desktop's systemd timer keeps working unchanged against the same database
 and is the rollback.
 
 ## 2. Components and responsibilities
@@ -50,7 +50,7 @@ and is the rollback.
 | `data/photos/<id>/NN-<hash8>.jpg` | photo cache; only photos not yet in `hosted_photos` are ever downloaded | snapshot (harmless if lost) |
 | `data/.auth/compass_state.json` | Compass session; re-saved by `src/auth.py` on every run | snapshot + Blob copy |
 | `data/.run/started`, `data/.run/done`, `data/.run/lock` | run markers written by `ops/sandbox/run.py`; `lock` is the `flock` file | snapshot (stale `done` is removed at the next start) |
-| `data/.pipeline.lock`, `data/.pipeline-last-success.json` | `pipeline.py`'s own lock and freshness marker; `--max-age=5h` works here exactly as on the laptop | snapshot |
+| `data/.pipeline.lock`, `data/.pipeline-last-success.json` | `pipeline.py`'s own lock and freshness marker; `--max-age=5h` works here exactly as on the desktop | snapshot |
 | `data/logs/<job>-<ts>.log` | per-run stage logs (also streamed to the command's stdout) | snapshot |
 
 Session `timeout` 3 h (hard platform stop, snapshot taken on the way out);
@@ -66,7 +66,7 @@ after which `getOrCreate` transparently recreates the sandbox and
 | `ops/sandbox/bootstrap.sh` | Idempotent environment setup (venv, pip, Chromium) |
 | `ops/sandbox/run.py <pipeline\|canary>` | `flock` on `data/.run/lock`; write `started`; run the job with output tee'd to `data/logs/`; write `done {exit_code}`; exit with the child's code. Exit 75 without touching markers when another run holds the lock |
 | `ops/canary.py` | Warm-session collection fetch only; prints `{egress_ip, warm_session, counts, pass}`; ntfy PASS/FAIL; **no Turso, no downloads** |
-| `ops/state.py push\|pull` | Laptop-side copy of `compass_state.json` to/from the private Blob store using `BLOB_STATE_READ_WRITE_TOKEN` (the only place that token is used) |
+| `ops/state.py push\|pull` | Desktop-side copy of `compass_state.json` to/from the private Blob store using `BLOB_STATE_READ_WRITE_TOKEN` (the only place that token is used) |
 | `ops/sandbox_run.py` (optional) | Python-SDK harness for a supervised one-off run in a **non-persistent** sandbox, optionally against a throwaway DB — the gate-4 procedure made repeatable |
 | `src/notify.py` | ntfy client; never raises |
 | `src/blob_upload.py` | photo PUT (unchanged) and now `delete_blobs` |
@@ -122,12 +122,12 @@ submission, and `vision_batches` is written the instant a batch is created.
 - **Compass session** — sensitive (a bearer credential for Compass). Lives on
   the sandbox disk between runs and in the *private* Blob store as the
   durable copy. Moved only by code holding OIDC (the functions) or by Ben
-  from the laptop (`ops/state.py`). Losing it costs one cold login, which
+  from the desktop (`ops/state.py`). Losing it costs one cold login, which
   works from iad1 (spikes 2026-08-30 and 2026-09-03) but is what the canary
   is watching.
 - **Vision checkpoint** — not sensitive, but losing or forking it costs real
   money. Lives in Turso, the one place both execution homes already look, so
-  a laptop-submitted batch is visible to a cloud run and vice versa.
+  a desktop-submitted batch is visible to a cloud run and vice versa.
 
 ### 3.3 The photo identity rule
 
@@ -155,7 +155,7 @@ filename so the same rule holds locally.
 | Launcher 500 from `@vercel/blob`: 403 | OIDC federation disabled on the project, or the state store is not connected | Settings → Security; store → Projects tab | — | enable OIDC; connect the store with prefix `STATE_` |
 | Sandbox recreated (`created: true` in launcher logs) | snapshot expired after 30 idle days, or someone removed the sandbox | launcher logs | bootstrap runs (~2 min), session seeded from Blob | none |
 | Photos re-download for the whole collection | `BLOB_READ_WRITE_TOKEN` missing (nothing gets marked hosted), or `hosted_photos.source_url` not backfilled | scrape log: "uploading N new photo(s)" | — | set the token; run `ops/backfill_hosted_source_urls.py` |
-| Two ntfy summaries minutes apart | laptop timer and cloud cron overlapped | both logs | safe: idempotent writes, shared checkpoint | stagger the systemd calendar or retire the timer (`ops/DECOMMISSION.md` §A) |
+| Two ntfy summaries minutes apart | desktop timer and cloud cron overlapped | both logs | safe: idempotent writes, shared checkpoint | stagger the systemd calendar or retire the timer (`ops/DECOMMISSION.md` §A) |
 | A blob delete failed | Blob API hiccup | scrape log prints the URLs it could not delete | never fatal | paste the URLs into the orphan-sweep script |
 
 ## 5. Operating it
@@ -192,14 +192,14 @@ have done this within ten minutes of a normal finish anyway.
 
 Remove the `crons` entries from `short-list/vercel.json` and redeploy (or
 Settings → Cron Jobs → Disable). Then `sandbox remove home-search-pipeline`
-if you want the snapshot storage back. The laptop timer is unaffected —
+if you want the snapshot storage back. The desktop timer is unaffected —
 `ops/DECOMMISSION.md` §B.
 
 ### 5.5 Refresh the Compass session by hand
 
 ```bash
 cd ~/code/home-search
-python scrape.py --skip-photos       # logs in from the laptop's residential IP, re-saves the session
+python scrape.py --skip-photos       # logs in from the desktop's residential IP, re-saves the session
 python ops/state.py push             # uploads it to the private store; the next launcher seeds it
 ```
 
@@ -247,7 +247,7 @@ production` with a tag or sha.
   created, and only to Turso.
 - Photo identity is the source URL; a row is never removed from
   `hosted_photos` without deleting or exporting its blob.
-- The sandbox holds only the credentials a laptop run holds (minus the
+- The sandbox holds only the credentials a desktop run holds (minus the
   state-store token). No Vercel token, no OIDC token, ever.
 - Every new route in short-list is added to the `proxy.ts` exclusion, as a
   literal, with a test.

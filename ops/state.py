@@ -1,7 +1,7 @@
-"""Move the Compass session between this laptop and the private Blob store.
+"""Move the Compass session between this desktop and the private Blob store.
 
-    python ops/state.py push          # laptop -> Blob
-    python ops/state.py pull --force  # Blob -> laptop
+    python ops/state.py push          # desktop -> Blob
+    python ops/state.py pull --force  # Blob -> desktop
 
 Only ever run by hand. In steady state nothing calls this: the launcher seeds
 a cold sandbox from Blob and the reaper collects the refreshed session back
@@ -11,7 +11,7 @@ What it is for is the first run and the bad day. Seeding the store before the
 first canary is what lets that canary start warm instead of driving Compass's
 login form -- and a cold login is the one step in the whole pipeline that a
 human might have to babysit. `pull` is the other direction: recovering a
-working session onto the laptop after the sandbox has been the only thing
+working session onto the desktop after the sandbox has been the only thing
 holding a good one.
 
 Uses BLOB_STATE_READ_WRITE_TOKEN, which points at the PRIVATE store. A
@@ -56,7 +56,7 @@ def push(token: str, local: Path = LOCAL_PATH, put=requests.put) -> str:
 def pull(
     token: str, local: Path = LOCAL_PATH, force: bool = False, get=requests.get
 ) -> bytes:
-    """Download the stored session onto the laptop.
+    """Download the stored session onto the desktop.
 
     Refuses to land on an existing file without --force. There is no reliable
     way to tell which of the two is newer -- the store returns bytes, not a

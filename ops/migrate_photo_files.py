@@ -1,4 +1,4 @@
-"""One-time: rename the laptop's downloaded photos onto the content key.
+"""One-time: rename the desktop's downloaded photos onto the content key.
 
 Photos on disk used to be `NN.jpg` and are now `NN-<hash8>.jpg`, where hash8
 is sha1(source_url)[:8] -- see src/photos.py for why the position alone was

@@ -23,14 +23,14 @@ Only four axes actually differentiate the options.
 
 | | 1. Local-only (shipped) | 2. Turso-SSOT, scrape local | 3. Full cloud (Cron→Fn→Sandbox) | 4. Phased: 2 now, 3 gated (recommended) |
 | --- | --- | --- | --- | --- |
-| Fresh while laptop is off | No (catches up ≤5h after boot) | No (same) | **Yes** | After phase 3, yes |
+| Fresh while desktop is off | No (catches up ≤5h after boot) | No (same) | **Yes** | After phase 3, yes |
 | Databases / drift surface | 2 (SQLite + mirrored Turso) | **1 (Turso)** | 1 (requires 2's work first) | 1 after the first phase |
 | New IP/bot-detection exposure | Zero — residential IP, warm session | **Zero** — scrape unchanged | Scheduled datacenter sessions; Nominatim + photo-CDN from cloud IPs **untested** | Deferred until spikes + canary pass |
 | Cost (days / $ per month) | 0 more days / $0 | 2–3 days / ~$0 | 3–5 days / ~$2–10, inside Pro's $20 credit | 2–3 days now, ~1.5–2 later |
 
 **Recommendation: Option 4** — do the Turso-single-source-of-truth cutover
 now, and lift execution into the Sandbox later *only if* three cheap spikes
-and a two-week durability canary pass, and only if laptop-off freshness still
+and a two-week durability canary pass, and only if desktop-off freshness still
 feels worth it then.
 
 ## 1. Facts every option is built on (measured, not assumed)
@@ -76,12 +76,12 @@ guard; timers fire liberally and `--max-age` collapses the redundancy.
 **What breaks.** Nothing — this is the do-no-more baseline, and it deserves a
 fair hearing: it exists, it is tested, it encodes the 22-minute-sync and
 11,000-op lessons, and Compass keeps seeing the same residential IP and warm
-session it always has. Staleness is bounded by laptop-off time + 5h, against
+session it always has. Staleness is bounded by desktop-off time + 5h, against
 a corpus that changes over days.
 
 **What it doesn't buy.** Two databases with a mirror script between them;
 `publish.py`'s full-table sync (~110 round-trips even when nothing changed)
-runs every cycle; nothing happens while the laptop is off.
+runs every cycle; nothing happens while the desktop is off.
 
 **publish.py:** retained, load-bearing. **pipeline.py:** load-bearing.
 **short-list:** untouched.
@@ -129,7 +129,7 @@ than being patched; `publish.py` and its full-mirror sync deleted; faster
 steady-state runs; and — the strategic part — it eliminates full-cloud's
 hardest prerequisite: `turso_restore.py` exists only because stages are
 local-SQLite-centric. Once stages speak Turso natively, an ephemeral sandbox
-connects to the same DB the laptop does; nothing needs restoring.
+connects to the same DB the desktop does; nothing needs restoring.
 
 **publish.py:** deleted. **pipeline.py:** load-bearing, minus one stage.
 **short-list:** untouched.
@@ -156,14 +156,14 @@ Option 2 lands first**.
 
 **What breaks / risks.** Three untested externals (Section 5). New failure
 surface: cron, function, snapshot expiry, OIDC lifetimes, self-stop. Failure
-visibility moves off the laptop; needs a notification path. Secrets move to
+visibility moves off the desktop; needs a notification path. Secrets move to
 Vercel project env vars — both repos are public, so nothing may ever enter
 the repo.
 
-**What it buys.** The pipeline runs whether the laptop is on or not. Being
+**What it buys.** The pipeline runs whether the desktop is on or not. Being
 honest about the size of that prize: listings appear over days, and the local
-freshness guard already bounds staleness at laptop-off-time + 5h. The delta
-is "fresh during multi-day laptop-off stretches" — real, but modest.
+freshness guard already bounds staleness at desktop-off-time + 5h. The delta
+is "fresh during multi-day desktop-off stretches" — real, but modest.
 
 **publish.py:** already gone. **pipeline.py:** load-bearing — it is precisely
 what the sandbox executes. Only the systemd *timer units* become a fallback
@@ -226,7 +226,7 @@ There is no sequencing in which PR #12 becomes stranded work.
 **Recommended: Option 4 — the phased path.** Merge PR #12 and run Local-only
 today; do the Turso cutover next; gate the Sandbox lift behind three
 ~30-minute spikes and a two-week ~$0.50 canary, and build it only if
-laptop-off freshness still feels worth ~2 more days then.
+desktop-off freshness still feels worth ~2 more days then.
 
 **The single strongest reason:** every phase is independently valuable and
 none is stranded if Ben stops halfway. Local-only is already the good
@@ -245,7 +245,7 @@ disabling a cron.
   now needs network for every stage.
 - **"Jump straight to Option 3" is also defensible.** Ben leans Vercel; the
   spike succeeded; Pro's credit makes it ~free; and the phased path's caution
-  costs calendar time — the canary alone is two weeks. If laptop-off
+  costs calendar time — the canary alone is two weeks. If desktop-off
   freshness is the thing Ben actually wants, the direct route is 3–5 days and
   the unknowns get answered by building rather than waiting.
 - The middle phase makes local runs network-dependent and puts 240 ms
@@ -310,7 +310,7 @@ functional — both execution homes share one database.
   canary is the cheapest answer. Manual recovery is one local run.
 - **Nominatim/photo-CDN from cloud IPs** — phase-3 gates; per-stage local
   fallback exists because both homes share one DB.
-- **Concurrent writers** (laptop run overlapping a sandbox run in phase 3):
+- **Concurrent writers** (desktop run overlapping a sandbox run in phase 3):
   idempotent upserts make it safe but wasteful; keep the local flock, stagger
   the cron, add a `pipeline_runs` gate only if it bites.
 - **Concurrent sessions in this checkout**: the tree changed mid-analysis of
