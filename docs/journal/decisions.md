@@ -873,3 +873,71 @@ The local execution home is a **desktop**, not a laptop. The cross-home lock
 is a lease partly because a runner can vanish without releasing it — but the
 reason is a machine powered off or booted into its other OS, not a closed
 lid. The conclusion survives; the stated reason was not the true one.
+
+## 2026-09-05 — Commute: a real rush-hour number, and the terms we are breaking
+
+The commute figure was free-flow OSRM: no traffic, consistently ~18 minutes
+where the hand-checked answer is ~25. Issue #72 asked for something better.
+
+The finding that reframed it: the factor was not merely wrong, it was
+**inert**. `_medtronic_leg_score` uses absolute thresholds (≤20 → 100), and
+against free-flow durations 70 of 92 listings scored an identical 100. The
+heaviest-weighted input in the rubric, at 28.65%, was a near-constant. The
+thresholds were never wrong — `decisions.md` (2026-08-14) records they were
+curved around Megan's stated 20-minute-ideal and 30-minute-ceiling, which
+describe a *lived* commute. They had been fed the wrong quantity for a year.
+
+Measured against four real listings at 08:00/08:15/08:30 arrival, Mapbox and
+TomTom agree within a minute on every one:
+
+```
+                    free-flow   Mapbox   TomTom   ratio
+145 Caria Drive           5.2      6.3      6.2    1.22
+5012 West 77th Drive     14.8     17.7     17.4    1.20
+7263 Deframe Court       23.4     23.8     24.5    1.02
+12665 West 67th Place    25.5     26.3     27.3    1.03
+```
+
+That killed the cheapest option. A uniform correction factor looked viable
+on published Travel Time Index data, but the measured spread is 1.02–1.22
+and runs *opposite* to intuition: short arterial routes congest, long ones
+on CO-121/CO-72/Northwest Parkway barely do. No single multiplier works, and
+correcting it by hand would mean maintaining a road classification the
+providers already model.
+
+It also settled a disagreement between two research passes about whether
+Mapbox's `arrive_by` is genuinely traffic-aware. It is — durations differ
+from an untimed request and shift with arrival time.
+
+**Provider: Mapbox, knowingly against its terms.** Every commercial vendor
+prohibits storing results and automated bulk querying; Google additionally
+cannot answer arrive-by for driving at all. The reasoning, the exact clauses
+from Mapbox and TomTom, and the mitigations are in
+`docs/routing-provider-terms.md`. The short version: the prohibition is
+universal so it is not a differentiator, Mapbox enforces by quota rather
+than audit, and the real risk is a revoked key degrading the corpus silently
+— which is a design problem, not a legal one.
+
+### Two defects found while measuring
+
+**The card showed the wrong destination.** Every list card rendered
+`denver_minutes` labelled "min commute" while `commute_score` and "Sort:
+Commute" used the Lafayette leg. Fixed in short-list#17.
+
+**Two properties were in the corpus twice.** A relist arrives as a new
+Compass listing id, and nothing recognised it — so one house was scored,
+ranked, and vision-scored twice. Both stored URLs 301-redirect to a single
+canonical page, which revealed the underlying structure: Compass keeps a
+stable **property id** (`_pid`) and disposable **listing ids** (`_lid`). The
+`_pid` is the authoritative dedupe key; address+city is the free proxy we
+use, since reading `_pid` costs a request per listing. `scrape.py` now
+supersedes automatically, `verify.py` asserts uniqueness, and
+`ops/dedupe_relists.py` cleared the two that predated both.
+
+That episode also produced a rule worth keeping: **only the layer that
+reclaims blobs may delete a listing.** `delete_listing` prunes the
+`hosted_photos` rows, and `blob_url` is the only record an image was
+uploaded — so deleting rows first destroys the handle rather than tidying
+up. That is how 1,813 orphans accumulated once. It is now enforced by a test
+rather than remembered, and the first real use of the guard caught me
+reaching for the wrong function.
