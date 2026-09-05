@@ -941,3 +941,149 @@ uploaded — so deleting rows first destroys the handle rather than tidying
 up. That is how 1,813 orphans accumulated once. It is now enforced by a test
 rather than remembered, and the first real use of the guard caught me
 reaching for the wrong function.
+
+## 2026-09-05 — The commute factor now measures the drive people make
+
+The rebuild is shipped. What follows is what was decided and what was
+measured, since the numbers are the part that will be hard to reconstruct.
+
+### The input was wrong, not the curve
+
+`WEIGHT_COMMUTE` is 0.2865 — the heaviest single factor in the rubric. It was
+being fed free-flow OSRM durations, and 79 of 101 listings landed in the flat
+`<= 20 min -> 100` region. The heaviest input in the ranking was very nearly
+a constant, and had been for a year.
+
+The thresholds were drawn (2026-08-14) around Megan's stated 20-minute ideal
+and 30-minute ceiling — which describe a *lived* rush-hour commute. They were
+never wrong. They had been fed the wrong quantity.
+
+So this changed the input and left the curve alone. `WEIGHT_COMMUTE`, the
+20/30/40 thresholds and `NEUTRAL_SCORE` are untouched.
+
+### What the corpus looks like now
+
+| | before | after |
+| --- | --- | --- |
+| medtronic_minutes min / median / max | 5.1 / 14.4 / 25.5 | 5.9 / 17.3 / 28.0 |
+| ratio after/before, min / median / max | — | 0.97 / 1.14 / 1.39 |
+| listings in the flat `<=20` region | 79 / 101 | 70 / 101 |
+| distinct commute scores | near-constant | 32 |
+| mean rank movement | — | 8.9 places |
+| top-10 churn | — | 2 of 10 |
+
+Ben's hand calibration of the Lafayette drive was 1.39. The top of the
+measured ratio range is 1.39.
+
+**70 of 101 still sit in the flat region**, so the recalibration question is
+open — but it is now a question about the curve rather than about the data,
+which it was not before. Issue #29 (the neutral-50 imputation) is deferred on
+the same reasoning: the right answer is read off this distribution, and
+should not ride along in the change that produced it.
+
+### Mapbox `arrive_by` is a historical profile, not a forecast
+
+Worth writing down because it decides how reproducible the corpus is. The
+same origin/destination pair returns an identical duration for an 08:15
+Wednesday arrival at +4, +11, +18, +32 and +53 days out. So which future
+Wednesday the stage picks cannot change the answer, and a pinned weekday
+makes every listing comparable regardless of which cron fired.
+
+That is why it is one request per listing, not three. The measured
+08:00/08:15/08:30 spread was 0.4 minutes — inside any provider's noise, and
+it would have tripled the partial-failure surface for nothing.
+
+### Mapbox's geocoder replaced the whole chain
+
+Pre-flighted before anything was deleted (`ops/spikes/mapbox_preflight.py`):
+**101/101 at rooftop or parcel precision**, median 6 m from the stored
+coordinate. Nominatim had missed 11 outright and Census — the fallback added
+to rescue them — returned no match for `250 Medtronic Dr`, a street address
+it should have known. Neither keyless geocoder was trustworthy.
+
+The pre-flight also found a listing whose stored coordinate is **3.7 miles**
+from the building. Same latitude, 0.07° west; it had been scored on that
+point since it was first geocoded. The commute barely moves (23.7 vs 24.4
+min) so it was never a ranking bug — but nothing in the system could have
+reported it, and that is the point.
+
+A match below address precision is now treated as a miss rather than
+accepted. A city-centroid match routes fine and returns a plausible number,
+which is the worst kind of wrong here.
+
+### Both destinations are pinned coordinates
+
+`250 Medtronic Dr, Lafayette` (Megan's office — the scored leg) and
+`3201 Walnut St #107, Denver` (the coworking space Ben uses occasionally).
+The old code geocoded the POI name "Medtronic, Lafayette, CO" at every run
+start and, on a miss, fell back to the **city centroid** of Lafayette with
+only a print statement — and there are Medtronic sites in Louisville and
+Boulder for a POI search to drift to.
+
+The pinned point is 0.19 mi from the old one. This is a precision and
+reproducibility fix. It did not correct wrong numbers.
+
+### The Denver leg stopped voting
+
+It carried 20% of the commute score, normalised against the corpus's own min
+and max. Ben settled it: he has no commute of his own. The normalisation was
+the quieter problem — it made a listing's score a function of which *other*
+listings were in the collection that week, so a house could move in the
+ranking with nothing about it having changed.
+
+The leg is still computed, stored and displayed by the same provider and the
+same call, so the corpus never holds two kinds of number. The `denver_*`
+columns keep their names because short-list reads them and renaming a column
+in libsql is a table rebuild.
+
+### The mechanism that makes this safe to change again
+
+Every row records `commute_source`. The selector treats any other value as
+outstanding work, so **bumping the constant migrates the corpus on the next
+ordinary pipeline run** — no flag, no separate job, no window where half the
+corpus answers a different question. Issue #75's job was not built; §2.8 of
+the plan explains why it stopped being needed.
+
+`score.py` refuses to score a row whose source is not current, which makes
+the merge order a property of the code rather than of merge discipline. If
+the scorer ever lands before the stage, the entire corpus flags itself
+incomplete — loud, in the one place anyone would look — instead of ranking
+the un-recomputed half above the recomputed half at exit 0.
+
+Two details that would each have broken all of this silently:
+
+- **`commute_source IS NOT ?`, not `!=`.** SQLite's `!=` evaluates to NULL
+  for a NULL operand, and every pre-migration row has NULL there. `!=` would
+  have selected none of the 101 rows the migration exists for — and reported
+  success.
+- **The new columns are nullable with no DEFAULT.** `ensure_schema` runs at
+  the start of every stage against the live database, and `ALTER TABLE ADD
+  COLUMN` with `NOT NULL` and no `DEFAULT` is rejected outright on a table
+  with rows. That would not have broken the commutes stage; it would have
+  broken scrape, score, verify and the canary too. There is now a test
+  asserting it for any future column.
+
+### Why `verify` gained the source invariant
+
+We use Mapbox knowingly against its terms (`docs/routing-provider-terms.md`).
+The realistic consequence is not a lawsuit, it is a key switched off at 3am —
+after which new listings never get a current-source row and the ranking goes
+quietly wrong for exactly the newest listings, which are the ones anyone is
+looking at. `check_commutes_share_one_source` turns that into an exit code.
+`check_every_listing_has_a_commute_row` catches the other half: a listing the
+stage never reached at all.
+
+### The token
+
+Mapbox takes it as a query parameter — it does not accept a header on these
+endpoints — and `requests` puts the full URL into an `HTTPError` message. An
+unwrapped 401 would write the credential into the stage log, which is
+uploaded to Blob and kept, and into `route_error`, which is stored in Turso.
+It is scrubbed in two places: the adapter, because it built the URL, and the
+stage, because it is the one printing.
+
+### Verified end to end before rollout
+
+Against a local sqlite copy of the production corpus, not production: 101/101
+routed, exit 0, one `commute_source`, one `arrive_by`, no NULL durations, no
+route errors, both new invariants green, and the full rescore above.

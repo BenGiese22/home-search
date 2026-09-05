@@ -10,3 +10,8 @@ requests>=2.32.3
 pytest>=8.3.3
 anthropic>=0.116.0
 turso_serverless>=0.1.0
+# The commutes stage reads the clock in America/Denver to decide which
+# Wednesday 08:15 to ask about. zoneinfo is stdlib, but its *data* is not:
+# on a bare image with no tzdata package ZoneInfo("America/Denver") raises
+# and the stage dies on its first line. Cheap insurance for the sandbox.
+tzdata>=2024.1

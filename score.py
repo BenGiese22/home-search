@@ -11,6 +11,7 @@ from src.db import (
     query_listings,
     upsert_scores,
 )
+from src.commute import COMMUTE_SOURCE
 from src.scoring import compute_collection_stats, finished_sqft, score_listing
 
 DATA_DIR = Path("data")
@@ -85,22 +86,30 @@ def main() -> None:
     # mixing a total-footprint min/max with finished-area inputs would skew
     # every listing's percentile.
     sqft_values = [finished_sqft(listing) for listing in listings if finished_sqft(listing)]
-    denver_minutes_values = [
-        commute["denver_minutes"]
-        for commute in (commute_by_id.get(listing.listing_id) for listing in listings)
-        if commute is not None and commute["denver_minutes"] is not None
-    ]
     room_count_values = [
         listing.beds + listing.baths for listing in listings if listing.beds
     ]
-    stats = compute_collection_stats(sqft_values, denver_minutes_values, room_count_values)
+    stats = compute_collection_stats(
+        sqft_values=sqft_values, room_count_values=room_count_values
+    )
 
     ranked = []
     score_rows = []
     for listing in listings:
         commute = commute_by_id.get(listing.listing_id)
-        medtronic_minutes = commute["medtronic_minutes"] if commute else None
-        denver_minutes = commute["denver_minutes"] if commute else None
+        # A row measured a different way is not scored. It is not a number
+        # for the same question -- a free-flow duration against a curve drawn
+        # for rush hour scores every listing 100 -- so scoring it would rank
+        # the un-recomputed half of the corpus above the recomputed half and
+        # look entirely normal doing it. Treating it as absent puts the
+        # listing on the neutral fallback AND raises has_incomplete_data,
+        # which is loud: if the commutes stage ever lands after the scorer,
+        # the whole corpus is flagged rather than quietly mis-ranked.
+        medtronic_minutes = (
+            commute["medtronic_minutes"]
+            if commute is not None and commute["commute_source"] == COMMUTE_SOURCE
+            else None
+        )
 
         visual_row = visual_by_id.get(listing.listing_id)
         visual_condition_score = None
@@ -110,7 +119,9 @@ def main() -> None:
             visual_outdoor_score = visual_row["outdoor_photo_score"]
 
         result = score_listing(
-            listing, medtronic_minutes, denver_minutes, stats,
+            listing,
+            medtronic_minutes=medtronic_minutes,
+            stats=stats,
             visual_condition_score=visual_condition_score,
             visual_outdoor_score=visual_outdoor_score,
         )

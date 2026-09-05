@@ -59,7 +59,8 @@ explicitly not merge-blocking — parked rather than fixed, since the one
 required fix (the incomplete-data flag) was scoped tightly on purpose. Real
 data numbers below are all against the live 362-listing collection.
 
-- **Neutral-50 commute imputation functions as a penalty, not neutral.**
+- **[DEFERRED 2026-09-05 — issue #29]** **Neutral-50 commute imputation
+  functions as a penalty, not neutral.**
   Spec's stated intent was "one missing field shouldn't tank a composite
   score," but on real data the 319 successfully-routed listings score
   62.7–99.9 (median 90.0) on the commute sub-score — nothing routed scores
@@ -67,7 +68,21 @@ data numbers below are all against the live 362-listing collection.
   `has_incomplete_data`) are still silently ranked beneath every routed
   listing on the heaviest-weighted factor (35%). Consider imputing the
   routed-collection's median instead of a flat 50.
-- **No retry path for failed geocodes.** `get_listing_ids_missing_commute`
+  *Still open, but the numbers behind it have changed and the entry above is
+  stale.* Against the traffic-aware corpus the routed spread is 51.8–100.0
+  (median 100.0) over 101 listings, so a neutral 50 is now below every routed
+  listing rather than below most of them — the argument is stronger, not
+  weaker. Deferred deliberately: the right imputation is a decision to make
+  from the recomputed distribution, and it should not ride along in the same
+  change that produced the distribution. See `2026-09-05-commute-rebuild.md`
+  §T11.*
+- **[RESOLVED]** ~~No retry path for failed geocodes.~~
+  `get_listing_ids_missing_commute` gained `retry_failed` (default on), so a
+  row with `geocode_failed=1` or NULL minutes is selected again. As of
+  2026-09-05 it also selects any row whose `commute_source` is not the
+  current one, which makes a change to *how* a commute is measured migrate
+  the corpus on the next ordinary run. Original entry:
+  `get_listing_ids_missing_commute`
   keys on row *absence*, but a failed geocode still writes a row — so the
   43 current failures are cached permanently; the only recovery today is a
   manual `DELETE FROM commute WHERE geocode_failed=1`. Spot-checked 3 of the
@@ -95,7 +110,12 @@ data numbers below are all against the live 362-listing collection.
   project documents disagree with each other; worth reconciling explicitly
   rather than leaving the contradiction standing. Affects one real listing
   (8177 Ames Way — likely an unreported garage, not a parking-less home).
-- **`geocode_failed` is a misleading name** — `compute_commute` also sets it
+- **[RESOLVED 2026-09-05 — issue #32]** ~~`geocode_failed` is a misleading
+  name.~~ It now means only what it says. A leg that fails to route leaves
+  the minutes NULL and writes `route_error` naming the leg, so "we do not
+  know where this house is" and "we know, but could not drive there" are
+  distinguishable — which matters because the fix for each is different.
+  Original entry: `compute_commute` also sets it
   `True` when *routing* fails with a perfectly good geocode, so a row can
   have valid lat/lon with `geocode_failed=1`. Didn't occur on real data (all
   43 failures have NULL lat), but `commute_failed` would be an honest

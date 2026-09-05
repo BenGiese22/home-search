@@ -50,47 +50,50 @@ LISTING = Listing(
     hoa_annual=0.0,
 )
 
-STATS = CollectionStats(
-    sqft_min=1000, sqft_max=3000, denver_minutes_min=10.0, denver_minutes_max=30.0
-)
+STATS = CollectionStats(sqft_min=1000, sqft_max=3000)
+
+
+# The commute factor is Megan's drive to Lafayette, and only that. The Denver
+# leg used to carry 20% of it, normalised against the corpus's own min and
+# max -- so a listing's commute score moved when *other* listings were added
+# or removed, with nothing about that house having changed. Ben settled it on
+# 2026-09-05: he has no commute, and the Denver destination is a coworking
+# space he uses occasionally. The leg is still computed, stored and shown.
+# It just does not vote.
+#
+# The thresholds themselves are untouched by that change. They were drawn
+# around Megan's stated 20-minute ideal and 30-minute ceiling and they were
+# never the problem -- the input was.
 
 
 def test_score_commute_full_marks_at_or_under_twenty_minutes():
-    # denver leg pinned at its own minimum, so it legitimately scores 100 on
-    # its own terms — isolates the medtronic leg's behavior at 20 minutes
-    assert score_commute(20.0, 15.0, 15.0, 30.0) == 100.0
+    assert score_commute(20.0) == 100.0
+    assert score_commute(5.0) == 100.0
 
 
 def test_score_commute_linear_slide_between_twenty_and_thirty():
-    # medtronic leg only: 25min -> 70; denver leg pinned at its own min -> 100
-    result = score_commute(25.0, 15.0, 15.0, 30.0)
-    assert result == 0.8 * 70.0 + 0.2 * 100.0
+    assert score_commute(25.0) == 70.0
 
 
-def test_score_commute_forty_minutes_medtronic_leg_is_zero():
-    result = score_commute(40.0, 15.0, 15.0, 30.0)
-    assert result == 0.8 * 0.0 + 0.2 * 100.0
+def test_score_commute_forty_minutes_is_zero():
+    assert score_commute(40.0) == 0.0
 
 
 def test_score_commute_beyond_forty_minutes_stays_zero():
-    result = score_commute(55.0, 15.0, 15.0, 30.0)
-    assert result == 0.8 * 0.0 + 0.2 * 100.0
-
-
-def test_score_commute_denver_leg_min_max_normalized():
-    # denver leg at the collection's max minutes scores 0
-    result = score_commute(20.0, 30.0, 15.0, 30.0)
-    assert result == 0.8 * 100.0 + 0.2 * 0.0
+    assert score_commute(55.0) == 0.0
 
 
 def test_score_commute_missing_data_is_neutral():
-    result = score_commute(None, None, 15.0, 30.0)
-    assert result == 50.0
+    """The heaviest-weighted factor in the rubric. A missing commute must not
+    read as a fast one."""
+    assert score_commute(None) == 50.0
 
 
-def test_score_commute_no_variance_in_denver_range_scores_full():
-    result = score_commute(20.0, 20.0, 20.0, 20.0)
-    assert result == 100.0
+def test_score_commute_does_not_depend_on_the_rest_of_the_collection():
+    """The Denver leg was min/max normalised, which made this score a
+    function of the corpus. Two runs over different collections gave the same
+    house different commute scores."""
+    assert score_commute(25.0) == 70.0
 
 
 def test_score_sqft_min_max_normalizes_across_collection():
@@ -179,30 +182,28 @@ def test_passes_filters_requires_both_thresholds():
 
 
 def test_compute_collection_stats_returns_min_and_max():
-    stats = compute_collection_stats([1000, 2000, 3000], [10.0, 20.0, 30.0])
+    stats = compute_collection_stats(sqft_values=[1000, 2000, 3000])
 
-    assert stats == CollectionStats(
-        sqft_min=1000, sqft_max=3000, denver_minutes_min=10.0, denver_minutes_max=30.0
-    )
+    assert stats == CollectionStats(sqft_min=1000, sqft_max=3000)
 
 
 def test_compute_collection_stats_returns_room_count_min_and_max():
-    stats = compute_collection_stats([1000, 2000], [10.0, 20.0], [4.0, 6.5, 8.0])
+    stats = compute_collection_stats(sqft_values=[1000, 2000], room_count_values=[4.0, 6.5, 8.0])
 
     assert stats.room_count_min == 4.0
     assert stats.room_count_max == 8.0
 
 
 def test_compute_collection_stats_handles_empty_input():
-    stats = compute_collection_stats([], [])
+    stats = compute_collection_stats(sqft_values=[])
 
-    assert stats == CollectionStats(0, 0, 0.0, 0.0)
+    assert stats == CollectionStats(sqft_min=0, sqft_max=0)
 
 
 def test_score_listing_combines_sub_scores_with_named_weights():
-    stats = CollectionStats(sqft_min=1000, sqft_max=3000, denver_minutes_min=10.0, denver_minutes_max=30.0)
+    stats = CollectionStats(sqft_min=1000, sqft_max=3000)
 
-    result = score_listing(LISTING, medtronic_minutes=18.0, denver_minutes=15.0, stats=stats)
+    result = score_listing(LISTING, medtronic_minutes=18.0, stats=stats)
 
     expected = (
         WEIGHT_COMMUTE * result.commute_score
@@ -217,57 +218,61 @@ def test_score_listing_combines_sub_scores_with_named_weights():
 
 
 def test_score_listing_sets_passes_filters_flag():
-    stats = CollectionStats(1000, 3000, 10.0, 30.0)
+    stats = CollectionStats(sqft_min=1000, sqft_max=3000)
 
-    passing = score_listing(LISTING, 18.0, 15.0, stats)
+    passing = score_listing(LISTING, medtronic_minutes=18.0, stats=stats)
     failing_listing = LISTING.__class__(**{**LISTING.__dict__, "baths": 1.0})
-    failing = score_listing(failing_listing, 18.0, 15.0, stats)
+    failing = score_listing(failing_listing, medtronic_minutes=18.0, stats=stats)
 
     assert passing.passes_filters is True
     assert failing.passes_filters is False
 
 
-def test_score_listing_flags_incomplete_data_when_commute_missing():
-    stats = CollectionStats(1000, 3000, 10.0, 30.0)
+def test_score_listing_flags_incomplete_data_when_the_commute_is_missing():
+    stats = CollectionStats(sqft_min=1000, sqft_max=3000)
+    assert score_listing(LISTING, medtronic_minutes=None, stats=stats).has_incomplete_data
 
-    missing_medtronic = score_listing(LISTING, None, 15.0, stats)
-    missing_denver = score_listing(LISTING, 18.0, None, stats)
 
-    assert missing_medtronic.has_incomplete_data is True
-    assert missing_denver.has_incomplete_data is True
+def test_a_missing_denver_leg_no_longer_flags_a_listing_as_incomplete():
+    """It stopped feeding any score, so its absence is a gap in what is
+    displayed, not a listing that was ranked on a guess. Leaving the flag
+    would make has_incomplete_data mean two different things and dilute the
+    one it is for."""
+    stats = CollectionStats(sqft_min=1000, sqft_max=3000)
+    assert not score_listing(LISTING, medtronic_minutes=18.0, stats=stats).has_incomplete_data
 
 
 def test_score_listing_flags_incomplete_data_when_sqft_missing():
-    stats = CollectionStats(1000, 3000, 10.0, 30.0)
+    stats = CollectionStats(sqft_min=1000, sqft_max=3000)
     no_sqft = LISTING.__class__(**{**LISTING.__dict__, "sqft": 0})
 
-    result = score_listing(no_sqft, 18.0, 15.0, stats)
+    result = score_listing(no_sqft, medtronic_minutes=18.0, stats=stats)
 
     assert result.has_incomplete_data is True
 
 
 def test_score_listing_flags_incomplete_data_when_year_built_missing():
-    stats = CollectionStats(1000, 3000, 10.0, 30.0)
+    stats = CollectionStats(sqft_min=1000, sqft_max=3000)
     no_year_built = LISTING.__class__(**{**LISTING.__dict__, "year_built": 0})
 
-    result = score_listing(no_year_built, 18.0, 15.0, stats)
+    result = score_listing(no_year_built, medtronic_minutes=18.0, stats=stats)
 
     assert result.has_incomplete_data is True
 
 
 def test_score_listing_flags_incomplete_data_when_beds_missing():
-    stats = CollectionStats(1000, 3000, 10.0, 30.0)
+    stats = CollectionStats(sqft_min=1000, sqft_max=3000)
     no_beds = LISTING.__class__(**{**LISTING.__dict__, "beds": 0})
 
-    result = score_listing(no_beds, 18.0, 15.0, stats)
+    result = score_listing(no_beds, medtronic_minutes=18.0, stats=stats)
 
     assert result.has_incomplete_data is True
 
 
 def test_score_listing_has_incomplete_data_false_when_all_present():
-    stats = CollectionStats(1000, 3000, 10.0, 30.0)
+    stats = CollectionStats(sqft_min=1000, sqft_max=3000)
 
-    result = score_listing(LISTING, 18.0, 15.0, stats)
+    result = score_listing(LISTING, medtronic_minutes=18.0, stats=stats)
 
     assert result.has_incomplete_data is False
 
@@ -296,13 +301,13 @@ def test_score_outdoor_falls_back_to_keywords_when_visual_score_absent():
 
 
 def test_score_listing_passes_visual_scores_through():
-    stats = CollectionStats(sqft_min=1000, sqft_max=3000, denver_minutes_min=10.0, denver_minutes_max=30.0)
+    stats = CollectionStats(sqft_min=1000, sqft_max=3000)
 
     with_visual = score_listing(
-        LISTING, medtronic_minutes=18.0, denver_minutes=15.0, stats=stats,
+        LISTING, medtronic_minutes=18.0, stats=stats,
         visual_condition_score=90.0, visual_outdoor_score=80.0,
     )
-    without_visual = score_listing(LISTING, medtronic_minutes=18.0, denver_minutes=15.0, stats=stats)
+    without_visual = score_listing(LISTING, medtronic_minutes=18.0, stats=stats)
 
     assert with_visual.condition_score != without_visual.condition_score
     assert with_visual.outdoor_score != without_visual.outdoor_score
@@ -367,7 +372,7 @@ def test_score_hoa_monotonically_decreases_as_fee_increases():
 
 def test_score_listing_flags_incomplete_data_when_hoa_unknown():
     listing = LISTING.__class__(**{**LISTING.__dict__, "hoa_annual": None})
-    result = score_listing(listing, 15.0, 30.0, STATS)
+    result = score_listing(listing, medtronic_minutes=15.0, stats=STATS)
     assert result.has_incomplete_data is True
 
 
@@ -376,7 +381,7 @@ def test_score_listing_has_incomplete_data_false_when_hoa_confirmed_zero():
     field on Listing. This is the single most important regression test
     for the None-vs-0.0 design."""
     listing = LISTING.__class__(**{**LISTING.__dict__, "hoa_annual": 0.0})
-    result = score_listing(listing, 15.0, 30.0, STATS)
+    result = score_listing(listing, medtronic_minutes=15.0, stats=STATS)
     assert result.has_incomplete_data is False
 
 
@@ -405,7 +410,6 @@ def test_finished_sqft_falls_back_to_total_sqft_when_above_grade_missing():
 def test_score_listing_scores_sqft_on_finished_area_not_total():
     inflated = _with(sqft=3000, sqft_above_grade=1500, sqft_below_grade=0)
     honest = _with(sqft=1500, sqft_above_grade=1500, sqft_below_grade=0)
-    stats = CollectionStats(sqft_min=1000, sqft_max=3000,
-                            denver_minutes_min=10.0, denver_minutes_max=30.0)
-    assert (score_listing(inflated, 15.0, 30.0, stats).sqft_score
-            == score_listing(honest, 15.0, 30.0, stats).sqft_score)
+    stats = CollectionStats(sqft_min=1000, sqft_max=3000)
+    assert (score_listing(inflated, medtronic_minutes=15.0, stats=stats).sqft_score
+            == score_listing(honest, medtronic_minutes=15.0, stats=stats).sqft_score)

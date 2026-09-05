@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.backfill import dedupe_by_listing_id
-from src.commute import CommuteResult
+from src.commute import COMMUTE_SOURCE, CommuteResult
 from src.models import Listing
 from src.scoring import ScoreResult
 # chunk_size lives with the rest of the batched-write machinery in
@@ -63,7 +63,10 @@ CREATE TABLE IF NOT EXISTS commute (
     medtronic_miles REAL,
     medtronic_minutes REAL,
     geocode_failed INTEGER NOT NULL,
-    computed_at TEXT NOT NULL
+    computed_at TEXT NOT NULL,
+    commute_source TEXT,
+    arrive_by TEXT,
+    route_error TEXT
 );
 
 CREATE TABLE IF NOT EXISTS scores (
@@ -967,8 +970,9 @@ def upsert_commute(conn: sqlite3.Connection, listing_id: str, result: CommuteRes
             """
             INSERT OR REPLACE INTO commute (
                 listing_id, lat, lon, denver_miles, denver_minutes,
-                medtronic_miles, medtronic_minutes, geocode_failed, computed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                medtronic_miles, medtronic_minutes, geocode_failed, computed_at,
+                commute_source, arrive_by, route_error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 listing_id,
@@ -980,6 +984,9 @@ def upsert_commute(conn: sqlite3.Connection, listing_id: str, result: CommuteRes
                 result.medtronic_minutes,
                 int(result.geocode_failed),
                 datetime.now(timezone.utc).isoformat(),
+                result.commute_source,
+                result.arrive_by,
+                result.route_error,
             ),
         )
 
@@ -1005,10 +1012,13 @@ def get_commutes_by_listing(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
 
 
 def get_listing_ids_missing_commute(
-    conn: sqlite3.Connection, retry_failed: bool = True, force: bool = False
+    conn: sqlite3.Connection,
+    retry_failed: bool = True,
+    force: bool = False,
+    source: str = COMMUTE_SOURCE,
 ) -> list[str]:
-    """Listings whose commute still needs computing — no row at all, or a
-    row that never produced a usable result.
+    """Listings whose commute still needs computing — no row at all, a row
+    that never produced a usable result, or a row measured a different way.
 
     A rerun still skips every listing already covered, so it only pays the
     geocode/routing cost for work that is actually outstanding.
@@ -1021,6 +1031,15 @@ def get_listing_ids_missing_commute(
     in the rubric, with nothing to signal it. Eight listings were sitting in
     exactly that state. Pass retry_failed=False for a run that should only
     pick up genuinely new listings.
+
+    `source` is what makes a re-measurement self-triggering. A row stamped
+    with any other commute_source is stale by definition: it answers a
+    different question from the one the rubric now asks, and mixing the two
+    ranks half the corpus on free-flow durations and half on rush-hour ones.
+    Bumping COMMUTE_SOURCE therefore migrates the corpus on the next ordinary
+    pipeline run, with no flag and no separate job — and the staleness test
+    applies under retry_failed=False too, because a stale row is not
+    "covered" under any reading of the word.
     """
     if force:
         # Every listing, whether or not it already has a usable row.
@@ -1037,6 +1056,9 @@ def get_listing_ids_missing_commute(
             ).fetchall()
         ]
 
+    # IS NOT rather than != : SQLite's != is NULL for a NULL operand, so
+    # `commute_source != ?` silently fails to select exactly the rows this
+    # migration exists for — every pre-Mapbox row, which has NULL there.
     if retry_failed:
         rows = conn.execute(
             """
@@ -1045,14 +1067,19 @@ def get_listing_ids_missing_commute(
             WHERE c.listing_id IS NULL
                OR c.geocode_failed = 1
                OR c.medtronic_minutes IS NULL
-            """
+               OR c.commute_source IS NOT ?
+            """,
+            (source,),
         ).fetchall()
     else:
         rows = conn.execute(
             """
-            SELECT listing_id FROM listings
-            WHERE listing_id NOT IN (SELECT listing_id FROM commute)
-            """
+            SELECT l.listing_id FROM listings l
+            LEFT JOIN commute c ON c.listing_id = l.listing_id
+            WHERE c.listing_id IS NULL
+               OR c.commute_source IS NOT ?
+            """,
+            (source,),
         ).fetchall()
     return [row["listing_id"] for row in rows]
 
