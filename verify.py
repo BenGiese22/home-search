@@ -25,6 +25,7 @@ import sys
 from dataclasses import dataclass
 from typing import Callable
 
+from src.commute import COMMUTE_SOURCE
 from src.config import load_env  # noqa: F401  (kept for .env side effects)
 from src.db import duplicate_address_groups
 from src.turso_db import stage_connection
@@ -137,12 +138,88 @@ def check_addresses_are_unique(conn) -> Violation | None:
     )
 
 
+def check_every_listing_has_a_commute_row(conn) -> Violation | None:
+    """The commutes stage writes a row for every listing it attempts,
+    including the ones that fail. A listing with no row at all therefore
+    means the stage never reached it -- it exited early, or the selector did
+    not return it -- and that listing is now being ranked on the neutral
+    fallback for the heaviest-weighted factor in the rubric.
+
+    Distinct from a row with NULL minutes, which is an honest recorded
+    failure and is allowed. This is about a listing nothing even tried.
+    """
+    rows = _rows(
+        conn,
+        """
+        SELECT l.listing_id, l.address FROM listings l
+        LEFT JOIN commute c ON c.listing_id = l.listing_id
+        WHERE c.listing_id IS NULL
+        ORDER BY l.listing_id
+        """,
+    )
+    if not rows:
+        return None
+    return Violation(
+        "listings_without_a_commute_row",
+        f"{len(rows)} listing(s) the commutes stage never wrote a result for",
+        [f"{row['listing_id']} {row['address']}" for row in rows],
+    )
+
+
+def check_commutes_share_one_source(conn) -> Violation | None:
+    """Every routed commute must have been measured the same way.
+
+    This is the invariant the whole provenance column exists for. A corpus
+    holding both free-flow and rush-hour durations ranks the un-recomputed
+    rows above the recomputed ones -- an 18-minute free-flow drive scores
+    100 where the same drive at 8:15 scores 88 -- and every symptom of it is
+    invisible: the rows are complete, the numbers are plausible, and the run
+    exits 0.
+
+    It is also the check that would catch a revoked Mapbox key. We use
+    Mapbox knowingly against its terms (docs/routing-provider-terms.md), so
+    the realistic failure is not a lawsuit, it is a key switched off at 3am;
+    after which new listings never get a current-source row and the ranking
+    goes quietly wrong for exactly the newest listings.
+
+    Rows with NULL minutes do not count: they routed nothing, so they claim
+    nothing about how they were measured.
+    """
+    rows = _rows(
+        conn,
+        """
+        SELECT commute_source, COUNT(*) AS n FROM commute
+        WHERE medtronic_minutes IS NOT NULL
+        GROUP BY commute_source
+        """,
+    )
+    if not rows:
+        return None
+    sources = {row["commute_source"]: row["n"] for row in rows}
+    if list(sources) == [COMMUTE_SOURCE]:
+        return None
+    detail = (
+        "the corpus holds more than one kind of commute measurement"
+        if len(sources) > 1
+        else f"every commute was measured as {list(sources)[0]!r}, not {COMMUTE_SOURCE!r}"
+    )
+    return Violation(
+        "mixed_commute_sources",
+        detail,
+        [f"{source!r}: {count} row(s)" for source, count in sorted(
+            sources.items(), key=lambda item: (item[0] is not None, item[0])
+        )],
+    )
+
+
 CHECKS: tuple[Callable, ...] = (
     check_corpus_is_not_empty,
     check_active_listings_have_photos,
     check_every_listing_is_scored,
     check_no_orphaned_children,
     check_addresses_are_unique,
+    check_every_listing_has_a_commute_row,
+    check_commutes_share_one_source,
 )
 
 

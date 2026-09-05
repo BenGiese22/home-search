@@ -298,3 +298,79 @@ class _counted:
     def __exit__(self, *exc):
         self.conn.set_trace_callback(None)
         return False
+
+
+# --- a stale commute row is not scored -----------------------------------
+#
+# Merge order is a hard constraint in the commute rebuild: the stage that
+# writes traffic-aware durations has to reach production before the scorer
+# stops weighting the Denver leg. These tests are what makes getting that
+# wrong loud rather than silent. A free-flow duration against a curve drawn
+# for rush hour scores nearly every listing 100 -- so scoring the two kinds
+# of row together would rank the un-recomputed half above the recomputed
+# half and look entirely normal doing it.
+
+
+def _score_one(tmp_path: Path, monkeypatch, source):
+    """Seed a single listing whose commute row carries `source`, run the real
+    score.main(), and hand back its scores row."""
+    from src.commute import CommuteResult
+
+    import dataclasses
+
+    db_path = tmp_path / f"stale-{source}.sqlite"
+    conn = get_connection(db_path)
+    # A disclosed HOA, so has_incomplete_data reflects the commute and only
+    # the commute. _listing() leaves hoa_annual None, which legitimately
+    # raises the flag on its own and would make every assertion below pass
+    # for the wrong reason.
+    listing = dataclasses.replace(_listing(0), hoa_annual=0.0)
+    upsert_listing(conn, listing)
+    upsert_commute(
+        conn,
+        listing.listing_id,
+        CommuteResult(
+            lat=39.8, lon=-105.1,
+            denver_miles=14.0, denver_minutes=24.0,
+            medtronic_miles=9.0, medtronic_minutes=18.0,
+            geocode_failed=False,
+            commute_source=source,
+        ),
+    )
+    monkeypatch.setattr(score, "stage_connection", lambda c=conn: c)
+    monkeypatch.setattr(score, "RANKED_CSV_PATH", tmp_path / f"ranked-{source}.csv")
+    monkeypatch.setattr(score.sys, "argv", ["score.py"])
+    score.main()
+    # main() closes the connection it was handed, so read the result back
+    # through a fresh one rather than reaching into a closed handle.
+    return get_connection(db_path).execute(
+        "SELECT * FROM scores WHERE listing_id = ?", (listing.listing_id,)
+    ).fetchone()
+
+
+def test_a_current_source_commute_is_scored(tmp_path: Path, monkeypatch, capsys):
+    from src.commute import COMMUTE_SOURCE
+
+    row = _score_one(tmp_path, monkeypatch, COMMUTE_SOURCE)
+    # 18 minutes is inside the flat region of the curve.
+    assert row["commute_score"] == 100.0
+    assert row["has_incomplete_data"] == 0
+
+
+def test_a_row_measured_a_different_way_scores_as_missing(
+    tmp_path: Path, monkeypatch, capsys
+):
+    row = _score_one(tmp_path, monkeypatch, "osrm-freeflow/v1")
+    assert row["commute_score"] == 50.0
+    assert row["has_incomplete_data"] == 1
+
+
+def test_a_row_from_before_the_source_column_scores_as_missing(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Every row the free-flow pipeline wrote has commute_source NULL. If the
+    scorer ran before the commutes stage had migrated them, this is what
+    stops 18 free-flow minutes being read as a 20-minute rush-hour drive."""
+    row = _score_one(tmp_path, monkeypatch, None)
+    assert row["commute_score"] == 50.0
+    assert row["has_incomplete_data"] == 1

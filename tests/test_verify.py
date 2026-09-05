@@ -32,7 +32,21 @@ def conn():
     return c
 
 
-def add_listing(conn, lid, address="A House", urls=0, hosted=0, scored=True):
+_CURRENT_SOURCE = "mapbox-arrive-0815/v1"
+_UNSET = object()
+
+
+def add_listing(
+    conn,
+    lid,
+    address="A House",
+    urls=0,
+    hosted=0,
+    scored=True,
+    commute=True,
+    commute_source=_UNSET,
+    medtronic_minutes=18.0,
+):
     # The schema is almost entirely NOT NULL, so a fixture has to be complete.
     conn.execute(
         """INSERT INTO listings (
@@ -53,6 +67,20 @@ def add_listing(conn, lid, address="A House", urls=0, hosted=0, scored=True):
         conn.execute(
             "INSERT INTO hosted_photos (listing_id, position, blob_url) VALUES (?, ?, ?)",
             (lid, i + 1, f"https://blob/{lid}/{i}"),
+        )
+    if commute:
+        conn.execute(
+            """INSERT INTO commute (
+                 listing_id, lat, lon, denver_miles, denver_minutes,
+                 medtronic_miles, medtronic_minutes, geocode_failed,
+                 computed_at, commute_source, arrive_by, route_error
+               ) VALUES (?, 39.8, -105.1, 14.0, 24.0, 9.0, ?, 0,
+                         '2026-09-05T00:00:00+00:00', ?, '2026-09-09T08:15', NULL)""",
+            (
+                lid,
+                medtronic_minutes,
+                _CURRENT_SOURCE if commute_source is _UNSET else commute_source,
+            ),
         )
     if scored:
         conn.execute(
@@ -207,3 +235,83 @@ def test_distinct_addresses_pass(conn):
     add_listing(conn, "a", "1 Main St")
     add_listing(conn, "b", "2 Oak Ave")
     assert check_addresses_are_unique(conn) is None
+
+
+# --- the commute invariants -----------------------------------------------
+#
+# We use Mapbox knowingly against its terms (docs/routing-provider-terms.md),
+# so the realistic failure is not legal, it is operational: a key switched off
+# at 3am. After that, new listings never get a current-source commute row and
+# the ranking goes quietly wrong for exactly the newest listings -- which are
+# the ones anyone is actually looking at. These two checks are what turns that
+# into an exit code instead of a slow drift nobody can see.
+
+
+def test_a_listing_the_commutes_stage_never_reached_is_a_violation(conn):
+    add_listing(conn, "L1", urls=3, hosted=3, commute=False)
+
+    violations = run_checks(conn)
+
+    assert [v.check for v in violations] == ["listings_without_a_commute_row"]
+
+
+def test_a_recorded_routing_failure_is_not_a_violation(conn):
+    """A row with NULL minutes is an honest answer: the stage asked and could
+    not route it. That listing scores on the neutral fallback and is flagged
+    incomplete, which is the system working. The violation is a listing
+    nothing even tried."""
+    add_listing(conn, "L1", urls=3, hosted=3, medtronic_minutes=None)
+
+    assert run_checks(conn) == []
+
+
+def test_a_corpus_measured_two_different_ways_is_a_violation(conn):
+    """The reason commute_source exists. An 18-minute free-flow drive scores
+    100 where the same drive measured at 08:15 scores 88, so a half-migrated
+    corpus ranks the un-recomputed listings above the recomputed ones -- with
+    complete rows, plausible numbers and an exit code of 0."""
+    add_listing(conn, "L1", address="One", urls=3, hosted=3)
+    add_listing(conn, "L2", address="Two", urls=3, hosted=3, commute_source=None)
+
+    violations = run_checks(conn)
+
+    assert [v.check for v in violations] == ["mixed_commute_sources"]
+    assert "more than one kind" in violations[0].detail
+
+
+def test_a_corpus_measured_entirely_the_old_way_is_a_violation(conn):
+    """One source, but the wrong one. This is what a deploy looks like if the
+    commutes stage never ran -- uniform, complete, and answering a question
+    nobody asked."""
+    add_listing(conn, "L1", urls=3, hosted=3, commute_source=None)
+
+    violations = run_checks(conn)
+
+    assert [v.check for v in violations] == ["mixed_commute_sources"]
+    assert "None" in violations[0].detail
+
+
+def test_a_corpus_on_the_current_source_holds(conn):
+    add_listing(conn, "L1", address="One", urls=3, hosted=3)
+    add_listing(conn, "L2", address="Two", urls=3, hosted=3)
+
+    assert run_checks(conn) == []
+
+
+def test_an_unrouted_row_does_not_break_uniformity(conn):
+    """A row that routed nothing claims nothing about how it was measured, so
+    it must not be counted as a second source -- otherwise one transient
+    routing failure fails the whole run."""
+    add_listing(conn, "L1", address="One", urls=3, hosted=3)
+    add_listing(
+        conn, "L2", address="Two", urls=3, hosted=3,
+        commute_source=None, medtronic_minutes=None,
+    )
+
+    assert run_checks(conn) == []
+
+
+def test_an_empty_commute_table_does_not_fail_uniformity_on_its_own(conn):
+    """With no listings there is nothing to be inconsistent about, and the
+    empty-corpus check already speaks to that case."""
+    assert [v.check for v in run_checks(conn)] == ["empty_corpus"]

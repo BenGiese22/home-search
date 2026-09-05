@@ -4,8 +4,6 @@ from src.models import Listing
 
 NEUTRAL_SCORE = 50.0
 
-MEDTRONIC_LEG_WEIGHT = 0.8
-DENVER_LEG_WEIGHT = 0.2
 
 # All six pre-HOA weights scaled by (1 - WEIGHT_HOA) = 0.955, which
 # preserves their importance relative to each other instead of taking the
@@ -99,28 +97,22 @@ def _medtronic_leg_score(minutes: float) -> float:
     return 0.0
 
 
-def _denver_leg_score(minutes: float, denver_min: float, denver_max: float) -> float:
-    if denver_max <= denver_min:
-        return 100.0
-    normalized = (denver_max - minutes) / (denver_max - denver_min)
-    return _clamp(normalized * 100.0)
+def score_commute(medtronic_minutes: float | None) -> float:
+    """The commute factor is Megan's drive to Lafayette, and only that.
 
+    The Denver leg used to carry 20% of this score, normalised against the
+    corpus's own min and max. Two problems with that, and Ben settled both on
+    2026-09-05: Ben has no commute -- the Denver destination is a coworking
+    space he uses occasionally -- and a min/max normalisation makes a
+    listing's score depend on which *other* listings happen to be in the
+    collection this week, so a house could move in the ranking without
+    anything about it changing.
 
-def score_commute(
-    medtronic_minutes: float | None,
-    denver_minutes: float | None,
-    denver_min: float,
-    denver_max: float,
-) -> float:
-    medtronic_score = (
-        _medtronic_leg_score(medtronic_minutes) if medtronic_minutes is not None else NEUTRAL_SCORE
-    )
-    denver_score = (
-        _denver_leg_score(denver_minutes, denver_min, denver_max)
-        if denver_minutes is not None
-        else NEUTRAL_SCORE
-    )
-    return MEDTRONIC_LEG_WEIGHT * medtronic_score + DENVER_LEG_WEIGHT * denver_score
+    The leg is still computed, stored and displayed. It just does not vote.
+    """
+    if medtronic_minutes is None:
+        return NEUTRAL_SCORE
+    return _medtronic_leg_score(medtronic_minutes)
 
 
 def finished_sqft(listing: Listing) -> int:
@@ -245,27 +237,31 @@ def passes_filters(baths: float, lot_sqft: int) -> bool:
     return baths >= MIN_BATHS and lot_sqft >= MIN_LOT_SQFT
 
 
-@dataclass
+@dataclass(kw_only=True)
 class CollectionStats:
+    """The corpus-relative bounds the rubric normalises against.
+
+    Keyword-only since the Denver bounds were removed from the middle of the
+    field list: a positional construction that used to mean
+    (sqft_min, sqft_max, denver_min, denver_max) would still be accepted, and
+    would silently put commute minutes into room_count_min.
+    """
+
     sqft_min: int
     sqft_max: int
-    denver_minutes_min: float
-    denver_minutes_max: float
     room_count_min: float = 0.0
     room_count_max: float = 0.0
 
 
 def compute_collection_stats(
+    *,
     sqft_values: list[int],
-    denver_minutes_values: list[float],
     room_count_values: list[float] | None = None,
 ) -> CollectionStats:
     room_count_values = room_count_values or []
     return CollectionStats(
         sqft_min=min(sqft_values) if sqft_values else 0,
         sqft_max=max(sqft_values) if sqft_values else 0,
-        denver_minutes_min=min(denver_minutes_values) if denver_minutes_values else 0.0,
-        denver_minutes_max=max(denver_minutes_values) if denver_minutes_values else 0.0,
         room_count_min=min(room_count_values) if room_count_values else 0.0,
         room_count_max=max(room_count_values) if room_count_values else 0.0,
     )
@@ -287,15 +283,13 @@ class ScoreResult:
 
 def score_listing(
     listing: Listing,
+    *,
     medtronic_minutes: float | None,
-    denver_minutes: float | None,
     stats: CollectionStats,
     visual_condition_score: float | None = None,
     visual_outdoor_score: float | None = None,
 ) -> ScoreResult:
-    commute_score = score_commute(
-        medtronic_minutes, denver_minutes, stats.denver_minutes_min, stats.denver_minutes_max
-    )
+    commute_score = score_commute(medtronic_minutes)
     sqft_score = score_sqft(finished_sqft(listing), stats.sqft_min, stats.sqft_max)
     condition_score = score_condition(
         listing.description, listing.amenities, listing.year_built, visual_condition_score
@@ -321,7 +315,9 @@ def score_listing(
     # spec's "Error handling" section.
     has_incomplete_data = (
         medtronic_minutes is None
-        or denver_minutes is None
+        # denver_minutes is deliberately absent: it no longer feeds any
+        # score, so a missing one is a gap in what is displayed, not a
+        # listing that was ranked on a guess.
         or not listing.sqft
         or not listing.year_built
         or not listing.beds
