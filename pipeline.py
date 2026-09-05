@@ -41,6 +41,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.config import load_env, this_home
+from src.notify import notify
 from src.db import (
     acquire_pipeline_lease,
     release_pipeline_lease,
@@ -136,6 +137,26 @@ def _default_revalidate() -> bool:
     return revalidate(env["SHORT_LIST_URL"], env["REVALIDATE_SECRET"])
 
 
+def _default_notify(title: str, message: str) -> bool:
+    """Push a pipeline failure to a phone.
+
+    Only failures. A nightly success that says so is a notification people
+    learn to swipe away, and by the time one matters they no longer read it;
+    the canary is what proves the pipeline is alive. Unset NTFY_TOPIC is a
+    silent no-op, which is exactly the behaviour of every run before this.
+
+    Never raises and never blocks a run -- see src/notify.py. A failed
+    notification about a failed run must not become the thing that hides it.
+    """
+    return notify(
+        load_env().get("NTFY_TOPIC", ""),
+        title,
+        message,
+        priority="high",
+        tags=("rotating_light",),
+    )
+
+
 def _lease_connection():
     """The database the cross-home lease lives in.
 
@@ -159,6 +180,7 @@ def run_pipeline(
     log_handle=None,
     revalidate_fn=None,
     renew_lease=None,
+    notify_fn=None,
 ) -> int:
     # Late-bound rather than default arguments so tests (and any caller) can
     # substitute them by patching the module attribute.
@@ -166,6 +188,23 @@ def run_pipeline(
         revalidate_fn = _default_revalidate
     if runner is None:
         runner = _default_runner
+    if notify_fn is None:
+        notify_fn = _default_notify
+
+    def alert(title: str, message: str) -> None:
+        """Notify without ever becoming the failure.
+
+        src/notify.py already swallows delivery errors, but the call reaches
+        it through load_env(), and a malformed .env raising here would kill
+        the run at precisely the moment it was trying to report one. A
+        notification that cannot be sent is a notification that cannot be
+        sent; it is not a reason to lose the exit code that says what broke.
+        """
+        try:
+            notify_fn(title, message)
+        except Exception as exc:  # noqa: BLE001 -- the whole point
+            print(f"pipeline: notification failed ({type(exc).__name__}: {exc})",
+                  flush=True)
 
     if marker is not None and is_fresh(marker, max_age_hours):
         raise Skipped(f"last successful run was under {max_age_hours}h ago")
@@ -194,6 +233,16 @@ def run_pipeline(
                 "another home may be running against the same database",
                 flush=True,
             )
+            # Worth waking someone for. Two homes writing the same database
+            # is the one condition here that can cost real money -- a
+            # concurrent scrape re-downloads photos Compass is already
+            # rate-limiting us on -- and unlike a failed stage it leaves no
+            # non-zero exit code behind for anything else to notice.
+            alert(
+                "home-search: lost the pipeline lease",
+                f"A {this_home()} run lost the cross-home lease mid-run at "
+                f"stage {stage.name}; another home may be running.",
+            )
         argv = [sys.executable, stage.script]
         if stage.takes_scrape_flags:
             argv += scrape_flags
@@ -203,6 +252,16 @@ def run_pipeline(
         elapsed = time.monotonic() - started
         if code != 0:
             print(f"[{stage.name}] FAILED (exit {code}) after {elapsed:.0f}s", flush=True)
+            # Which stage, because that is the whole diagnostic. The sandbox
+            # reaper also pushes on a non-zero run, but it only knows the run
+            # failed; this knows where. Both stay: the reaper's exists for
+            # the case this process was killed before it could say anything,
+            # and a duplicate push about a real failure beats a missed one.
+            alert(
+                f"home-search: {stage.name} failed",
+                f"The {stage.name} stage exited {code} after {elapsed:.0f}s "
+                f"on {this_home()}. Later stages were skipped.",
+            )
             # Later stages read what earlier stages write, so continuing would
             # publish results computed from half-updated data.
             return code

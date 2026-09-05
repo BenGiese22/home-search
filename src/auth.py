@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -19,15 +19,23 @@ def ensure_logged_in(
     email: str,
     password: str,
     storage_state_path: Path,
+    on_cold_login: Callable[[], None] | None = None,
 ) -> None:
     """Navigate to url. If a login form appears (no valid session in the
     context's storage state), complete Compass's two-step email-then-password
     login and submit. Always persist the resulting session to
     storage_state_path so future runs can skip login.
+
+    `on_cold_login` fires when the form was there, i.e. the stored session was
+    absent or no longer valid. Nothing in the pipeline needs to know, but the
+    canary does: warm-session-first is the design, and a run that logs in
+    cold every time is a warning even while it keeps passing.
     """
     page.goto(url)
     email_input = page.locator('input[type="email"]')
     if email_input.count() > 0:
+        if on_cold_login is not None:
+            on_cold_login()
         email_input.first.fill(email)
         page.locator('button[type="submit"]').first.click()
         page.wait_for_selector('input[type="password"]', timeout=10000)
@@ -70,7 +78,10 @@ def ensure_logged_in(
 
 @contextmanager
 def launch_authenticated_page(
-    config: Config, login_url: str, storage_state_path: Path
+    config: Config,
+    login_url: str,
+    storage_state_path: Path,
+    on_cold_login: Callable[[], None] | None = None,
 ) -> Iterator[Page]:
     """Launch a headless browser, restore any persisted session, and ensure
     it's logged in. Yields a ready-to-use Page; closes the browser on exit."""
@@ -83,6 +94,7 @@ def launch_authenticated_page(
         ensure_logged_in(
             context, page, login_url,
             config.compass_email, config.compass_password, storage_state_path,
+            on_cold_login=on_cold_login,
         )
 
         try:

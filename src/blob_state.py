@@ -1,18 +1,17 @@
-"""Small state files that must survive between ephemeral runs.
+"""State that must survive between ephemeral runs.
 
-Phase 3 runs the pipeline in a sandbox with no persistent disk, so two files
-have to live somewhere durable:
+Phase 3 runs the pipeline in a sandbox whose disk is a snapshot rather than a
+guarantee, so `compass_state.json` -- the Compass session -- has to live
+somewhere durable. Losing it forces a cold login, which works but is exactly
+what the warm-session-first design exists to keep rare.
 
-- `compass_state.json` -- the Compass session. Losing it forces a cold
-  login, which works but is exactly what the warm-session-first design
-  exists to keep rare.
-- `.photo_scoring_batch_state.json` -- the vision batch checkpoint. Losing
-  this one breaks the never-pay-twice guarantee and costs real money.
+The vision batch checkpoint was the other tenant here. It is in Turso now,
+beside the scores it protects, so that the never-pay-twice guarantee rests on
+the same transaction as the data rather than on a second store agreeing.
 
 Stored with **private** access. A Compass session behind a public URL is a
-credential anyone holding the link can use; `photos/` is public because a
-listing photo is not sensitive, and these two must never share that
-namespace.
+credential anyone holding the link can replay; `photos/` is public because a
+listing photo is not sensitive, and the two must never share that namespace.
 """
 from typing import Callable
 from urllib.parse import urlencode
