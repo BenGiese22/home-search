@@ -1175,7 +1175,14 @@ def get_amenities_by_listing(conn: sqlite3.Connection) -> dict[str, list[str]]:
 
 
 def delete_listing(conn: sqlite3.Connection, listing_id: str) -> None:
-    """Permanently removes a listing and every child row referencing it
+    """Permanently removes a listing and every child row referencing it.
+
+    NOT a complete delete on its own. This prunes the hosted_photos ROWS,
+    and hosted_photos.blob_url is the only record that an image was ever
+    uploaded -- so calling this directly does not leave the blobs behind
+    tidily, it destroys the only handle on them. Go through src/diff.py's
+    apply_delisting, which reads the URLs first and reclaims the blobs after.
+    tests/test_delete_paths.py enforces that.
     (amenities, photo_urls, commute, scores, visual_scores). Used when a
     listing drops out of the live Compass collection — delisted listings are
     hard-deleted, not archived, since they're never expected to be referenced
