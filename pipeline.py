@@ -35,11 +35,17 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.config import load_env
+from src.config import load_env, this_home
+from src.db import (
+    acquire_pipeline_lease,
+    release_pipeline_lease,
+    renew_pipeline_lease,
+)
 from src.revalidate import revalidate
 
 DATA_DIR = Path("data")
@@ -130,20 +136,36 @@ def _default_revalidate() -> bool:
     return revalidate(env["SHORT_LIST_URL"], env["REVALIDATE_SECRET"])
 
 
+def _lease_connection():
+    """The database the cross-home lease lives in.
+
+    Its own function so a test can substitute it without opening a session,
+    and so the ~3.4s ensure_schema() that creates the table on first use
+    happens in exactly one place. Imported lazily: `pipeline.py --dry-run`
+    and `--help` have no business requiring Turso credentials.
+    """
+    from src.turso_db import stage_connection
+
+    return stage_connection()
+
+
 def run_pipeline(
     stages,
-    runner=_default_runner,
+    runner=None,
     scrape_flags=None,
     dry_run=False,
     marker=None,
     max_age_hours=0.0,
     log_handle=None,
     revalidate_fn=None,
+    renew_lease=None,
 ) -> int:
-    # Late-bound rather than a default argument so tests (and any caller)
-    # can substitute it by patching the module attribute.
+    # Late-bound rather than default arguments so tests (and any caller) can
+    # substitute them by patching the module attribute.
     if revalidate_fn is None:
         revalidate_fn = _default_revalidate
+    if runner is None:
+        runner = _default_runner
 
     if marker is not None and is_fresh(marker, max_age_hours):
         raise Skipped(f"last successful run was under {max_age_hours}h ago")
@@ -158,6 +180,20 @@ def run_pipeline(
         return 0
 
     for stage in stages:
+        # Push the lease out at each boundary. Nothing renews *during* a
+        # stage -- score_photos.py can poll a vision batch for hours, which
+        # is why the lease is long enough to cover one on its own -- but a
+        # full run may still outlast a single lease, and four extra
+        # statements a run is a cheap way to say so.
+        if renew_lease is not None and not renew_lease():
+            # We no longer hold it, which means the other home very likely
+            # already started. Aborting here would not undo that and would
+            # leave the data half refreshed, so this is loud and continues.
+            print(
+                "pipeline: WARNING lost the cross-home lease mid-run; "
+                "another home may be running against the same database",
+                flush=True,
+            )
         argv = [sys.executable, stage.script]
         if stage.takes_scrape_flags:
             argv += scrape_flags
@@ -233,6 +269,31 @@ def main() -> int:
         print("pipeline: another run is in progress; exiting")
         return 0
 
+    # Then the cross-home lease. The flock above stays and runs first: it is
+    # instant, costs nothing, and works with the network down, so the
+    # same-machine case never pays for a Turso round-trip. What it cannot do
+    # is see the other execution home -- a sandbox run shares this database
+    # and nothing else -- and two overlapping runs are how the photo
+    # migration would have re-downloaded ~700 MB from Compass. See issue #59.
+    #
+    # No try/except around the connection on purpose: every stage writes to
+    # this same database, so a run that cannot reach it was never going to
+    # work, and failing here says why in one traceback instead of four
+    # stages in.
+    lease_conn = _lease_connection()
+    lease_token = uuid.uuid4().hex
+    lease = acquire_pipeline_lease(lease_conn, this_home(), lease_token)
+    if not lease.mine:
+        # Same contract as the flock path: exit 0. Overlapping triggers are
+        # the expected shape of "trigger liberally, guard on freshness", not
+        # a fault. Name the holder -- with two homes, "another run" alone
+        # leaves an operator with nothing to go and look at.
+        print(
+            f"pipeline: {lease.held_by} has held the cross-home lease since "
+            f"{lease.acquired_at}Z (expires {lease.expires_at}Z); exiting"
+        )
+        return 0
+
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / f"pipeline-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
     started = time.monotonic()
@@ -245,12 +306,18 @@ def main() -> int:
                 marker=MARKER_PATH,
                 max_age_hours=max_age_hours,
                 log_handle=log_handle,
+                renew_lease=lambda: renew_pipeline_lease(lease_conn, lease_token),
             )
     except Skipped as exc:
         print(f"pipeline: skipped ({exc})")
         log_path.unlink(missing_ok=True)
         return 0
     finally:
+        # Release before the flock, and by token: the expiry is the backstop
+        # for a crash, not the normal way the lock comes free. Releasing by
+        # token means a run whose lease already expired and was taken over
+        # cannot delete the new holder's row on its way out.
+        release_pipeline_lease(lease_conn, lease_token)
         fcntl.flock(lock_file, fcntl.LOCK_UN)
         lock_file.close()
 

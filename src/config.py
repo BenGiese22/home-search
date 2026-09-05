@@ -1,5 +1,6 @@
 import os
 import re
+import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
@@ -32,6 +33,22 @@ def load_env(dotenv_path: str | Path = DEFAULT_ENV_PATH) -> dict[str, str]:
         if value is not None
     }
     return {**from_file, **os.environ}
+
+
+def this_home() -> str:
+    """Which execution home this process is. Recorded on anything one home
+    holds and the other needs to reason about -- an in-flight vision batch,
+    the cross-home pipeline lease -- so an operator reading the row can tell
+    where to go and look.
+
+    HOME_SEARCH_HOME wins where it is set: a sandbox's hostname is a
+    generated id that means nothing to a human, while a laptop's is exactly
+    the name you would use for it.
+
+    Read straight from os.environ rather than load_env(), because this
+    answers "where am I running", which a checked-in .env cannot know.
+    """
+    return os.environ.get("HOME_SEARCH_HOME") or socket.gethostname()
 
 
 # Compass exposes one collection as several UI tabs that all share the same
