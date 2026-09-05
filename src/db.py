@@ -863,6 +863,60 @@ def release_pipeline_lease(conn, token: str) -> bool:
     return released
 
 
+def duplicate_address_groups(conn) -> list[tuple[str, list[str]]]:
+    """Addresses held by more than one listing_id, newest-looking id last.
+
+    One statement for the whole corpus. A property should occupy exactly one
+    row; two rows means Compass reissued the listing under a new id, which is
+    what a relist does, and nothing in the pipeline recognised the new id as
+    the same house.
+
+    Keyed on address AND city because an address alone is not unique across
+    towns -- "5012 West 77th Drive" could plausibly exist in two of the four
+    suburbs this corpus covers.
+    """
+    rows = conn.execute(
+        """
+        SELECT address, city, GROUP_CONCAT(listing_id)
+        FROM listings
+        GROUP BY address, city
+        HAVING COUNT(*) > 1
+        ORDER BY address
+        """
+    ).fetchall()
+    return [(f"{r[0]}, {r[1]}", sorted(str(r[2]).split(","))) for r in rows]
+
+
+def find_relisted(conn, fetched_ids: Collection[str]) -> list[tuple[str, str, str]]:
+    """Stale predecessors of relisted properties: (address, keep_id, drop_id).
+
+    A relist is identifiable only by address. When a freshly fetched listing
+    shares an address with a stored row under a DIFFERENT id, the fetched one
+    is the live listing and the other is what it replaced.
+
+    The fetched id always wins, and that is the whole rule. Guessing from
+    price, status or id ordering would be inventing a heuristic when the
+    scrape already knows the answer -- Compass just told us which id is
+    current by returning it.
+
+    Returns nothing when neither id was fetched: two stale rows for one
+    address is a real problem, but not one this function can resolve, and
+    deleting on a guess is worse than leaving it for the delisting cascade.
+    """
+    fetched = set(fetched_ids)
+    out = []
+    for address, ids in duplicate_address_groups(conn):
+        live = [i for i in ids if i in fetched]
+        stale = [i for i in ids if i not in fetched]
+        # Exactly one live id is the relist case. Two live ids for one
+        # address is something else -- a genuine duplex, or Compass listing
+        # a property twice -- and is left alone deliberately.
+        if len(live) == 1:
+            for drop in stale:
+                out.append((address, live[0], drop))
+    return out
+
+
 def get_pinned_listing_ids(conn: sqlite3.Connection) -> frozenset[str]:
     """Listing_ids currently marked is_pinned — tracked individually via
     LISTING_URLS rather than discovered through the collection, and
@@ -1121,7 +1175,14 @@ def get_amenities_by_listing(conn: sqlite3.Connection) -> dict[str, list[str]]:
 
 
 def delete_listing(conn: sqlite3.Connection, listing_id: str) -> None:
-    """Permanently removes a listing and every child row referencing it
+    """Permanently removes a listing and every child row referencing it.
+
+    NOT a complete delete on its own. This prunes the hosted_photos ROWS,
+    and hosted_photos.blob_url is the only record that an image was ever
+    uploaded -- so calling this directly does not leave the blobs behind
+    tidily, it destroys the only handle on them. Go through src/diff.py's
+    apply_delisting, which reads the URLs first and reclaims the blobs after.
+    tests/test_delete_paths.py enforces that.
     (amenities, photo_urls, commute, scores, visual_scores). Used when a
     listing drops out of the live Compass collection — delisted listings are
     hard-deleted, not archived, since they're never expected to be referenced
