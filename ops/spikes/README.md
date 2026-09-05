@@ -31,3 +31,18 @@ and remove the sandbox when finished — a persistent sandbox keeps a
 snapshot, and an abandoned one bills.
 
 Results are recorded in `docs/journal/decisions.md` (2026-09-03).
+
+## `mapbox_preflight.py`
+
+Not a Phase 3 gate. It answers the two questions the commute rebuild had to
+settle before deleting anything: does Mapbox's geocoder resolve the whole
+corpus at address precision, and how far ahead does `arrive_by` accept an
+arrival time. Unlike the scripts above it needs a `MAPBOX_ACCESS_TOKEN` and
+a read-only Turso connection.
+
+```bash
+MAPBOX_ACCESS_TOKEN=sk.xxx ./venv/bin/python ops/spikes/mapbox_preflight.py
+```
+
+Results are recorded in `docs/journal/decisions.md` (2026-09-05).
+`nominatim_burst.py` is historical: Nominatim is no longer in the pipeline.
