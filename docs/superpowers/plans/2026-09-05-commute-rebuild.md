@@ -1,8 +1,36 @@
 # Commute rebuild — traffic-aware routing, Denver leg out of the score
 
 Date: 2026-09-05
-Status: PLAN — for execution by subagents, one PR per task unless a task says
-otherwise. Nothing here is implemented.
+Status: **EXECUTED 2026-09-05.** Kept for the reasoning, the measurements and
+the tasks that were deliberately not done — not as a description of the code,
+which has moved on. What shipped:
+
+| task | PR |
+| --- | --- |
+| T1 pre-flight | #80 |
+| T2 snapshot | #81 |
+| T3 `forwards` | #79 |
+| T4/T5/T6 provider, schema, stage | #82 |
+| T7/T8 scoring and invariants | #82 |
+| T9 token allowlist | short-list#18 |
+| T11 distribution report | #83 |
+| T12, T13 | #82 |
+
+T0 was settled by Ben before execution (Mapbox, knowingly — see
+`docs/routing-provider-terms.md`). **T14 and T15 were not built**: T14's job
+stopped being needed once `commute_source` made the migration self-triggering
+(#75 closed on that reasoning), and T15 is a label change with no correctness
+consequence.
+
+Three things the plan assumed that measurement changed:
+
+- **The corpus is 101, not 103.** #77 landed first and superseded two relists.
+- **Mapbox's `arrive_by` horizon is not ~7 days.** It accepted +53, and
+  returned an identical duration at every horizon — so it reads a historical
+  profile rather than a forecast, which is what makes the migration
+  reproducible.
+- **The pre-flight passed 101/101**, so the Census fallback was deleted
+  rather than kept behind Mapbox.
 Issues: #72 (the ask), #29 (neutral-50 imputation), #32 (`geocode_failed`
 misnamed), #75 (recompute without a shell), #69 (closed by #74 — context).
 Related: short-list#17 (card now shows `medtronic_minutes`).
