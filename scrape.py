@@ -10,6 +10,7 @@ from src.config import load_config, load_env
 from src.turso_db import stage_connection
 from src.csv_writer import write_csv
 from src.db import (
+    find_relisted,
     bulk_upsert_listings,
     get_amenities_by_listing,
     get_listing_ids_missing_fields,
@@ -23,7 +24,12 @@ from src.db import (
     query_listings,
     upsert_listing,
 )
-from src.diff import collection_fetch_is_trustworthy, compute_changes, run_delisting
+from src.diff import (
+    collection_fetch_is_trustworthy,
+    compute_changes,
+    run_delisting,
+    supersede_relisted,
+)
 from src.gallery import write_gallery
 from src.models import Listing, select_present_listings
 from src.photo_upload import upload_photos
@@ -444,6 +450,27 @@ def main() -> None:
                 frozenset(pinned_ids),
                 blob_token=load_env().get("BLOB_READ_WRITE_TOKEN"),
             )
+
+            # A relist arrives as a NEW listing_id for a house already in the
+            # corpus, so nothing above notices: the old row is not delisted
+            # (Compass stopped returning that id, but pinned rows are exempt
+            # and an unpinned one only goes when the cascade runs) and the new
+            # row is inserted beside it. The result is one property scored
+            # twice, ranked twice, and paid for twice at the vision API.
+            #
+            # Gated on fetch_succeeded for the same reason delisting is: a
+            # failed tab makes "not in this fetch" mean nothing, and this
+            # deletes rows.
+            if fetch_succeeded:
+                supersede_relisted(
+                    db_conn,
+                    find_relisted(
+                        db_conn,
+                        {listing.listing_id for listing in present_listings},
+                    ),
+                    blob_token=load_env().get("BLOB_READ_WRITE_TOKEN"),
+                    photos_dir=PHOTOS_DIR,
+                )
 
     _upload_photos_for(db_conn)
 

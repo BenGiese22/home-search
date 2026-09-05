@@ -246,6 +246,38 @@ def apply_delisting(
             print(f"  {url}")
 
 
+def supersede_relisted(
+    conn,
+    relists: list[tuple[str, str, str]],
+    photos_dir,
+    blob_token: str | None = None,
+    delete_fn: Callable[[list[str], str], None] = delete_blobs,
+) -> list[str]:
+    """Remove the stale predecessor of each relisted property.
+
+    A relist arrives as a new listing_id for a house already in the corpus,
+    so the delisting cascade never sees it: the old row is not "absent from
+    the collection" in any way the cascade recognises, and pinned rows are
+    exempt from it regardless. The two rows then coexist -- one property
+    scored twice, ranked twice, and paid for twice at the vision API.
+
+    Reuses run_delisting's blob handling rather than calling delete_listing
+    directly, and that is not incidental. hosted_photos.blob_url is the ONLY
+    record of an uploaded image, so the URLs have to be read before the rows
+    go. Deleting first is how 1,813 orphans (~371 MB) accumulated once
+    already.
+    """
+    if not relists:
+        return []
+    for address, keep, drop in relists:
+        print(f"relist: {address} -- {drop} superseded by {keep}")
+    doomed = [drop for _address, _keep, drop in relists]
+    apply_delisting(
+        conn, photos_dir, doomed, blob_token=blob_token, delete_fn=delete_fn
+    )
+    return doomed
+
+
 def run_delisting(
     conn: sqlite3.Connection,
     photos_dir: Path,
