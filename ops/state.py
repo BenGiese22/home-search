@@ -23,6 +23,10 @@ the store that serves listing photos.
 import sys
 from pathlib import Path
 
+# Run as `python ops/<name>.py`, which puts ops/ on sys.path rather than the
+# repo root. Same line as ops/reclaim_stranded_blobs.py, for the same reason.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import requests
 
 from src.blob_state import get_state, put_state

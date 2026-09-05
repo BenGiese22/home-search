@@ -22,6 +22,10 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+# Run as `python ops/<name>.py`, which puts ops/ on sys.path rather than the
+# repo root. Same line as ops/reclaim_stranded_blobs.py, for the same reason.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import requests
 
 from src.auth import launch_authenticated_page
