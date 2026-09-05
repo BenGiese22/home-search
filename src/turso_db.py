@@ -77,7 +77,7 @@ def connect(
 # lock_name is the primary key and there is only ever one value in it, which
 # is what turns "who wins" into a conflict the database resolves rather than
 # one the application has to. lease_token identifies the RUN, not the home:
-# a restarted laptop run must not quietly steal its own predecessor's lease.
+# a restarted desktop run must not quietly steal its own predecessor's lease.
 # Every timestamp is written by datetime('now') inside the statement, i.e.
 # the database's clock, because the two homes' clocks are not the same clock.
 #

@@ -1,4 +1,4 @@
-"""Moving the Compass session between the laptop and the private Blob store.
+"""Moving the Compass session between the desktop and the private Blob store.
 
 The session is a credential and the only thing standing between the pipeline
 and a cold login on every run, so both directions are about not destroying a

@@ -16,7 +16,7 @@ def load_env(dotenv_path: str | Path = DEFAULT_ENV_PATH) -> dict[str, str]:
     Reading only `.env` means a script cannot run anywhere that supplies
     configuration as process environment variables -- which is every
     containerised or hosted environment, and a hard prerequisite for running
-    any stage outside this laptop. Merging is harmless locally: with no
+    any stage outside this desktop. Merging is harmless locally: with no
     process env set, every value is exactly what `.env` says.
 
     A missing `.env` is not an error; dotenv_values returns an empty mapping
@@ -42,7 +42,7 @@ def this_home() -> str:
     where to go and look.
 
     HOME_SEARCH_HOME wins where it is set: a sandbox's hostname is a
-    generated id that means nothing to a human, while a laptop's is exactly
+    generated id that means nothing to a human, while a desktop's is exactly
     the name you would use for it.
 
     Read straight from os.environ rather than load_env(), because this

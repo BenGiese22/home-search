@@ -12,7 +12,7 @@ how to operate it).
 ## 0. Summary
 
 The pipeline already speaks Turso natively (Phase 2). Phase 3 gives it a second
-execution home that does not depend on Ben's laptop being on:
+execution home that does not depend on Ben's desktop being on:
 
 - A **cron in the short-list project** hits a **launcher** route, which
   resumes one **named, persistent Vercel Sandbox** (`home-search-pipeline`),
@@ -111,9 +111,9 @@ flight from another session against the same database).
  ┌──────────────────────────────┐              │ home-search-state           │
  │ short-list viewer (unchanged │              │  state/compass_state.json   │
  │ 'use cache' + cacheTag)      │              │ written by: reaper (OIDC),  │
- └──────────────────────────────┘              │   ops/state.py push (laptop)│
+ └──────────────────────────────┘              │   ops/state.py push (desktop)│
                                                │ read by: launcher (OIDC),   │
- Laptop (second home, unchanged):              │   ops/state.py pull         │
+ Desktop (second home, unchanged):              │   ops/state.py pull         │
    systemd timer -> pipeline.py -> same Turso  └─────────────────────────────┘
 ```
 
@@ -176,7 +176,7 @@ sequenceDiagram
 | --- | --- | --- | --- | --- |
 | Listings, scores, commutes, visual scores, hosted_photos | Turso (SSOT) | every stage | viewer, every stage | n/a — it is the system of record |
 | **Vision batch checkpoint** (`vision_batches`) | **Turso** | `score_photos.py`, immediately at submit | `score_photos.py` on the next run, from either home | **double payment** — this is why it is in the SSOT, not on a disk or in Blob |
-| Compass session `compass_state.json` | sandbox disk (snapshotted) + private Blob (durable copy) | `src/auth.py` every run; reaper uploads to Blob after each run; `ops/state.py push` from laptop | launcher seeds disk from Blob when disk lacks it | cold login next run (works per spikes; kept rare) |
+| Compass session `compass_state.json` | sandbox disk (snapshotted) + private Blob (durable copy) | `src/auth.py` every run; reaper uploads to Blob after each run; `ops/state.py push` from desktop | launcher seeds disk from Blob when disk lacks it | cold login next run (works per spikes; kept rare) |
 | Photos on disk `data/photos/<id>/NN-<hash8>.jpg` | sandbox disk (cache) | `scrape.py`, only for photos whose `(listing_id, position, source_url)` is not yet hosted | `score_photos.py`, upload | re-downloaded for exactly the photos still missing from `hosted_photos` |
 | Hosted photo index `hosted_photos(listing_id, position, blob_url, source_url)` | Turso | upload step, one batched write per chunk | the "do we already have this photo" gate in both homes; the viewer | the only handle on what exists in Blob — pruning a row without deleting its blob strands the blob (§2.8) |
 | `data/.run/started`, `data/.run/done` | sandbox disk | `ops/sandbox/run.py` | launcher (skip), reaper (stop/alarm) | reaper falls back to the 3h age rule; `timeout` is the hard stop |
@@ -219,7 +219,7 @@ and gallery. In a sandbox with a fresh disk every one of them misbehaves
 (gate 4 produced a two-listing gallery; `is_scraped()` would trigger a full
 photo re-download). Persistence (2.3) would paper over this by keeping
 `data/listings/*.json` on the snapshot, but the first run, every snapshot
-loss, and every laptop-vs-cloud divergence would still hit it. The gates have
+loss, and every desktop-vs-cloud divergence would still hit it. The gates have
 to come from the shared database.
 
 Options weighed:
@@ -271,7 +271,7 @@ The replacements, each **one statement** (round-trip counts asserted in tests):
   call** — the lower-risk alternative is to leave them and the module they
   import, clearly marked historical, but that is exactly the "safety net
   that silently rots" the Phase 2 plan argued against for `publish.py`.
-- `data/listings/*.json` on the laptop is untouched by any of this (the
+- `data/listings/*.json` on the desktop is untouched by any of this (the
   directory is gitignored data). Nothing deletes it.
 
 Consequence worth stating plainly: after this change **`BLOB_READ_WRITE_TOKEN`
@@ -343,7 +343,7 @@ automatically. (The `@vercel/blob` docs explicitly warn against passing an
 OIDC token explicitly for this reason.)
 
 **Fact 2 — both homes share one database, so a per-home checkpoint is a
-double-pay hazard.** A laptop run that submits a batch and is interrupted
+double-pay hazard.** A desktop run that submits a batch and is interrupted
 (lid closed) leaves its checkpoint in a local file. The next cron run sees
 listings with no `visual_scores` row and *no* checkpoint (Blob would hold
 only whatever the cloud last wrote) and resubmits them. Real money, and it
@@ -371,11 +371,11 @@ Decision:
   `readFileToBuffer` the (always re-saved by `src/auth.py`) session and `put`
   it. Disk wins over Blob when both exist, because the disk copy is newer.
   Manual recovery path: after a local login, `ops/state.py push` uploads the
-  laptop's session with `BLOB_STATE_READ_WRITE_TOKEN` (already in Ben's
+  desktop's session with `BLOB_STATE_READ_WRITE_TOKEN` (already in Ben's
   `.env`, per commit `c32725f`). That is the one legitimate remaining use of
-  the RW token and of `src/blob_state.py`, and it stays on the laptop.
+  the RW token and of `src/blob_state.py`, and it stays on the desktop.
 - The sandbox therefore holds **no Vercel token and no private-store
-  token**. Its env is exactly what a laptop run has, minus the RW state token.
+  token**. Its env is exactly what a desktop run has, minus the RW state token.
 
 Deviation from #25, stated for the record: the checkpoint does *not*
 round-trip through Blob. It round-trips through the SSOT, which is stronger
@@ -406,7 +406,7 @@ reaper's own rule "started > 3 h ago and no done marker → stop and alert".
 `NTFY_TOPIC` env var (treated as a secret: whoever knows the topic can read
 and post). `src/notify.py` posts to `https://ntfy.sh/<topic>` with an
 injected `post`, never raises. `pipeline.py` owns the per-run message (it
-knows which stage failed and how long things took) so laptop runs get it too;
+knows which stage failed and how long things took) so desktop runs get it too;
 the reaper posts only for what the runner cannot report: hung runs, sandbox in
 `failed` state, launcher exceptions.
 
@@ -446,7 +446,7 @@ task (B0) plus small touches in B1/B2:
   prune-on-delist path in place the residual risk is "a photo changed without
   a delist between its upload and today", which is bounded and historical.
   `ops/rehost_photos.py --all` is the paranoid alternative (one overnight
-  laptop run: ≈3,255 downloads, ≈700 MB, ≈$0.02 of Blob operations).
+  desktop run: ≈3,255 downloads, ≈700 MB, ≈$0.02 of Blob operations).
 - Filename and Blob pathname carry a hash: `data/photos/<id>/NN-<hash8>.jpg`
   and `photos/<id>/NN-<hash8>.jpg` where `hash8 = sha1(source_url)[:8]`.
   Two consequences, both wanted: the disk skip becomes sound, and a changed
@@ -458,7 +458,7 @@ task (B0) plus small touches in B1/B2:
   unchanged (one read, chunked writes).
 - Globs move from `*.jpg` to the `??-????????.jpg` shape so a leftover
   old-format file is never counted or scored; `ops/migrate_photo_files.py`
-  renames the laptop's existing `NN.jpg` files by the same join (or Ben
+  renames the desktop's existing `NN.jpg` files by the same join (or Ben
   deletes `data/photos/` and lets the next run rebuild it).
 
 **Finding 2 — nothing in this project can delete a blob.** `hosted_photos.
@@ -466,7 +466,7 @@ blob_url` is the only record of what exists in the store; pruning rows
 strands blobs. 1,813 orphaned rows (≈371 MB) had accumulated and were
 exported to `data/archive/orphaned-hosted-photos-20260903.json` before being
 deleted. On Pro the storage cost is negligible and nothing here is designed
-around it — but a scheduled cloud runner delists more often than a laptop
+around it — but a scheduled cloud runner delists more often than a desktop
 does, and content-keyed pathnames add a new source of orphans (every photo
 change). Scope call:
 
@@ -483,7 +483,7 @@ change). Scope call:
 - **Out of Phase 3, its own ticket:** a one-time orphan sweep (`list` the
   store under `photos/`, diff against `hosted_photos`, delete the rest) and
   purging the 1,813 archived URLs. It needs `delete_blobs` from B0 and
-  nothing else, and it runs from the laptop.
+  nothing else, and it runs from the desktop.
 
 ### 2.9 Verified vs assumed — consolidated
 
@@ -537,7 +537,7 @@ correct me where I am wrong.
    pipeline: its token is read-only on purpose. A `PIPELINE_TURSO_AUTH_TOKEN`
    (RW) must be added to the short-list project env.
 6. **`.env.example` calls `BLOB_STATE_READ_WRITE_TOKEN` "Phase 3 only"** and
-   implies the runner uses it. Under this plan it is laptop-only (ops
+   implies the runner uses it. Under this plan it is desktop-only (ops
    tooling). Update the comment (B7).
 7. Minor: `@vercel/sandbox` is at **3.x**, not the 1.x the older SDK docs
    describe; `Sandbox.get({sandboxId})` is v1 API — use `{name}`.
@@ -746,7 +746,7 @@ first and rebase B1 if both land the same day.
   `"canary PASS/FAIL ..."` (A8); exit 0/1. **Read-only: no Turso connection,
   no photo downloads, no writes.**
 - Tests: inject fake page/fetch results; PASS/FAIL rules; message shape.
-- Acceptance: tests green; running locally (laptop) prints PASS with the
+- Acceptance: tests green; running locally (desktop) prints PASS with the
   real collection counts.
 
 #### A8 — ntfy client (home-search, S)
@@ -762,7 +762,7 @@ first and rebase B1 if both land the same day.
 #### A10 — Manual session push/pull (home-search, S)
 
 - Files: new `ops/state.py`, `tests/test_ops_state.py`; `.env.example`
-  comment update for `BLOB_STATE_READ_WRITE_TOKEN` (now: laptop-only ops).
+  comment update for `BLOB_STATE_READ_WRITE_TOKEN` (now: desktop-only ops).
 - `python ops/state.py push` uploads `data/.auth/compass_state.json` via
   `src.blob_state.put_state`; `pull` downloads it (refusing to overwrite a
   newer local file without `--force`). Uses `BLOB_STATE_READ_WRITE_TOKEN`
@@ -792,7 +792,7 @@ Checklist, in order. Nothing here enters either repo.
    `COMPASS_COLLECTION_URL`, `ANTHROPIC_API_KEY`, `NTFY_TOPIC` (a long random
    topic name; subscribe to it on your phone). `TURSO_DATABASE_URL`,
    `BLOB_READ_WRITE_TOKEN`, `REVALIDATE_SECRET` already exist.
-4. `python ops/state.py push` from the laptop (A10) so the first canary has
+4. `python ops/state.py push` from the desktop (A10) so the first canary has
    a warm session.
 5. Merge A1–A8 + A10; deploy short-list to production.
 6. `vercel crons run "/api/pipeline/run?job=canary"`; watch `vercel logs`
@@ -849,7 +849,7 @@ Rationale in §2.8. Ships as one PR of four commits so each is revertable.
   WHERE source_url IS NULL` — one statement; prints the count still NULL,
   which are rows whose listing has no matching `photo_urls` slot and must be
   treated as stale → deleted with their blobs); `ops/migrate_photo_files.py`
-  renames the laptop's `NN.jpg` to `NN-<hash8>.jpg` using
+  renames the desktop's `NN.jpg` to `NN-<hash8>.jpg` using
   `get_photo_urls_by_listing` (B1) — or, if B1 is not merged yet, a local
   copy of that one query; leftovers with no URL are deleted. `ops/
   rehost_photos.py --all` is optional and NOT part of this PR (note it in
@@ -863,7 +863,7 @@ Rationale in §2.8. Ships as one PR of four commits so each is revertable.
   prints URLs when the blob delete fails; old-format `NN.jpg` files are not
   counted by `count_downloaded_photos`; filename parsing round-trips.
 - Acceptance: suite green; **do not run against production during the PR**.
-  Ben runs, in order, on the laptop: `ops/backfill_hosted_source_urls.py`
+  Ben runs, in order, on the desktop: `ops/backfill_hosted_source_urls.py`
   (expect ≈3,255 updated, ~0 still NULL), `ops/migrate_photo_files.py`
   (expect ≈3,253 renames), then `python scrape.py` — it must report zero
   photo downloads and zero uploads for the unchanged collection. The
@@ -926,7 +926,7 @@ Rationale in §2.8. Ships as one PR of four commits so each is revertable.
   (1) + pins (1) + hosted index (1, shared with upload) + weak pre-fetch set
   (1, only when `LISTING_URLS` is set) + bulk upsert (≈6–12) + CSV/gallery
   (3) — no term proportional to listing count except the chunked bulk write.
-- Acceptance: suite green; after B0's migrations have run on the laptop,
+- Acceptance: suite green; after B0's migrations have run on the desktop,
   `python scrape.py` prints "skip (already scraped)" for the whole unchanged
   collection, downloads and uploads **zero** photos, and rewrites
   `data/listings.csv`/`gallery.html` with the full listing count (was:
@@ -939,7 +939,7 @@ Rationale in §2.8. Ships as one PR of four commits so each is revertable.
   `backfill_hoa.py` (Ben's call on the last two — see 2.2); grep for
   `STORE_DIR`, `src.store`, `data/listings` and remove; update
   `ops/DECOMMISSION.md`'s "never safe to delete" table (the store row goes;
-  the laptop's `data/listings/` is now just an old artifact; the
+  the desktop's `data/listings/` is now just an old artifact; the
   `data/photos/` row's wording changes — it is a cache that B0's URL gate
   can rebuild, not the only copy of anything).
 - Acceptance: `grep -rn "src.store\|STORE_DIR" --include=*.py .` returns
@@ -995,8 +995,8 @@ Rationale in §2.8. Ships as one PR of four commits so each is revertable.
 - `python ops/sandbox_run.py --job pipeline|canary [--db-url URL --db-token
   TOKEN] [--skip-score-photos]`: creates a **non-persistent** sandbox named
   `home-search-manual-<ts>` from the same GitSource, runs `bootstrap.sh`,
-  copies the laptop's `data/.auth/compass_state.json` in via `fs.write_bytes`,
-  runs `ops/sandbox/run.py <job>` with env from the laptop's `.env` (with the
+  copies the desktop's `data/.auth/compass_state.json` in via `fs.write_bytes`,
+  runs `ops/sandbox/run.py <job>` with env from the desktop's `.env` (with the
   Turso URL/token overridable for a throwaway DB), streams logs, destroys the
   sandbox on exit. This is the gate-4 harness made repeatable. Authenticates
   with `VERCEL_OIDC_TOKEN` from `vercel env pull` in a linked directory or
@@ -1013,7 +1013,7 @@ Rationale in §2.8. Ships as one PR of four commits so each is revertable.
   remove the crons from `vercel.json` or Disable in the dashboard, `sandbox
   stop`/`remove`; section B updated), `ops/systemd/README.md` (pointer),
   `.env.example` (`NTFY_TOPIC`; `HOME_SEARCH_HOME` explanation;
-  `BLOB_STATE_READ_WRITE_TOKEN` is laptop-only), `ops/spikes/README.md`.
+  `BLOB_STATE_READ_WRITE_TOKEN` is desktop-only), `ops/spikes/README.md`.
 - Acceptance: a reader can go from "the site is stale" to the right runbook
   section in one hop; no secret values anywhere.
 
@@ -1034,7 +1034,7 @@ Rationale in §2.8. Ships as one PR of four commits so each is revertable.
   the first time `score_photos.py` runs in a sandbox; confirm one batch is
   recorded in `vision_batches` and later cleared, and that Anthropic's usage
   page shows exactly one submission per listing.
-- Keep the laptop timer for 1–2 weeks of overlap (both homes share the DB;
+- Keep the desktop timer for 1–2 weeks of overlap (both homes share the DB;
   `vision_batches` makes overlap safe). Then follow `ops/DECOMMISSION.md`
   §A. Record in the journal.
 
@@ -1047,7 +1047,7 @@ Rationale in §2.8. Ships as one PR of four commits so each is revertable.
 
 | Risk | Likelihood / cost | Detection | Mitigation | Undo |
 | --- | --- | --- | --- | --- |
-| reCAPTCHA degrades under scheduled datacenter logins (gate 1) | Unknown; cost = Phase 3 is pointless | Canary FAIL with `warm_session: false` streaks | Warm-session-first; canary before any pipeline cron; `ops/state.py push` re-seeds from a laptop login | Do not enable C1; delete the sandbox; everything else built is harmless |
+| reCAPTCHA degrades under scheduled datacenter logins (gate 1) | Unknown; cost = Phase 3 is pointless | Canary FAIL with `warm_session: false` streaks | Warm-session-first; canary before any pipeline cron; `ops/state.py push` re-seeds from a desktop login | Do not enable C1; delete the sandbox; everything else built is harmless |
 | A reaper bug leaves sandboxes running | Medium / ≈$0.25 per idle 3 h, capped by `timeout` | Sandboxes page; Spend Management alert at $10 | 3 h `timeout` + `timeoutMs`; reaper every 10 min | Dashboard → Stop Sandbox; disable the run cron |
 | Double vision payment | Low after B4 / real money | Anthropic usage page vs listing count | Checkpoint in Turso written at submit; named sandbox + flock; launcher skip | Nothing to undo; `vision_batches` rows are the audit trail |
 | Persistent snapshot lost or expired (30 idle days) | Low / ≈2 min extra on next run + cold login | Launcher logs `created: true` | `getOrCreate` recreates; bootstrap idempotent; session seeded from Blob | none needed |
@@ -1055,20 +1055,20 @@ Rationale in §2.8. Ships as one PR of four commits so each is revertable.
 | Secret leaks into a public repo | Low / severe | `git diff` review; both repos' `.gitignore` | Allowlist in `buildRunnerEnv`; secrets only via `vercel env add`; tests never contain real values; error messages name keys not values | Rotate: `vercel env rm/add`, Turso token rotate, Compass password |
 | RW Turso token and Anthropic key now live in the viewer project's env | Accepted / same trust boundary (Ben's account) | — | Names only in code; viewer code never reads them | Remove from env; run locally |
 | `git reset --hard origin/main` picks up a broken push to `main` | Medium / one failed run | ntfy FAILED + `data/.run/done.exit_code` | Set `PIPELINE_GIT_REVISION` to a tag/sha to pin; fix main | Set the env var; rerun |
-| Two homes run at once (laptop + sandbox) | Medium during C2 overlap / wasted work only | Both post ntfy | Idempotent upserts; shared checkpoint; stagger the systemd calendar vs cron | none needed |
+| Two homes run at once (desktop + sandbox) | Medium during C2 overlap / wasted work only | Both post ntfy | Idempotent upserts; shared checkpoint; stagger the systemd calendar vs cron | none needed |
 | Turso stream expires during a long idle stage | Known / one failed stage | `stream not found` in logs | Existing one-retry wrapper; `score_photos` polls every 60 s so streams rarely idle long | Rerun; consider a keep-alive `SELECT 1` in the poll loop if it bites |
 | Sandbox disk fills (64 GB) | Very low | `df` via `sandbox connect` | Photos ≈1 GB; logs rotate by run | `rm -rf data/photos` in the sandbox |
 | Playwright/Chromium version drift on the universal image | Low / bootstrap failure | Launcher 500 + ntfy | Floors in `requirements.txt`; `playwright install` is idempotent | Pin a floor higher; recreate sandbox |
 | JSON-store deletion regresses local incremental scraping | Low / one full photo pass | `scrape.py` output | B2 acceptance test against the live collection first | `git revert` B2/B3; `data/listings/` was never deleted |
 | Stale photos served after a relist or photo change (positional key) | Was certain over time / silent wrong images | Only by eye today; after B0, the URL diff | B0 content-keyed identity; `source_url` backfill | none — B0 is the fix; `ops/rehost_photos.py --all` if the backfill assumption proves wrong for specific listings |
-| `source_url` backfill masks an already-stale row | Low, bounded to changes before 2026-09-03 without a delist | Visual spot-check of a few listings' galleries after B0 | Optional `--all` rehost overnight from the laptop | rehost the affected listing |
+| `source_url` backfill masks an already-stale row | Low, bounded to changes before 2026-09-03 without a delist | Visual spot-check of a few listings' galleries after B0 | Optional `--all` rehost overnight from the desktop | rehost the affected listing |
 | Blob store grows with every delist / photo change (no deletion) | Certain without B0 / cents per month on Pro, but unbounded | Store size in the dashboard | B0 deletes superseded and delisted blobs; orphan sweep is its own ticket | none needed; `data/archive/orphaned-hosted-photos-20260903.json` holds the historical orphan URLs for the sweep |
-| First laptop run after B0 re-downloads everything (filename scheme change) | Certain unless migrated / ≈25 min of Compass CDN traffic | `scrape.py` prints downloads | `ops/migrate_photo_files.py` renames in place | delete `data/photos/` and let one run rebuild it |
+| First desktop run after B0 re-downloads everything (filename scheme change) | Certain unless migrated / ≈25 min of Compass CDN traffic | `scrape.py` prints downloads | `ops/migrate_photo_files.py` renames in place | delete `data/photos/` and let one run rebuild it |
 
 **Full rollback of Phase 3** = remove the `crons` from `vercel.json` (or
 Disable Cron Jobs in the dashboard) and `sandbox remove home-search-pipeline`.
-The laptop timer never stopped being able to run the same pipeline against
-the same database. B1–B5 are independently correct on the laptop and need no
+The desktop timer never stopped being able to run the same pipeline against
+the same database. B1–B5 are independently correct on the desktop and need no
 rollback.
 
 ## 6. What must NOT be done

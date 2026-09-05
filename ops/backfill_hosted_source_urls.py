@@ -18,7 +18,7 @@ It assumes the rows currently on file match the URLs currently on file. After
 the 2026-09-03 cleanup, and with the prune-on-delist path in place, the
 residual risk is "a photo changed without a delist between its upload and
 today" -- bounded and historical. `ops/rehost_photos.py --all` (an overnight
-laptop run: ~3,255 downloads, ~700 MB, ~$0.02 of Blob operations) is the
+desktop run: ~3,255 downloads, ~700 MB, ~$0.02 of Blob operations) is the
 paranoid alternative and is deliberately not this script.
 
 Rows still NULL afterwards are hosted photos whose listing has no URL at that
@@ -26,7 +26,7 @@ slot. They are stale -- they belong to a set the listing no longer serves --
 and must be deleted WITH THEIR BLOBS, never row-only. This script reports
 them; it does not delete them.
 
-Run once, from the laptop, before the next scrape:
+Run once, from the desktop, before the next scrape:
 
     ./venv/bin/python ops/backfill_hosted_source_urls.py
 """

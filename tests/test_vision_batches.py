@@ -5,7 +5,7 @@ results that can take hours. The checkpoint is what stops an interrupted run
 paying for the same listings twice.
 
 As a file it could only ever protect ONE machine. Both execution homes now
-share one database, so a laptop run that submits a batch and has its lid
+share one database, so a desktop run that submits a batch and has its lid
 closed leaves its checkpoint on local disk -- and a cloud run then sees
 listings with no visual_scores row, no checkpoint it can read, and
 resubmits. That is real money, and it will happen once both homes are live.
@@ -53,7 +53,7 @@ def test_a_recorded_batch_comes_back_with_its_expectations():
     set that produced a batch is the only thing that can interpret its
     results."""
     conn = _conn()
-    record_vision_batch(conn, "batch_1", {"L1": True, "L2": False}, "laptop")
+    record_vision_batch(conn, "batch_1", {"L1": True, "L2": False}, "desktop")
 
     batches = load_vision_batches(conn)
 
@@ -128,7 +128,7 @@ def test_a_batch_submitted_by_one_home_is_visible_to_the_other():
     """The whole point. A file checkpoint is invisible across homes, so the
     second home resubmits and the vision API is paid twice."""
     home_a = _conn()
-    record_vision_batch(home_a, "batch_from_laptop", {"L1": True, "L2": True}, "laptop")
+    record_vision_batch(home_a, "batch_from_desktop", {"L1": True, "L2": True}, "desktop")
 
     # The other home reads the same database.
     already = {
@@ -203,7 +203,7 @@ def test_migration_does_not_duplicate_batches_already_in_the_database(tmp_path, 
     legacy.write_text(json.dumps([{"batch_id": "b", "garage_expected_by_id": {"L1": True}}]))
     monkeypatch.setattr(score_photos, "LEGACY_BATCH_STATE_PATH", legacy)
     conn = _conn()
-    record_vision_batch(conn, "b", {"L1": True}, "laptop")
+    record_vision_batch(conn, "b", {"L1": True}, "desktop")
 
     score_photos._migrate_legacy_checkpoint(conn)
 
@@ -248,7 +248,7 @@ def test_resume_resolves_expectations_from_the_stored_row_not_the_db():
     """
     conn = _conn()
     submitted = {"L1": True, "L2": False, "L3": True}
-    record_vision_batch(conn, "b", submitted, "laptop")
+    record_vision_batch(conn, "b", submitted, "desktop")
 
     # ... crash here, with L1 and L2 already written to visual_scores ...
     resumed = load_vision_batches(conn)[0]["garage_expected_by_id"]

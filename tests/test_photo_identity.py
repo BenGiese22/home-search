@@ -140,7 +140,7 @@ def test_the_glob_ignores_old_format_files(tmp_path):
 # --- the one-time migrations ----------------------------------------------
 #
 # Two scripts move the existing corpus onto the new identity. They run once,
-# from Ben's laptop, before the next scrape. They are exercised here against
+# from Ben's desktop, before the next scrape. They are exercised here against
 # in-memory sqlite and tmp_path because the alternative is only finding a
 # mistake after it has renamed 3,253 files or rewritten 3,255 rows.
 

@@ -1,16 +1,16 @@
 # Phase 3 gate spikes
 
 Scripts behind the Phase 3 gates in issue #24. Each is deliberately
-self-contained — only `requests` — so it runs unchanged on the laptop and
+self-contained — only `requests` — so it runs unchanged on the desktop and
 inside a bare Vercel Sandbox. That is the whole design: **run the same
 script in both places and the only variable is the egress IP.**
 
 ## Running them
 
 ```bash
-# Baseline, from the laptop's residential IP
-python ops/spikes/phase3_egress_spike.py laptop-residential
-python ops/spikes/nominatim_burst.py     laptop-residential
+# Baseline, from the desktop's residential IP
+python ops/spikes/phase3_egress_spike.py desktop-residential
+python ops/spikes/nominatim_burst.py     desktop-residential
 
 # From a datacenter IP. Needs Vercel CLI >= 59.11 -- 59.5 returns
 # "invalidToken" against /v3/sandboxes even though `vercel whoami` works.

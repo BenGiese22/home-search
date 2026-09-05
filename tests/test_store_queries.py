@@ -1,7 +1,7 @@
 """Set-based queries that replace the local JSON store.
 
 `src/store.py` gates the scrape on files existing on disk. That works on a
-laptop and fails completely in a sandbox with no persistent disk: every
+desktop and fails completely in a sandbox with no persistent disk: every
 listing looks unscraped, so the run re-downloads ~700 MB from Compass and
 rebuilds the CSV and gallery from a near-empty store — a real gate-4 sandbox
 run produced a 2-listing gallery from a 100-listing corpus.

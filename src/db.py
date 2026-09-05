@@ -626,7 +626,7 @@ def listings_from_rows(
 
 # The vision checkpoint. It lives in the database rather than a file because
 # both execution homes share one database and a file is invisible across
-# them: a laptop run that submits a batch and then has its lid closed leaves
+# them: a desktop run that submits a batch and then has its lid closed leaves
 # its checkpoint on local disk, and a cloud run sees listings with no
 # visual_scores row, no checkpoint it can read, and resubmits. That is real
 # money at the vision API, and it will happen once both homes are live.
@@ -695,13 +695,13 @@ def clear_vision_batch(conn, batch_id: str) -> None:
 # The cross-home run lock.
 #
 # pipeline.py's fcntl.flock is per-machine. It was the whole answer while one
-# laptop was the only execution home; it sees nothing of a Vercel Sandbox run
+# desktop was the only execution home; it sees nothing of a Vercel Sandbox run
 # and a sandbox sees nothing of it. The two are complementary and both stay:
 # flock is instant and free for the same-machine case, this covers the case
 # flock structurally cannot.
 #
 # It is a LEASE, not a lock, because there is no reliable "runner died"
-# signal across homes -- a closed laptop lid and a sandbox reaped at its 3h
+# signal across homes -- a machine powered off or booted into its other OS, and a sandbox reaped at its 3h
 # limit both leave the row behind, and a plain lock would then block the
 # other home forever.
 #
@@ -751,7 +751,7 @@ class Lease:
 
 # `datetime('now')` rather than a bound timestamp, everywhere. The two homes
 # are different machines; if each stamped and compared the lease from its own
-# clock, a laptop running a few minutes fast would read a live sandbox lease
+# clock, a desktop running a few minutes fast would read a live sandbox lease
 # as expired and take it. Inside the statement, both homes are measured
 # against the one clock they share. SQLite fixes 'now' for the duration of a
 # single statement, so the three uses below cannot disagree with each other.
@@ -789,7 +789,7 @@ def acquire_pipeline_lease(
     `held_by` is the execution home (a hostname or HOME_SEARCH_HOME) and is
     only ever read by a human. `token` identifies this RUN and is the thing
     ownership is decided on -- a second process on the same home is still a
-    second run, and keying on the home name would let a restarted laptop run
+    second run, and keying on the home name would let a restarted desktop run
     steal its own predecessor's lease.
 
     Returns the lease now in force. `lease.mine` is the answer; when it is

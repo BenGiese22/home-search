@@ -58,7 +58,7 @@ def sandboxed_main(tmp_path, monkeypatch, lease_db):
     monkeypatch.setattr(pipeline, "MARKER_PATH", tmp_path / ".marker.json")
     monkeypatch.setattr(pipeline, "_default_revalidate", lambda: True)
     monkeypatch.setattr(pipeline, "_lease_connection", lambda: lease_db)
-    monkeypatch.setattr(pipeline, "this_home", lambda: "laptop")
+    monkeypatch.setattr(pipeline, "this_home", lambda: "desktop")
 
     runner = Runner()
     monkeypatch.setattr(pipeline, "_default_runner", runner)
@@ -155,7 +155,7 @@ def test_the_run_records_which_home_holds_the_lease(sandboxed_main, lease_db):
         pipeline.main()
     finally:
         pipeline._default_runner = sandboxed_main
-    assert seen["held_by"] == "laptop"
+    assert seen["held_by"] == "desktop"
 
 
 def test_a_dry_run_takes_no_lease(sandboxed_main, lease_db, monkeypatch):

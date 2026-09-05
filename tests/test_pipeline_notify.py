@@ -1,7 +1,7 @@
 """What the pipeline wakes someone up for.
 
 Notification is the only way a failure in an unattended run reaches a person:
-the sandbox has no terminal, and the laptop's runs happen while nobody is
+the sandbox has no terminal, and the desktop's runs happen while nobody is
 watching. So the question each test asks is whether a condition that needs a
 human actually produces a push -- and, just as importantly, whether a
 condition that does not stays silent.
