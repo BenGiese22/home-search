@@ -774,8 +774,8 @@ def test_delete_listing_removes_children_under_fk_enforcement(tmp_path: Path):
     assert conn.execute("SELECT COUNT(*) FROM visual_scores").fetchone()[0] == 0
 
 
-def _commute_row(conn, listing_id, *, failed, minutes):
-    from src.commute import CommuteResult
+def _commute_row(conn, listing_id, *, failed, minutes, source=None):
+    from src.commute import COMMUTE_SOURCE, CommuteResult
 
     upsert_commute(
         conn,
@@ -788,6 +788,7 @@ def _commute_row(conn, listing_id, *, failed, minutes):
             medtronic_miles=None if failed else 5.0,
             medtronic_minutes=minutes,
             geocode_failed=failed,
+            commute_source=COMMUTE_SOURCE if source is None else source,
         ),
     )
 
@@ -854,3 +855,95 @@ def test_force_overrides_only_new(tmp_path: Path):
 
     assert get_listing_ids_missing_commute(conn, retry_failed=False) == []
     assert get_listing_ids_missing_commute(conn, retry_failed=False, force=True) == ["abc123"]
+
+
+# --- a commute row is only "covered" if it answers the current question ---
+#
+# There is no TTL on a commute row and nothing else invalidates one, so before
+# commute_source existed a complete row computed under an old provider was
+# never re-selected and kept its stale duration forever. That made changing
+# how a commute is measured a two-step operation -- ship the code, then
+# remember to run a --force -- with a window in between where the corpus was
+# half free-flow and half rush-hour, and nothing said so.
+
+
+def test_missing_commute_selects_a_row_from_before_the_source_column(tmp_path: Path):
+    """Every row written by the free-flow OSRM pipeline has commute_source
+    NULL. Those are the rows the migration exists for, so they must select --
+    and SQLite's `!=` is NULL for a NULL operand, which would have quietly
+    excluded every single one of them."""
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    _commute_row(conn, "abc123", failed=False, minutes=18.0)
+    conn.execute("UPDATE commute SET commute_source = NULL")
+    conn.commit()
+    assert get_listing_ids_missing_commute(conn) == ["abc123"]
+
+
+def test_missing_commute_selects_a_row_measured_a_different_way(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    _commute_row(conn, "abc123", failed=False, minutes=18.0, source="osrm-freeflow/v1")
+    assert get_listing_ids_missing_commute(conn) == ["abc123"]
+
+
+def test_missing_commute_leaves_a_current_source_row_alone(tmp_path: Path):
+    from src.commute import COMMUTE_SOURCE
+
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    _commute_row(conn, "abc123", failed=False, minutes=18.0, source=COMMUTE_SOURCE)
+    assert get_listing_ids_missing_commute(conn) == []
+
+
+def test_a_stale_row_is_selected_even_when_retries_are_off(tmp_path: Path):
+    """--only-new means "do not retry failures", not "do not re-measure".
+    A stale row is not covered under any reading of the word: leaving it
+    would let a --only-new run produce a corpus with two kinds of number in
+    it."""
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    _commute_row(conn, "abc123", failed=False, minutes=18.0, source="osrm-freeflow/v1")
+    assert get_listing_ids_missing_commute(conn, retry_failed=False) == ["abc123"]
+
+
+def test_a_geocode_miss_stamped_with_the_current_source_is_still_retried(tmp_path: Path):
+    """Staleness is an additional reason to select, not a replacement for the
+    existing ones."""
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    _commute_row(conn, "abc123", failed=True, minutes=None)
+    assert get_listing_ids_missing_commute(conn) == ["abc123"]
+
+
+def test_the_source_to_compare_against_can_be_overridden(tmp_path: Path):
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    _commute_row(conn, "abc123", failed=False, minutes=18.0, source="something-else")
+    assert get_listing_ids_missing_commute(conn, source="something-else") == []
+
+
+def test_upsert_commute_stores_the_provenance_fields(tmp_path: Path):
+    from src.commute import COMMUTE_SOURCE, CommuteResult
+
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    upsert_commute(
+        conn,
+        "abc123",
+        CommuteResult(
+            lat=39.86,
+            lon=-105.08,
+            denver_miles=18.0,
+            denver_minutes=34.0,
+            medtronic_miles=None,
+            medtronic_minutes=None,
+            geocode_failed=False,
+            arrive_by="2026-09-09T08:15",
+            route_error="no route: medtronic",
+        ),
+    )
+    row = get_commute(conn, "abc123")
+    assert row["commute_source"] == COMMUTE_SOURCE
+    assert row["arrive_by"] == "2026-09-09T08:15"
+    assert row["route_error"] == "no route: medtronic"

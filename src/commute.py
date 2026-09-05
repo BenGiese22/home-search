@@ -1,150 +1,150 @@
+"""Turning one listing's address into the two drive times the rubric reads.
+
+Provider-free on purpose: the geocoder and the router arrive as injected
+functions, and the only module that names a vendor is src/routing_mapbox.py.
+What is left here is the part that is ours -- which arrival time every
+listing is measured against, and how a partial failure is recorded.
+"""
+
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Callable
-from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 Coordinates = tuple[float, float]
 
-METERS_PER_MILE = 1609.34
-SECONDS_PER_MINUTE = 60.0
+# Stamped onto every row this module produces. The selector treats a row
+# carrying anything else as outstanding work, so **bumping this string is how
+# a re-measurement is triggered** -- the next pipeline run recomputes the
+# corpus by itself, with no flag and no separate job.
+#
+# It therefore has to name everything that would change the number: the
+# provider, the profile, and the arrival time. Change any of those and change
+# this.
+COMMUTE_SOURCE = "mapbox-arrive-0815/v1"
+
+# Every commute in the corpus is measured against the same historical
+# weekday profile so the numbers are comparable across listings. Wednesday is
+# the conventional representative weekday; 08:15 is Megan's arrival.
+ARRIVAL_WEEKDAY = 2  # Monday is 0
+ARRIVAL_HOUR = 8
+ARRIVAL_MINUTE = 15
+
+# How far ahead the requested arrival must be. A cron firing at 06:16 on a
+# Wednesday would otherwise ask about a time two minutes after the request
+# lands, which is a live forecast rather than a typical morning.
+MINIMUM_LEAD = timedelta(hours=2)
+
+DENVER_TZ = ZoneInfo("America/Denver")
 
 
-def geocode(address: str, http_get: Callable[[str], list[dict]]) -> Coordinates | None:
-    """Resolve an address to (lat, lon) via a Nominatim-shaped search response.
-    http_get is injected so this stays testable without a live network call."""
-    url = f"https://nominatim.openstreetmap.org/search?q={quote(address)}&format=json&limit=1"
-    results = http_get(url)
-    if not results:
-        return None
-    try:
-        return (float(results[0]["lat"]), float(results[0]["lon"]))
-    except (KeyError, ValueError, TypeError):
-        return None
+def next_arrival(now: datetime) -> str:
+    """The arrival time to ask about, as `YYYY-MM-DDThh:mm` local, no offset.
 
+    Mapbox reads a naive `arrive_by` in the origin's own time zone, which is
+    exactly the question meant here: what does this drive cost at a quarter
+    past eight in the morning where the house is. Emitting an offset would
+    mean recomputing it either side of the DST boundary, and being wrong for
+    half the year if that were ever missed.
 
-def geocode_census(address: str, http_get: Callable[[str], dict]) -> Coordinates | None:
-    """Resolve an address via the US Census Bureau geocoder.
-
-    Keyless, free, and complete for US residential addresses in a way
-    Nominatim is not: Nominatim depends on OpenStreetMap having the address
-    mapped, while Census interpolates from TIGER line files, which cover
-    every US street. That difference is not academic -- 11 listings in this
-    corpus had no coordinates at all because Nominatim did not know them,
-    and Census resolves 11 of 11.
-
-    Deliberately a FALLBACK rather than a replacement. Census only knows
-    street addresses: it returns nothing for a POI name like
-    "Medtronic, Lafayette, CO", which is how the destinations are expressed.
-    Nominatim stays the primary for that reason.
+    A naive `now` is read as Denver time; an aware one is converted first, so
+    a caller passing `datetime.now(timezone.utc)` still gets the local
+    answer rather than one shifted six hours.
     """
-    url = (
-        "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
-        f"?address={quote(address)}&benchmark=Public_AR_Current&format=json"
+    local = now.replace(tzinfo=DENVER_TZ) if now.tzinfo is None else now.astimezone(DENVER_TZ)
+
+    candidate = local.replace(
+        hour=ARRIVAL_HOUR, minute=ARRIVAL_MINUTE, second=0, microsecond=0
     )
-    payload = http_get(url)
-    try:
-        matches = payload["result"]["addressMatches"]
-    except (KeyError, TypeError):
-        return None
-    if not matches:
-        return None
-    try:
-        coords = matches[0]["coordinates"]
-        # Census names them x/y, not lon/lat. x is longitude.
-        return (float(coords["y"]), float(coords["x"]))
-    except (KeyError, ValueError, TypeError):
-        return None
+    # Walk forward a day at a time rather than doing weekday arithmetic: the
+    # replace() above is applied before the day changes, so each candidate is
+    # a real local 08:15 and the zone handles its own DST offset.
+    while candidate.weekday() != ARRIVAL_WEEKDAY or candidate - local < MINIMUM_LEAD:
+        candidate = (candidate + timedelta(days=1)).replace(
+            hour=ARRIVAL_HOUR, minute=ARRIVAL_MINUTE, second=0, microsecond=0
+        )
+    return candidate.strftime("%Y-%m-%dT%H:%M")
 
 
-def geocode_with_fallback(
-    address: str,
-    primary: Callable[[str], Coordinates | None],
-    fallback: Callable[[str], Coordinates | None],
-) -> tuple[Coordinates | None, bool]:
-    """Try the primary geocoder, then the fallback. Returns (coords, used_fallback).
-
-    `used_fallback` is reported rather than swallowed so a run can say how
-    often the primary is failing. A fallback that quietly carries the whole
-    corpus is a different situation from one that catches a straggler, and
-    the log line is the only thing that would ever surface the difference.
-    """
-    coords = primary(address)
-    if coords is not None:
-        return coords, False
-    return fallback(address), True
-
-
-def route_miles_minutes(
-    origin: Coordinates,
-    destination: Coordinates,
-    http_get: Callable[[str], dict],
-) -> tuple[float, float] | None:
-    """Road-network distance/duration via an OSRM-shaped route response.
-    OSRM addresses are lon,lat (not lat,lon) — origin/destination here stay
-    lat,lon like everywhere else in this module; the URL flips them."""
-    url = (
-        "https://router.project-osrm.org/route/v1/driving/"
-        f"{origin[1]},{origin[0]};{destination[1]},{destination[0]}?overview=false"
-    )
-    data = http_get(url)
-    routes = data.get("routes") or []
-    if not routes:
-        return None
-    try:
-        meters = float(routes[0]["distance"])
-        seconds = float(routes[0]["duration"])
-        return (meters / METERS_PER_MILE, seconds / SECONDS_PER_MINUTE)
-    except (KeyError, ValueError, TypeError):
-        return None
-
-
-@dataclass
+@dataclass(kw_only=True)
 class CommuteResult:
+    """One row of the `commute` table.
+
+    Keyword-only. Ten fields, most of them nullable floats of the same type,
+    so a positional constructor is a silent mis-assignment waiting to happen
+    -- and did happen once, putting a Denver duration in a Medtronic column.
+    """
+
     lat: float | None
     lon: float | None
     denver_miles: float | None
     denver_minutes: float | None
     medtronic_miles: float | None
     medtronic_minutes: float | None
+    # Means only what it says: we do not know where this house is. It used to
+    # also be set when a *route* failed, which conflated "no coordinates"
+    # with "coordinates but no road" -- two states whose fixes are different
+    # and which nothing downstream could tell apart (#32).
     geocode_failed: bool
-
-
-def resolve_destination(
-    primary_address: str,
-    geocode_fn: Callable[[str], Coordinates | None],
-    fallback_address: str | None = None,
-) -> tuple[Coordinates, bool]:
-    """Geocode a fixed destination once at startup. Unlike per-listing
-    addresses, a destination that can't be resolved at all is a setup
-    error, not a per-listing skip — it aborts the run."""
-    coords = geocode_fn(primary_address)
-    if coords is not None:
-        return coords, False
-    if fallback_address is not None:
-        coords = geocode_fn(fallback_address)
-        if coords is not None:
-            return coords, True
-    raise RuntimeError(f"could not geocode destination: {primary_address}")
+    commute_source: str = COMMUTE_SOURCE
+    arrive_by: str | None = None
+    # Short reason a leg did not route, naming the leg. The honest half of
+    # what geocode_failed used to be asked to carry.
+    route_error: str | None = None
 
 
 def compute_commute(
-    address: str,
+    address_parts,
     denver_coords: Coordinates,
     medtronic_coords: Coordinates,
-    geocode_fn: Callable[[str], Coordinates | None],
+    arrive_by: str,
+    geocode_fn: Callable[[object], tuple[float, float, str] | None],
     route_fn: Callable[[Coordinates, Coordinates], tuple[float, float] | None],
 ) -> CommuteResult:
-    origin = geocode_fn(address)
-    if origin is None:
-        return CommuteResult(None, None, None, None, None, None, geocode_failed=True)
+    """One geocode and two routes, assembled into a row.
 
-    denver = route_fn(origin, denver_coords)
-    medtronic = route_fn(origin, medtronic_coords)
+    Always returns a row, including for a geocode miss -- a listing we cannot
+    place is a settled answer, not outstanding work, and leaving it unstamped
+    would make the selector retry it on every run for as long as it is
+    listed.
+
+    An exception from `route_fn` propagates. The stage is the only layer that
+    can tell a 401 (abort the run) from a 429 (wait and retry) from a blip,
+    so swallowing one here would turn an expired token into a corpus of empty
+    commutes.
+    """
+    origin = geocode_fn(address_parts)
+    if origin is None:
+        return CommuteResult(
+            lat=None,
+            lon=None,
+            denver_miles=None,
+            denver_minutes=None,
+            medtronic_miles=None,
+            medtronic_minutes=None,
+            geocode_failed=True,
+            arrive_by=arrive_by,
+        )
+
+    coordinates = (origin[0], origin[1])
+    denver = route_fn(coordinates, denver_coords)
+    medtronic = route_fn(coordinates, medtronic_coords)
+
+    failed_legs = [
+        name
+        for name, leg in (("denver", denver), ("medtronic", medtronic))
+        if leg is None
+    ]
     return CommuteResult(
-        lat=origin[0],
-        lon=origin[1],
+        lat=coordinates[0],
+        lon=coordinates[1],
         denver_miles=denver[0] if denver else None,
         denver_minutes=denver[1] if denver else None,
         medtronic_miles=medtronic[0] if medtronic else None,
         medtronic_minutes=medtronic[1] if medtronic else None,
-        geocode_failed=denver is None or medtronic is None,
+        geocode_failed=False,
+        arrive_by=arrive_by,
+        route_error=(
+            f"no route: {', '.join(failed_legs)}" if failed_legs else None
+        ),
     )

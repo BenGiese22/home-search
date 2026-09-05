@@ -492,3 +492,66 @@ def test_stage_connection_ensures_the_schema_and_sets_the_row_factory():
     }
     assert {"listings", "amenities", "photo_urls", "commute", "scores",
             "visual_scores", "hosted_photos"} <= tables
+
+
+def test_ensure_schema_migrates_a_commute_table_from_before_the_provenance_columns():
+    """The production `commute` table predates commute_source, arrive_by and
+    route_error. The stage writes all three on its very first statement, so
+    if the migration does not reach the live table every commute run fails
+    with "table commute has no column named commute_source" -- and the
+    migration is the only thing that puts the corpus on one measurement."""
+    conn = _connect()
+    conn.execute(
+        """
+        CREATE TABLE commute (
+            listing_id TEXT PRIMARY KEY,
+            lat REAL,
+            lon REAL,
+            denver_miles REAL,
+            denver_minutes REAL,
+            medtronic_miles REAL,
+            medtronic_minutes REAL,
+            geocode_failed INTEGER NOT NULL,
+            computed_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO commute VALUES ('abc123', 39.8, -105.0, 18.0, 34.0,"
+        " 9.0, 22.0, 0, '2026-09-01T00:00:00+00:00')"
+    )
+
+    ensure_schema(conn)
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(commute)")}
+    assert {"commute_source", "arrive_by", "route_error"} <= columns
+    # The pre-existing row survives and reads as pre-migration, which is
+    # exactly what makes the selector pick it up.
+    row = conn.execute("SELECT * FROM commute").fetchone()
+    assert row[-3] is None
+    assert conn.execute(
+        "SELECT medtronic_minutes FROM commute"
+    ).fetchone()[0] == 22.0
+
+
+def test_every_column_added_to_commute_is_nullable_or_defaulted():
+    """ensure_schema runs at the start of EVERY stage against the live Turso
+    database. ALTER TABLE ADD COLUMN with NOT NULL and no DEFAULT is rejected
+    outright on a table that has rows, so a column declared that way does not
+    break the commute stage -- it breaks scrape, score, verify and the canary
+    too, on their first statement, forever."""
+    from src.turso_db import _parse_columns
+    from src.db import _SCHEMA
+
+    original = {
+        "listing_id", "lat", "lon", "denver_miles", "denver_minutes",
+        "medtronic_miles", "medtronic_minutes", "geocode_failed", "computed_at",
+    }
+    for name, definition in _parse_columns(_SCHEMA)["commute"].items():
+        if name in original:
+            continue
+        upper = definition.upper()
+        assert "NOT NULL" not in upper or "DEFAULT" in upper, (
+            f"commute.{name} is NOT NULL with no DEFAULT: "
+            "ALTER TABLE cannot add it to the live table"
+        )
