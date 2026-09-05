@@ -763,3 +763,64 @@ been dropped come back (6085 West 82nd Drive, 12306 Deerfield Way, 3331 West
 10th Ave Place, 950 Laurel Street, 9862 Independence Street), and nothing is
 delisted. Two others that looked at risk (2765 Canossa Drive, 10538 Kipling
 Place) turned out to be pinned already.
+
+## 2026-09-04 — The sandbox runner reports by leaving files on disk
+
+Phase 3 gives the pipeline a second execution home: a Vercel Sandbox started
+by a cron in short-list. The obvious design has the runner tell Vercel when
+it is finished. It cannot, and working out why shaped most of the rest.
+
+Stopping a sandbox, or calling anything else on the Vercel API, needs a
+Vercel credential **inside** the VM. Both available kinds are wrong. An OIDC
+token has a 2-hour TTL and is reused for up to 90 minutes before refresh,
+against a pipeline whose photo-scoring stage legitimately polls a vision
+batch for hours — it expires mid-run, unrefreshably, because the refresh
+happens in the function that is long gone. A personal access token is
+team-wide, which is the worst blast radius available for a VM driving
+Chromium against a third-party site.
+
+**So the runner holds no Vercel credential at all**, and communicates the
+only way it can: `data/.run/started` and `data/.run/done` on its own disk,
+read from outside by the launcher and the reaper. `started` without `done`
+is the entire in-progress signal. That makes the write ordering load-bearing
+in a way a status callback would not have been — the previous run's `done`
+must be cleared *before* the new `started` appears, or both readers see a
+run as finished the moment it begins — and it is why every marker is renamed
+into place rather than written, since the VM can be killed mid-write.
+
+The consequence is that **only the reaper can stop a sandbox**, and it runs
+every ten minutes. That is not tidiness. Vercel bills provisioned memory for
+the whole session rather than for CPU used, so a 20-minute run left idling
+to its 3-hour limit wastes about $0.23, and four of those a day exceeds the
+entire Pro credit. The reaper collects the refreshed Compass session before
+stopping — once stopped the filesystem is a snapshot, and those cookies are
+only reachable by resuming it — but a failure to collect never prevents the
+stop. A stale session costs a cold login; an unstopped sandbox costs money.
+
+### Zero listings is a failure, not an empty collection
+
+`ops/canary.py` runs nightly, read-only, half an hour before anything else.
+It exists because the way this pipeline breaks is silent: a rotated session,
+a changed selector and a WAF block against a datacenter IP all produce a
+clean fetch of *nothing*, and downstream an empty tab is exactly what makes
+the delisting cascade consider deleting everything it covered. So the canary
+fails on a zero count rather than treating it as an empty collection, and
+does it a day before the pipeline would have.
+
+It records the egress IP because that is the one variable the sandbox
+introduces — every scrape until now came from a residential address — and it
+records whether the session was warm, without failing on a cold login. Warm
+first is the design; a cold login that works still answers the question.
+
+### Notification is for the two things nothing else would surface
+
+`src/notify.py` had existed since #55 with nothing calling it. It now fires
+on a failed stage (named, because which stage is the whole diagnostic) and
+on losing the cross-home lease mid-run. The second is the one condition that
+can cost real money and leaves no non-zero exit code behind: two homes
+writing the same database means a concurrent scrape re-downloading photos
+Compass already rate-limits.
+
+Successes stay silent. A nightly notification that everything is fine is one
+people learn to swipe away, and by the time one matters they no longer read
+it. The canary is the liveness proof; ntfy is for exceptions.
