@@ -824,3 +824,52 @@ Compass already rate-limits.
 Successes stay silent. A nightly notification that everything is fine is one
 people learn to swipe away, and by the time one matters they no longer read
 it. The canary is the liveness proof; ntfy is for exceptions.
+
+## 2026-09-05 — The cloud cutover, and what it cost to trust it
+
+The pipeline runs itself now. Three crons in short-list drive a Vercel
+Sandbox: the pipeline every six hours, a read-only canary nightly, and a
+reaper every ten minutes that is the only thing able to stop a sandbox.
+Verified end to end in production — launcher 202, bootstrap, a warm Compass
+session seeded from private Blob, scrape, 37 photos downloaded and uploaded
+to Blob from a datacenter IP, commutes, scoring, `verify`, revalidate,
+`exit_code: 0`, then `collect-and-stop`.
+
+Two facts about Compass came out of it. A cold login from a Vercel IP
+succeeded, which was the most likely way the whole phase could have failed
+outright. And the collection returns identical counts to a residential
+address — 27 favorites, 153 matches — so Compass serves a datacenter IP the
+same data. Neither settles the durability question; that still needs the
+scheduled logins to run for two weeks.
+
+The desktop path was deliberately abandoned rather than kept as a fallback.
+The systemd timer was never installed, which is why every run for weeks was
+triggered by hand and why the corpus had drifted: five Active listings had
+photos but no commutes and no vision scores, and were ranked on a fabricated
+`commute_score = 50`. Fixing them moved one composite from 57.0 to 68.3, so
+the ordering the viewer showed was wrong rather than merely incomplete.
+
+### What the cutover actually taught
+
+Nine defects, none caught by the test suite. Six came from trusting a type
+signature or a remembered API instead of reading what the SDK does. The
+important thing is not the count but the shape: **HTTP 200, valid JSON, no
+exception, and the wrong answer.** A reaper that resumed and re-stopped an
+idle sandbox 144 times a day looked healthy on every surface Vercel offers.
+
+That is written up separately in
+`2026-09-05-observability-and-silent-wrongness.md`, along with what Vercel
+can and cannot detect and the eight platform gaps worth not re-researching.
+The short version is that the fix was never a dashboard: it was to stop
+returning success when the system is wrong. `verify.py` now asserts four
+invariants as the last pipeline stage and fails the run on violation, the
+reaper states its invariant and throws rather than assuming it, and both
+cron routes emit their decision as a queryable metric so a wrong pattern is
+a shape on a chart rather than something a person has to notice.
+
+### One correction to an earlier entry
+
+The local execution home is a **desktop**, not a laptop. The cross-home lock
+is a lease partly because a runner can vanish without releasing it — but the
+reason is a machine powered off or booted into its other OS, not a closed
+lid. The conclusion survives; the stated reason was not the true one.
