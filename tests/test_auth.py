@@ -103,3 +103,25 @@ def test_session_is_persisted_after_a_successful_login(tmp_path: Path):
     page = Page()
     context = _run(page, tmp_path)
     assert context.saved_to == str(tmp_path / "state.json")
+
+
+def test_a_cold_login_is_announced_to_a_caller_that_asks(tmp_path: Path):
+    """The canary is the caller. Nothing in the pipeline cares whether it
+    logged in cold, but warm-session-first is the design, and a run that logs
+    in cold every night is worth seeing while it still passes."""
+    seen = []
+    ensure_logged_in(
+        Context(), Page(), "https://compass.test/login/", "e@x.com", "pw",
+        tmp_path / "state.json", on_cold_login=lambda: seen.append(True),
+    )
+    assert seen == [True]
+
+
+def test_a_warm_session_announces_nothing(tmp_path: Path):
+    seen = []
+    ensure_logged_in(
+        Context(), Page(has_email_form=False), "https://compass.test/login/",
+        "e@x.com", "pw", tmp_path / "state.json",
+        on_cold_login=lambda: seen.append(True),
+    )
+    assert seen == []
