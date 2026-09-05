@@ -66,6 +66,13 @@ def connect(
 # fills the pre-existing rows, and until it runs a NULL means "identity
 # unknown", which collect_pending_photos treats as needing re-upload.
 TURSO_SCHEMA_EXTRA = """
+CREATE TABLE IF NOT EXISTS vision_batches (
+    batch_id TEXT PRIMARY KEY,
+    garage_expected_by_id TEXT NOT NULL,
+    submitted_at TEXT NOT NULL,
+    submitted_by TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS hosted_photos (
     listing_id TEXT NOT NULL,
     position INTEGER NOT NULL,

@@ -623,6 +623,74 @@ def listings_from_rows(
     ]
 
 
+# The vision checkpoint. It lives in the database rather than a file because
+# both execution homes share one database and a file is invisible across
+# them: a laptop run that submits a batch and then has its lid closed leaves
+# its checkpoint on local disk, and a cloud run sees listings with no
+# visual_scores row, no checkpoint it can read, and resubmits. That is real
+# money at the vision API, and it will happen once both homes are live.
+#
+# Deliberately NOT keyed on listing_id. A batch spans many listings, so one
+# being delisted must not delete the record of an in-flight batch the others
+# are still waiting on -- which is also why it is invisible to
+# tables_child_first and to delete_orphaned_rows.
+
+
+def load_vision_batches(conn) -> list[dict]:
+    """Every in-flight batch, in ONE statement.
+
+    garage_expected_by_id is stored per batch and read back as-is, never
+    recomputed from the database's current state: the listing set that
+    produced a batch is the only thing that can interpret its results, and
+    that set has already changed by the time the results arrive.
+    """
+    return [
+        {
+            "batch_id": row["batch_id"],
+            "garage_expected_by_id": json.loads(row["garage_expected_by_id"]),
+            "submitted_at": row["submitted_at"],
+            "submitted_by": row["submitted_by"],
+        }
+        for row in conn.execute(
+            "SELECT batch_id, garage_expected_by_id, submitted_at, submitted_by "
+            "FROM vision_batches ORDER BY submitted_at, batch_id"
+        )
+    ]
+
+
+def record_vision_batch(
+    conn, batch_id: str, garage_expected_by_id: dict[str, bool], submitted_by: str
+) -> None:
+    """Record a submitted batch, in ONE statement.
+
+    Called the instant the batch is created, so the window in which money is
+    spent but nothing remembers it is as close to zero as it can be.
+    """
+    with conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO vision_batches "
+            "(batch_id, garage_expected_by_id, submitted_at, submitted_by) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                batch_id,
+                json.dumps(garage_expected_by_id),
+                datetime.now(timezone.utc).isoformat(),
+                submitted_by,
+            ),
+        )
+
+
+def clear_vision_batch(conn, batch_id: str) -> None:
+    """Forget one consumed batch, in ONE statement.
+
+    Per batch, at the moment its results are processed -- not all of them at
+    the end of the run. A crash between two batches must not make the first
+    look unprocessed and get resubmitted.
+    """
+    with conn:
+        conn.execute("DELETE FROM vision_batches WHERE batch_id = ?", (batch_id,))
+
+
 def get_pinned_listing_ids(conn: sqlite3.Connection) -> frozenset[str]:
     """Listing_ids currently marked is_pinned — tracked individually via
     LISTING_URLS rather than discovered through the collection, and
