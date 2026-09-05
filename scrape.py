@@ -128,6 +128,37 @@ def _save_listing(listing: Listing, skip_photos: bool, page: Page) -> None:
     print(f"scraped: {listing.address}")
 
 
+def orphan_ids(db_conn, backfill_fields=BACKFILL_FIELDS) -> set[str]:
+    """Listings neither ingestion path can reach that still need work.
+
+    Two reasons a listing lands here, and until now only the first was
+    counted:
+
+    - **missing fields** added after it was last scraped, and
+    - **pending photo work** -- rows in photo_urls with nothing in
+      hosted_photos.
+
+    The second is why 5012 West 77th Drive sat with 37 photo URLs and zero
+    hosted photos while every run reported success (issue #70). The pipeline
+    computed that it needed photos, no branch reached it, and nothing noticed.
+    `--backfill-missing` did not help either: it selects on fields, so it
+    passed over a listing whose fields were complete and whose images were
+    entirely absent.
+    """
+    stale_ids = set(get_listing_ids_missing_fields(db_conn, backfill_fields))
+    # Both sets come from one statement each, and the skip set is read ONCE.
+    # Calling it inside the comprehension would be a round-trip per listing --
+    # ~240ms each against hosted Turso, which is the thing this project has a
+    # standing rule against.
+    satisfied = listing_ids_with_any_hosted_or_no_urls(db_conn)
+    stale_ids |= {
+        row["listing_id"]
+        for row in query_listings(db_conn)
+        if row["listing_id"] not in satisfied
+    }
+    return stale_ids
+
+
 def _backfill_orphans(db_conn, page: Page, skip_photos: bool) -> None:
     """Refresh stale listings that neither ingestion path can reach.
 
@@ -137,11 +168,11 @@ def _backfill_orphans(db_conn, page: Page, skip_photos: bool) -> None:
     is still on its row, so re-scrape it from that.
     """
     # One statement for the whole corpus, not one file open per listing.
-    stale_ids = set(get_listing_ids_missing_fields(db_conn, BACKFILL_FIELDS))
+    stale_ids = orphan_ids(db_conn)
     stale = [row for row in query_listings(db_conn) if row["listing_id"] in stale_ids]
     if not stale:
         return
-    print(f"--backfill-missing: {len(stale)} unreachable listing(s) to refresh by stored URL")
+    print(f"backfill: {len(stale)} unreachable listing(s) to refresh by stored URL")
     pinned_ids = get_pinned_listing_ids(db_conn)
     for row in stale:
         try:
@@ -393,7 +424,11 @@ def main() -> None:
                     print(f"skip listing (failed to process {listing.address}): {exc}")
                     continue
 
-            if backfill_missing:
+            # Runs whenever there is orphaned work, not only when asked.
+            # The flag forces a field refresh; an orphan with no images is a
+            # defect the pipeline already knows about, and leaving it to an
+            # opt-in flag the cron never passes is how #70 persisted.
+            if backfill_missing or orphan_ids(db_conn):
                 _backfill_orphans(db_conn, page, skip_photos)
 
             report = compute_changes(

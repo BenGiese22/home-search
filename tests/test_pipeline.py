@@ -52,7 +52,11 @@ def never_revalidate_for_real(monkeypatch):
 
 def test_stages_run_in_dependency_order():
     plan = build_plan()
-    assert [s.name for s in plan] == ["scrape", "commutes", "score-photos", "score"]
+    # verify runs last and can fail the run: every stage before it can
+    # succeed while producing something wrong.
+    assert [s.name for s in plan] == [
+        "scrape", "commutes", "score-photos", "score", "verify"
+    ]
 
 
 def test_publish_is_no_longer_a_stage():
@@ -70,7 +74,7 @@ def test_only_runs_a_single_stage():
 
 def test_from_resumes_at_a_stage_and_continues():
     assert [s.name for s in build_plan(start_from="score-photos")] == [
-        "score-photos", "score"
+        "score-photos", "score", "verify"
     ]
 
 

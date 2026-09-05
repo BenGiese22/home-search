@@ -72,6 +72,13 @@ STAGES: tuple[Stage, ...] = (
     Stage("commutes", "compute_commutes.py"),
     Stage("score-photos", "score_photos.py"),
     Stage("score", "score.py"),
+    # Last, and deliberately able to fail the run.
+    #
+    # Every stage above can succeed while producing something wrong -- three
+    # defects in a row exited 0 with plausible output. This one states what
+    # must be true and turns a violation into a non-zero exit code, which is
+    # the signal run.py records and the reaper turns into a notification.
+    Stage("verify", "verify.py"),
 )
 STAGE_NAMES = [s.name for s in STAGES]
 
