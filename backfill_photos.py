@@ -10,11 +10,9 @@ from src.turso_db import stage_connection
 from src.db import get_pinned_listing_ids, upsert_listing
 from src.photos import download_photos
 from src.scraper import fetch_collection_tabs
-from src.store import is_scraped, save_listing
 
 DATA_DIR = Path("data")
 PHOTOS_DIR = DATA_DIR / "photos"
-STORE_DIR = DATA_DIR / "listings"
 AUTH_STATE_PATH = DATA_DIR / ".auth" / "compass_state.json"
 LOGIN_URL = "https://www.compass.com/login/"
 
@@ -74,8 +72,8 @@ def main() -> None:
             except Exception as exc:
                 print(f"skip listing (failed to download photos for {listing.address}): {exc}")
                 continue
-            if not is_scraped(STORE_DIR, listing.listing_id):
-                save_listing(STORE_DIR, listing)
+            # The listing row is already in Turso via upsert_listing above;
+            # there is no longer a JSON store to write alongside it.
             print(f"backfilled photos: {listing.address}")
 
     db_conn.close()

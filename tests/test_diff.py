@@ -165,28 +165,27 @@ def test_pinned_id_does_not_suppress_other_delisted_ids():
     assert report.delisted_ids == ["gone456"]
 
 
-def test_apply_delisting_removes_db_row_photos_and_json(tmp_path: Path):
+def test_apply_delisting_removes_the_db_row_and_the_photos(tmp_path: Path):
+    """Two things now, not three. The JSON store used to be the third, and
+    delisting deleted its file; the scrape no longer writes one, so
+    apply_delisting no longer takes a store_dir at all."""
     conn = get_connection(tmp_path / "listings.db")
     upsert_listing(conn, SAMPLE)
     photos_dir = tmp_path / "photos"
     listing_photo_dir = photos_dir / "abc123"
     listing_photo_dir.mkdir(parents=True)
     (listing_photo_dir / "01.jpg").write_bytes(b"x")
-    store_dir = tmp_path / "listings"
-    store_dir.mkdir()
-    (store_dir / "abc123.json").write_text("{}")
 
-    apply_delisting(conn, photos_dir, store_dir, ["abc123"])
+    apply_delisting(conn, photos_dir, ["abc123"])
 
     assert query_listings(conn) == []
     assert not listing_photo_dir.exists()
-    assert not (store_dir / "abc123.json").exists()
 
 
 def test_apply_delisting_handles_empty_list(tmp_path: Path):
     conn = get_connection(tmp_path / "listings.db")
 
-    apply_delisting(conn, tmp_path / "photos", tmp_path / "listings", [])  # should not raise
+    apply_delisting(conn, tmp_path / "photos", [])  # should not raise
 
 
 def test_apply_delisting_continues_past_a_failure(tmp_path: Path, monkeypatch, capsys):
@@ -215,7 +214,7 @@ def test_apply_delisting_continues_past_a_failure(tmp_path: Path, monkeypatch, c
 
     monkeypatch.setattr(diff_module, "delete_listing", flaky_delete_listing)
 
-    apply_delisting(conn, tmp_path / "photos", tmp_path / "listings", ["abc123", "other456"])
+    apply_delisting(conn, tmp_path / "photos", ["abc123", "other456"])
 
     assert calls == ["abc123", "other456"]  # both attempted, one failing doesn't stop the other
     assert [row["listing_id"] for row in query_listings(conn)] == ["abc123"]  # other456 removed
@@ -292,7 +291,7 @@ def test_run_delisting_removes_listings_when_safe(tmp_path: Path):
     fetched = [Listing(**{**SAMPLE.__dict__, "listing_id": "other456"})]  # abc123 delisted
     report = compute_changes(fetched, before)
 
-    run_delisting(conn, tmp_path / "photos", tmp_path / "listings", True, report, before, frozenset())
+    run_delisting(conn, tmp_path / "photos", True, report, before, frozenset())
 
     assert [row["listing_id"] for row in query_listings(conn)] == ["other456"]
 
@@ -303,7 +302,7 @@ def test_run_delisting_skips_and_prints_when_unsafe(tmp_path: Path, capsys):
     before = {"abc123": ("$1", 1.0)}
     report = compute_changes([], before)
 
-    run_delisting(conn, tmp_path / "photos", tmp_path / "listings", False, report, before, frozenset())
+    run_delisting(conn, tmp_path / "photos", False, report, before, frozenset())
 
     assert [row["listing_id"] for row in query_listings(conn)] == ["abc123"]
     assert "1" in capsys.readouterr().out
@@ -313,7 +312,7 @@ def test_run_delisting_prints_nothing_when_nothing_delisted(tmp_path: Path, caps
     conn = get_connection(tmp_path / "listings.db")
     report = compute_changes([], {})
 
-    run_delisting(conn, tmp_path / "photos", tmp_path / "listings", True, report, {}, frozenset())
+    run_delisting(conn, tmp_path / "photos", True, report, {}, frozenset())
 
     assert capsys.readouterr().out == ""
 
@@ -341,7 +340,7 @@ def test_files_are_not_removed_for_a_listing_whose_db_delete_failed(tmp_path, mo
     monkeypatch.setattr(diff_module, "bulk_delete_listings", failing_bulk)
     monkeypatch.setattr(diff_module, "delete_listing", failing_single)
 
-    apply_delisting(conn, tmp_path / "photos", tmp_path / "listings", [SAMPLE.listing_id])
+    apply_delisting(conn, tmp_path / "photos", [SAMPLE.listing_id])
 
     assert (photos_dir / "01.jpg").exists(), "photos removed for a listing still in the db"
     assert [row["listing_id"] for row in query_listings(conn)] == [SAMPLE.listing_id]
@@ -469,7 +468,7 @@ def test_delisting_deletes_the_listings_blobs(tmp_path: Path):
     deleted = []
 
     apply_delisting(
-        conn, tmp_path / "photos", tmp_path / "listings", [SAMPLE.listing_id],
+        conn, tmp_path / "photos", [SAMPLE.listing_id],
         blob_token="tok",
         delete_fn=lambda urls, token: deleted.extend(urls),
     )
@@ -493,7 +492,7 @@ def test_the_blob_urls_are_read_in_one_statement(tmp_path: Path):
     statements = []
     conn.set_trace_callback(statements.append)
     apply_delisting(
-        conn, tmp_path / "photos", tmp_path / "listings", ids,
+        conn, tmp_path / "photos", ids,
         blob_token="tok", delete_fn=lambda urls, token: None,
     )
     conn.set_trace_callback(None)
@@ -515,7 +514,7 @@ def test_the_rows_go_before_the_blobs(tmp_path: Path):
         rows_at_delete_time.extend(conn.execute("SELECT * FROM hosted_photos"))
 
     apply_delisting(
-        conn, tmp_path / "photos", tmp_path / "listings", [SAMPLE.listing_id],
+        conn, tmp_path / "photos", [SAMPLE.listing_id],
         blob_token="tok", delete_fn=delete_fn,
     )
 
@@ -533,7 +532,7 @@ def test_a_failed_blob_delete_prints_the_urls_and_does_not_raise(tmp_path, capsy
         raise RuntimeError("HTTP 500")
 
     apply_delisting(
-        conn, tmp_path / "photos", tmp_path / "listings", [SAMPLE.listing_id],
+        conn, tmp_path / "photos", [SAMPLE.listing_id],
         blob_token="tok", delete_fn=boom,
     )
 
@@ -550,7 +549,7 @@ def test_without_a_blob_token_the_urls_are_printed_not_dropped(tmp_path, capsys)
     _host(conn, SAMPLE.listing_id, 1, "https://blob/a.jpg")
 
     apply_delisting(
-        conn, tmp_path / "photos", tmp_path / "listings", [SAMPLE.listing_id],
+        conn, tmp_path / "photos", [SAMPLE.listing_id],
         blob_token=None,
         delete_fn=lambda urls, token: pytest.fail("must not delete without a token"),
     )
@@ -575,7 +574,7 @@ def test_blobs_are_kept_for_a_listing_whose_row_survived(tmp_path, monkeypatch):
     deleted = []
 
     apply_delisting(
-        conn, tmp_path / "photos", tmp_path / "listings", [SAMPLE.listing_id],
+        conn, tmp_path / "photos", [SAMPLE.listing_id],
         blob_token="tok", delete_fn=lambda urls, token: deleted.extend(urls),
     )
 
@@ -589,7 +588,7 @@ def test_delisting_without_a_hosted_photos_table_still_works(tmp_path: Path):
     upsert_listing(conn, SAMPLE)
 
     apply_delisting(
-        conn, tmp_path / "photos", tmp_path / "listings", [SAMPLE.listing_id],
+        conn, tmp_path / "photos", [SAMPLE.listing_id],
         blob_token="tok",
         delete_fn=lambda urls, token: pytest.fail("nothing hosted to delete"),
     )
@@ -608,7 +607,7 @@ def test_run_delisting_passes_the_blob_token_through(tmp_path: Path):
     seen = []
 
     run_delisting(
-        conn, tmp_path / "photos", tmp_path / "listings", True, report, before,
+        conn, tmp_path / "photos", True, report, before,
         frozenset(), blob_token="tok",
         delete_fn=lambda urls, token: seen.append((urls, token)),
     )

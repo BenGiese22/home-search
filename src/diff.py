@@ -7,7 +7,6 @@ from src.blob_upload import delete_blobs
 from src.db import bulk_delete_listings, delete_listing, parse_price
 from src.models import Listing
 from src.photos import delete_photos
-from src.store import delete_stored_listing
 
 
 @dataclass
@@ -168,7 +167,6 @@ def _hosted_blob_urls(
 def apply_delisting(
     conn: sqlite3.Connection,
     photos_dir: Path,
-    store_dir: Path,
     delisted_ids: list[str],
     blob_token: str | None = None,
     delete_fn: Callable[[list[str], str], None] = delete_blobs,
@@ -218,7 +216,6 @@ def apply_delisting(
     for listing_id in removed:
         try:
             delete_photos(photos_dir, listing_id)
-            delete_stored_listing(store_dir, listing_id)
         except Exception as exc:
             print(f"delisted {listing_id} from the database, but its local "
                   f"files could not be removed: {exc}")
@@ -252,7 +249,6 @@ def apply_delisting(
 def run_delisting(
     conn: sqlite3.Connection,
     photos_dir: Path,
-    store_dir: Path,
     fetch_succeeded: bool,
     report: ChangeReport,
     before: dict[str, tuple[str, float | None]],
@@ -270,7 +266,7 @@ def run_delisting(
     rather than reclaiming them."""
     if should_apply_delisting(fetch_succeeded, report, before, pinned_ids):
         apply_delisting(
-            conn, photos_dir, store_dir, report.delisted_ids,
+            conn, photos_dir, report.delisted_ids,
             blob_token=blob_token, delete_fn=delete_fn,
         )
     elif report.delisted_ids:

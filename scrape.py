@@ -11,15 +11,22 @@ from src.turso_db import stage_connection
 from src.csv_writer import write_csv
 from src.db import (
     bulk_upsert_listings,
+    get_amenities_by_listing,
+    get_listing_ids_missing_fields,
+    get_photo_urls_by_listing,
     get_pinned_listing_ids,
     get_price_snapshot,
+    hosted_photo_index,
+    listing_ids_with_any_hosted_or_no_urls,
+    listings_from_rows,
+    needs_photo_work,
     query_listings,
     upsert_listing,
 )
 from src.diff import collection_fetch_is_trustworthy, compute_changes, run_delisting
 from src.gallery import write_gallery
 from src.models import Listing, select_present_listings
-from src.photo_upload import get_photo_urls_by_listing, upload_photos
+from src.photo_upload import upload_photos
 from src.photos import download_photos
 from src.scraper import (
     derive_listing_id_from_url,
@@ -27,11 +34,9 @@ from src.scraper import (
     fetch_collection_tabs,
     scrape_listing,
 )
-from src.store import is_scraped, load_all_listings, needs_field_backfill, save_listing
 
 DATA_DIR = Path("data")
 PHOTOS_DIR = DATA_DIR / "photos"
-STORE_DIR = DATA_DIR / "listings"
 AUTH_STATE_PATH = DATA_DIR / ".auth" / "compass_state.json"
 CSV_PATH = DATA_DIR / "listings.csv"
 GALLERY_PATH = DATA_DIR / "gallery.html"
@@ -76,12 +81,43 @@ BACKFILL_FIELDS = (
 )
 
 
+def should_process(*, force: bool, scraped: bool, stale: bool) -> bool:
+    """Whether this listing needs work this run.
+
+    Extracted from the Playwright loops so the flag interactions are testable
+    without a browser. The decision is expensive in both directions:
+    processing a listing that did not need it re-downloads 20-50 photos from
+    Compass, and skipping one that did leaves it silently stale forever.
+
+    The plan's signature also took a `backfill` flag. It is redundant once
+    `stale` is per-listing -- and passing both invites the bug where a run
+    with --backfill-missing processes everything because the flag was
+    consulted instead of the listing's own staleness.
+    """
+    return force or stale or not scraped
+
+
+def record_hosted(hosted: dict, listing: Listing) -> None:
+    """Claim a freshly-scraped listing's positions in the in-memory index.
+
+    A listing can arrive twice in one run: once from LISTING_URLS and again
+    from the collection. Without this the second loop re-downloads photos the
+    first just fetched, because the database index was read once at the top
+    and does not know about work done since.
+    """
+    for position, url in enumerate(listing.photo_urls, start=1):
+        hosted[(listing.listing_id, position)] = url
+
+
 def _save_listing(listing: Listing, skip_photos: bool, page: Page) -> None:
-    """Download photos (unless skipped) and persist a scraped Listing.
-    Safe to call again for an already-scraped listing (see --force): the
-    JSON store overwrite is idempotent, and download_photos() only fetches
-    photos that aren't already on disk, so a retry fills in gaps from a
-    prior partial failure rather than re-downloading everything."""
+    """Download this listing's photos, unless skipped.
+
+    The listing row itself is already in Turso by the time this runs -- there
+    is no longer a JSON store to write. Safe to call again for an
+    already-scraped listing (see --force): download_photos() only fetches
+    photos not already on disk, so a retry fills gaps from a prior partial
+    failure rather than re-downloading everything.
+    """
     if not skip_photos:
         download_photos(
             listing.photo_urls,
@@ -89,7 +125,6 @@ def _save_listing(listing: Listing, skip_photos: bool, page: Page) -> None:
             _build_fetch_bytes(page),
             sleep_fn=_photo_jitter,
         )
-    save_listing(STORE_DIR, listing)
     print(f"scraped: {listing.address}")
 
 
@@ -101,10 +136,9 @@ def _backfill_orphans(db_conn, page: Page, skip_photos: bool) -> None:
     whatever fields it had when it was last scraped, forever. Its listing_url
     is still on its row, so re-scrape it from that.
     """
-    stale = [
-        row for row in query_listings(db_conn)
-        if needs_field_backfill(STORE_DIR, row["listing_id"], BACKFILL_FIELDS)
-    ]
+    # One statement for the whole corpus, not one file open per listing.
+    stale_ids = set(get_listing_ids_missing_fields(db_conn, BACKFILL_FIELDS))
+    stale = [row for row in query_listings(db_conn) if row["listing_id"] in stale_ids]
     if not stale:
         return
     print(f"--backfill-missing: {len(stale)} unreachable listing(s) to refresh by stored URL")
@@ -179,6 +213,15 @@ def main() -> None:
     # photo download and store rewrite for listings that already have the data.
     backfill_missing = "--backfill-missing" in sys.argv
     config = load_config(load_env())
+    # Fail before touching Compass rather than after. Without a token the run
+    # downloads every photo and hosts none, so the viewer sees nothing new
+    # and the next run downloads them all again -- a lot of traffic against
+    # the one site whose bot detection is still an open question.
+    if not skip_photos and not load_env().get("BLOB_READ_WRITE_TOKEN"):
+        sys.exit(
+            "scrape.py: BLOB_READ_WRITE_TOKEN is not set, so downloaded photos "
+            "could not be hosted. Set it, or pass --skip-photos."
+        )
     db_conn = stage_connection()
     # Snapshot BEFORE any upserts this run touch the DB -- including the
     # explicit-URL loop below -- so a genuine price change on a listing
@@ -194,6 +237,21 @@ def main() -> None:
     pinned_ids: set[str] = set(
         get_pinned_listing_ids(db_conn) | derive_pinned_ids_from_urls(config.listing_urls)
     )
+    # One read of the whole hosted index, mutated in memory as listings are
+    # scraped. This is what replaced is_scraped()'s per-listing file check:
+    # a question the database can answer, so it works with no disk at all.
+    hosted = hosted_photo_index(db_conn)
+    # Only computed when --backfill-missing asks for it; otherwise nothing is
+    # stale and the set stays empty rather than costing a statement.
+    stale_ids = (
+        set(get_listing_ids_missing_fields(db_conn, BACKFILL_FIELDS))
+        if backfill_missing else set()
+    )
+    # Only needed by the explicit-URL loop, which decides before it knows a
+    # listing's photo URLs. Skipped entirely when LISTING_URLS is unset.
+    prefetch_settled = (
+        listing_ids_with_any_hosted_or_no_urls(db_conn) if config.listing_urls else frozenset()
+    )
 
     with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
         for url in config.listing_urls:
@@ -202,25 +260,30 @@ def main() -> None:
             # detail-page branch rather than the collection one, so filtering
             # only the collection batch left every pinned listing stale.
             stale = (
-                backfill_missing
-                and precheck_id is not None
-                and needs_field_backfill(STORE_DIR, precheck_id, BACKFILL_FIELDS)
+                backfill_missing and precheck_id is not None and precheck_id in stale_ids
             )
-            if not force and not stale and precheck_id and is_scraped(STORE_DIR, precheck_id):
+            # A weak gate, and deliberately so: this runs BEFORE the detail
+            # page is fetched, so the listing's current photo URLs are not
+            # known yet. Membership means "nothing suggests work is needed";
+            # the real decision is made below, once the URLs are in hand.
+            if (
+                not force and not stale and precheck_id
+                and precheck_id in prefetch_settled
+            ):
                 print(f"skip (already scraped): {url}")
                 continue
             try:
                 listing = scrape_listing(page, url)
                 pinned_ids.add(listing.listing_id)
                 upsert_listing(db_conn, listing, is_pinned=True)
-                stale = stale or (
-                    backfill_missing
-                    and needs_field_backfill(STORE_DIR, listing.listing_id, BACKFILL_FIELDS)
-                )
-                if not force and not stale and is_scraped(STORE_DIR, listing.listing_id):
+                stale = stale or (backfill_missing and listing.listing_id in stale_ids)
+                if not should_process(
+                    force=force, scraped=not needs_photo_work(listing, hosted), stale=stale
+                ):
                     print(f"skip (already scraped): {listing.address}")
                     continue
                 _save_listing(listing, skip_photos, page)
+                record_hosted(hosted, listing)
             except Exception as exc:
                 print(f"skip listing (failed to process {url}): {exc}")
                 continue
@@ -294,7 +357,7 @@ def main() -> None:
             if new_listing_only:
                 candidates = [
                     listing for listing in candidates
-                    if not is_scraped(STORE_DIR, listing.listing_id)
+                    if needs_photo_work(listing, hosted)
                 ]
             to_process = candidates[:limit] if limit is not None else candidates
             if limit is not None:
@@ -307,7 +370,7 @@ def main() -> None:
             if backfill_missing:
                 stale = [
                     listing for listing in to_process
-                    if needs_field_backfill(STORE_DIR, listing.listing_id, BACKFILL_FIELDS)
+                    if listing.listing_id in stale_ids
                 ]
                 print(
                     f"--backfill-missing: {len(stale)} of {len(to_process)} listings "
@@ -316,11 +379,16 @@ def main() -> None:
                 to_process = stale
 
             for listing in to_process:
-                if not force and not backfill_missing and is_scraped(STORE_DIR, listing.listing_id):
+                if not should_process(
+                    force=force,
+                    scraped=not needs_photo_work(listing, hosted),
+                    stale=backfill_missing,
+                ):
                     print(f"skip (already scraped): {listing.address}")
                     continue
                 try:
                     _save_listing(listing, skip_photos, page)
+                    record_hosted(hosted, listing)
                 except Exception as exc:
                     print(f"skip listing (failed to process {listing.address}): {exc}")
                     continue
@@ -337,15 +405,22 @@ def main() -> None:
             # 1,813 orphans (~371 MB) accumulated. Absent (no token
             # configured), the URLs are printed instead of lost.
             run_delisting(
-                db_conn, PHOTOS_DIR, STORE_DIR, fetch_succeeded, report, before,
+                db_conn, PHOTOS_DIR, fetch_succeeded, report, before,
                 frozenset(pinned_ids),
                 blob_token=load_env().get("BLOB_READ_WRITE_TOKEN"),
             )
 
     _upload_photos_for(db_conn)
-    db_conn.close()
 
-    all_listings = load_all_listings(STORE_DIR)
+    # Rebuilt from Turso, not from a directory of JSON files. The old form
+    # produced a CSV and gallery containing only whatever the local store
+    # happened to hold -- a sandbox with no disk wrote a 2-listing gallery
+    # from a 100-listing corpus.
+    rows = query_listings(db_conn)
+    all_listings = listings_from_rows(
+        rows, get_amenities_by_listing(db_conn), get_photo_urls_by_listing(db_conn)
+    )
+    db_conn.close()
     write_csv(all_listings, PHOTOS_DIR, CSV_PATH)
     write_gallery(all_listings, PHOTOS_DIR, GALLERY_PATH)
 
