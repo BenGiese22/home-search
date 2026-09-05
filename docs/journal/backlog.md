@@ -186,3 +186,31 @@ A real fix needs last run's per-tab id sets to give each tab its own
 denominator: either a `source_tabs` column on `listings` (schema change,
 Turso mirror included) or a small JSON sidecar in `data/`. Not built —
 the empty-tab case is the one actually observed in the wild.
+
+## Forward the sandbox's failure tail
+
+The runner holds no Vercel credential, so nothing it prints reaches Vercel's
+logs. Its stage output lives on an ephemeral filesystem readable only by
+resuming the sandbox. When a run fails, the reason is therefore visible only
+to someone who resumes the VM and reads a file.
+
+Wholesale forwarding is not viable — runtime logs cap at 256 lines and 1 MB
+per request, which a Playwright scrape exceeds immediately. But the reaper
+already reads the `done` marker, and could read and re-emit the *tail* of the
+stage log when `exit_code != 0`. Cheap, bounded, and it would put the reason
+for a failure in the same place as the notification about it.
+
+Related: extending the `done` marker to carry stage counts (photos uploaded,
+listings scraped) so the reaper can assert on them from outside. `verify.py`
+covers the same ground from inside, which is why neither is built yet.
+
+## An external heartbeat for missed cron runs
+
+Vercel does not retry a failed cron, keeps no run history, and creates no log
+at all when a transient error stops the function executing. A run that never
+happens is invisible by construction — the platform can alert on anomalous
+presence, never on absence.
+
+An external checker pinged on successful completion would cover it. Worth
+noting honestly that this would not have caught any defect seen so far; it
+covers a class not yet hit.
