@@ -29,11 +29,9 @@ from src.db import upsert_listing
 from src.models import Listing
 from src.photos import download_photos
 from src.scraper import scrape_listing
-from src.store import save_listing
 
 DATA_DIR = Path("data")
 PHOTOS_DIR = DATA_DIR / "photos"
-STORE_DIR = DATA_DIR / "listings"
 AUTH_STATE_PATH = DATA_DIR / ".auth" / "compass_state.json"
 LOGIN_URL = "https://www.compass.com/login/"
 
@@ -362,8 +360,9 @@ def main() -> None:
                 continue
 
             print(f"assessing: {listing.address}")
+            # upsert_listing already persists it; the JSON store this used
+            # to write alongside no longer exists.
             upsert_listing(db_conn, listing, is_pinned=True)
-            save_listing(STORE_DIR, listing)
             download_photos(
                 listing.photo_urls,
                 PHOTOS_DIR / listing.listing_id,

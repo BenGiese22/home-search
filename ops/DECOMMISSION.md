@@ -163,12 +163,17 @@ rm -rf data/logs/
 
 | Path | Contains |
 |---|---|
-| `data/listings.db` | Every listing, score, and commute — plus the vision scoring |
-| `data/listings/*.json` | The JSON store; `is_scraped()` reads it to decide what to re-fetch |
-| `data/photos/` | ~1 GB of photos; re-downloading means re-scraping every listing |
+| `data/photos/` | ~1 GB of photos. A **cache**, not the only copy: every photo's source URL is in `photo_urls` and its hosted copy in `hosted_photos`, so a lost directory costs a re-download rather than data. Still expensive — that is a lot of traffic against Compass |
 | `data/.auth/compass_state.json` | The Compass session; deleting forces a cold login |
 | `data/.photo_scoring_batch_state.json` | In-flight vision batches. **Deleting this can cause the same listings to be paid for twice.** |
 | `.env` | Every credential. Gitignored, never committed, and not recoverable from the repo |
 
 `data/` is gitignored in full, so none of it is in version control. Back it
 up before any destructive step.
+
+Two entries left this table when the JSON store was retired (B3). Turso is
+the source of truth for listings, scores, commutes and vision scoring, so
+`data/listings.db` is now only the pre-cutover archive, and
+`data/listings/*.json` is an old artifact nothing reads. Neither is
+load-bearing; both can be deleted once you are confident the cutover has
+settled.
