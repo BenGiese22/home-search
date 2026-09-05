@@ -1,0 +1,187 @@
+"""The invariants a finished run must satisfy.
+
+These exist because of a failure mode this project keeps reproducing: a run
+that exits 0, returns 200, writes plausible row counts, raises nothing, and
+has quietly done the wrong thing. Three defects in a row had that shape.
+
+Every check here converts one such silence into a non-zero exit code, which
+is the signal every layer above already reacts to.
+"""
+import sqlite3
+
+import pytest
+
+from verify import (
+    CHECKS,
+    check_active_listings_have_photos,
+    check_corpus_is_not_empty,
+    check_every_listing_is_scored,
+    check_no_orphaned_children,
+    main,
+    run_checks,
+)
+from src.turso_db import ensure_schema
+
+
+@pytest.fixture
+def conn():
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    ensure_schema(c)
+    return c
+
+
+def add_listing(conn, lid, address="A House", urls=0, hosted=0, scored=True):
+    # The schema is almost entirely NOT NULL, so a fixture has to be complete.
+    conn.execute(
+        """INSERT INTO listings (
+             listing_id, address, city, state, zip_code, price, beds, baths,
+             sqft, lot_sqft, parking_spaces, year_built, description,
+             listing_url, is_pinned, property_type, localized_status
+           ) VALUES (?, ?, 'Arvada', 'CO', '80003', '$500,000', 3, 2.0,
+                     1800, 7000, 2, 1990, 'a house',
+                     'https://x/l', 0, 'Single Family', 'Active')""",
+        (lid, address),
+    )
+    for i in range(urls):
+        conn.execute(
+            "INSERT INTO photo_urls (listing_id, position, url) VALUES (?, ?, ?)",
+            (lid, i, f"https://x/{lid}/{i}"),
+        )
+    for i in range(hosted):
+        conn.execute(
+            "INSERT INTO hosted_photos (listing_id, position, blob_url) VALUES (?, ?, ?)",
+            (lid, i + 1, f"https://blob/{lid}/{i}"),
+        )
+    if scored:
+        conn.execute(
+            """INSERT INTO scores (
+                 listing_id, commute_score, sqft_score, condition_score,
+                 outdoor_score, room_count_score, parking_score, hoa_score,
+                 composite, passes_filters, has_incomplete_data, computed_at
+               ) VALUES (?, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0,
+                         50.0, 1, 0, '2026-09-05T00:00:00+00:00')""",
+            (lid,),
+        )
+    conn.commit()
+
+
+# --- the open bug this was written for ------------------------------------
+
+def test_a_listing_with_urls_but_no_hosted_photos_is_a_violation(conn):
+    """Issue #70. An orphaned pin sat in exactly this state while every run
+    reported success, because no stage is responsible for noticing that work
+    it had identified as pending never happened."""
+    add_listing(conn, "L1", "5012 West 77th Drive", urls=37, hosted=0)
+
+    v = check_active_listings_have_photos(conn)
+
+    assert v is not None
+    assert "5012 West 77th Drive" in v.rows[0]
+
+
+def test_a_fully_hosted_listing_passes(conn):
+    add_listing(conn, "L1", urls=37, hosted=37)
+    assert check_active_listings_have_photos(conn) is None
+
+
+def test_a_listing_with_no_photo_urls_at_all_is_not_a_violation(conn):
+    """Nothing to host is not the same as failing to host."""
+    add_listing(conn, "L1", urls=0, hosted=0)
+    assert check_active_listings_have_photos(conn) is None
+
+
+# --- the catastrophic case ------------------------------------------------
+
+def test_an_empty_corpus_is_a_violation(conn):
+    """The cheapest check and the worst failure. A scrape returning nothing --
+    expired session, changed selector, WAF block -- can delist everything, and
+    every stage downstream then succeeds perfectly against zero rows."""
+    assert check_corpus_is_not_empty(conn) is not None
+
+
+def test_a_populated_corpus_passes(conn):
+    add_listing(conn, "L1")
+    assert check_corpus_is_not_empty(conn) is None
+
+
+# --- scores ---------------------------------------------------------------
+
+def test_an_unscored_listing_is_a_violation(conn):
+    """The viewer ranks on scores, so a listing without a row is invisible to
+    the ordering rather than merely last."""
+    add_listing(conn, "L1", "No Score Lane", scored=False)
+
+    v = check_every_listing_is_scored(conn)
+
+    assert v is not None and "No Score Lane" in v.rows[0]
+
+
+# --- orphans --------------------------------------------------------------
+
+def test_orphaned_child_rows_are_a_violation(conn):
+    """Orphaned hosted_photos are the expensive kind: each is a blob nothing
+    will ever delete."""
+    add_listing(conn, "L1", urls=2, hosted=2)
+    conn.execute("DELETE FROM listings WHERE listing_id='L1'")
+    conn.commit()
+
+    v = check_no_orphaned_children(conn)
+
+    assert v is not None
+    assert any("hosted_photos" in row for row in v.rows)
+
+
+def test_a_consistent_database_has_no_orphans(conn):
+    add_listing(conn, "L1", urls=2, hosted=2)
+    assert check_no_orphaned_children(conn) is None
+
+
+# --- exit codes -----------------------------------------------------------
+
+def test_a_clean_database_exits_zero(conn, capsys):
+    add_listing(conn, "L1", urls=3, hosted=3)
+
+    assert main([], conn=conn) == 0
+    assert "all invariants hold" in capsys.readouterr().out
+
+
+def test_a_violation_exits_non_zero(conn):
+    """The whole point. A semantic error becomes an exit code, which
+    pipeline.py stops on, run.py records in the done marker, and the reaper
+    turns into a push notification."""
+    add_listing(conn, "L1", urls=37, hosted=0)
+
+    assert main([], conn=conn) == 1
+
+
+def test_warn_mode_reports_without_failing(conn, capsys):
+    """For a first deploy, where the invariants are known to be violated by
+    pre-existing data and failing every run would just train people to ignore
+    it."""
+    add_listing(conn, "L1", urls=37, hosted=0)
+
+    assert main(["--warn"], conn=conn) == 0
+    assert "not failing the run" in capsys.readouterr().out
+
+
+def test_every_check_is_registered(conn):
+    """A check that exists but is not in CHECKS runs never and protects
+    nothing."""
+    import verify
+
+    defined = {
+        v for k, v in vars(verify).items()
+        if k.startswith("check_") and callable(v)
+    }
+    assert defined == set(CHECKS)
+
+
+def test_checks_report_each_result_by_name(conn, capsys):
+    add_listing(conn, "L1", urls=1, hosted=1)
+
+    run_checks(conn)
+
+    out = capsys.readouterr().out
+    for check in CHECKS:
+        assert check.__name__ in out

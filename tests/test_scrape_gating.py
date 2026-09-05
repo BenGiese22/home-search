@@ -153,3 +153,48 @@ def test_the_scrapes_database_work_does_not_grow_with_the_corpus():
 
     assert counts[5] == counts[50], f"database work grew with the corpus: {counts}"
     assert counts[50] <= 10, f"{counts[50]} statements is more than the budget allows"
+
+
+def test_orphan_ids_reads_the_skip_set_once(monkeypatch):
+    """One statement, not one per listing.
+
+    Every statement against hosted Turso is a ~240ms round-trip. Calling the
+    skip-set query inside the comprehension would have made this O(corpus)
+    round-trips -- the exact shape this project has a standing rule against.
+    """
+    import scrape
+
+    calls = {"skip_set": 0}
+    monkeypatch.setattr(scrape, "get_listing_ids_missing_fields", lambda *a: [])
+    monkeypatch.setattr(
+        scrape, "query_listings",
+        lambda *a: [{"listing_id": f"L{i}"} for i in range(50)],
+    )
+
+    def counting_skip_set(_conn):
+        calls["skip_set"] += 1
+        return frozenset()
+
+    monkeypatch.setattr(scrape, "listing_ids_with_any_hosted_or_no_urls", counting_skip_set)
+
+    ids = scrape.orphan_ids(object())
+
+    assert len(ids) == 50
+    assert calls["skip_set"] == 1
+
+
+def test_orphan_ids_includes_a_listing_owed_photos(monkeypatch):
+    """Issue #70: a listing with photo URLs and no hosted photos is not in the
+    skip set, and until now nothing iterated the difference."""
+    import scrape
+
+    monkeypatch.setattr(scrape, "get_listing_ids_missing_fields", lambda *a: [])
+    monkeypatch.setattr(
+        scrape, "query_listings",
+        lambda *a: [{"listing_id": "owed"}, {"listing_id": "done"}],
+    )
+    monkeypatch.setattr(
+        scrape, "listing_ids_with_any_hosted_or_no_urls", lambda *a: frozenset({"done"})
+    )
+
+    assert scrape.orphan_ids(object()) == {"owed"}
