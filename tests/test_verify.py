@@ -13,6 +13,7 @@ import pytest
 
 from verify import (
     CHECKS,
+    check_addresses_are_unique,
     check_active_listings_have_photos,
     check_corpus_is_not_empty,
     check_every_listing_is_scored,
@@ -185,3 +186,24 @@ def test_checks_report_each_result_by_name(conn, capsys):
     out = capsys.readouterr().out
     for check in CHECKS:
         assert check.__name__ in out
+
+
+def test_two_listings_at_one_address_is_a_violation(conn):
+    """Two rows for one address means Compass reissued the listing under a
+    new id -- a relist. The cost is not cosmetic: the duplicate is scored
+    separately, appears twice in the ranking, and has been paid for twice at
+    the vision API, because visual_scores is keyed on listing_id and knows
+    nothing about addresses."""
+    add_listing(conn, "old", "12651 James Circle")
+    add_listing(conn, "new", "12651 James Circle")
+
+    v = check_addresses_are_unique(conn)
+
+    assert v is not None
+    assert "12651 James Circle" in v.rows[0]
+
+
+def test_distinct_addresses_pass(conn):
+    add_listing(conn, "a", "1 Main St")
+    add_listing(conn, "b", "2 Oak Ave")
+    assert check_addresses_are_unique(conn) is None

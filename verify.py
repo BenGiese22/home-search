@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from src.config import load_env  # noqa: F401  (kept for .env side effects)
+from src.db import duplicate_address_groups
 from src.turso_db import stage_connection
 
 
@@ -114,11 +115,34 @@ def check_corpus_is_not_empty(conn) -> Violation | None:
     return Violation("empty_corpus", "the listings table is empty", [])
 
 
+def check_addresses_are_unique(conn) -> Violation | None:
+    """One property, one row.
+
+    Two rows for one address means Compass reissued the listing under a new
+    id -- a relist -- and nothing recognised it as the same house. The cost is
+    not cosmetic: the duplicate is scored separately and appears twice in the
+    ranking, and it has been paid for twice at the vision API, because
+    visual_scores is keyed on listing_id and knows nothing about addresses.
+
+    Found by accident during unrelated work, which is the reason this check
+    exists: nothing was watching for it.
+    """
+    groups = duplicate_address_groups(conn)
+    if not groups:
+        return None
+    return Violation(
+        "duplicate_addresses",
+        f"{len(groups)} address(es) held by more than one listing",
+        [f"{address}: {', '.join(ids)}" for address, ids in groups],
+    )
+
+
 CHECKS: tuple[Callable, ...] = (
     check_corpus_is_not_empty,
     check_active_listings_have_photos,
     check_every_listing_is_scored,
     check_no_orphaned_children,
+    check_addresses_are_unique,
 )
 
 
