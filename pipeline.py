@@ -36,7 +36,7 @@ import subprocess
 import sys
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -62,6 +62,10 @@ class Stage:
     name: str
     script: str
     takes_scrape_flags: bool = False
+    # Flags this stage accepts, keyed by the pipeline flag that turns them on.
+    # Generalises what takes_scrape_flags does for scrape: a caller needs a way
+    # to reach one stage's options without every stage seeing every flag.
+    forwards: dict[str, str] = field(default_factory=dict)
 
 
 # publish.py is gone: the stages write Turso directly, so there is nothing
@@ -69,7 +73,12 @@ class Stage:
 # data changed -- is the revalidate POST at the end of run_pipeline().
 STAGES: tuple[Stage, ...] = (
     Stage("scrape", "scrape.py", takes_scrape_flags=True),
-    Stage("commutes", "compute_commutes.py"),
+    # --force-commutes recomputes every listing rather than only the ones
+    # missing a usable row. Nothing else invalidates a commute row, so this is
+    # the only way to re-measure the corpus after changing how commutes are
+    # computed -- and it has to run inside a full pipeline rather than alone,
+    # or `scores` keeps the durations the old measurement produced.
+    Stage("commutes", "compute_commutes.py", forwards={"--force-commutes": "--force"}),
     Stage("score-photos", "score_photos.py"),
     Stage("score", "score.py"),
     # Last, and deliberately able to fail the run.
@@ -97,6 +106,22 @@ def build_plan(only=None, start_from=None) -> list[Stage]:
     if start_from:
         stages = stages[STAGE_NAMES.index(start_from):]
     return stages
+
+
+def _forwarded(stage: Stage, requested) -> list[str]:
+    """The stage-specific flags a caller asked for, in declaration order."""
+    return [flag for trigger, flag in stage.forwards.items() if trigger in requested]
+
+
+def _collect_forwarded(argv) -> list[str]:
+    """The stage triggers present on the command line.
+
+    Separate from SCRAPE_FLAGS on purpose: those are matched by exact name
+    and by prefix, and SCRAPE_FLAGS already contains --force. A trigger has
+    to be its own word (--force-commutes) so neither list claims the other's
+    flag.
+    """
+    return [trigger for stage in STAGES for trigger in stage.forwards if trigger in argv]
 
 
 def is_fresh(marker: Path, max_age_hours: float) -> bool:
@@ -188,6 +213,7 @@ def run_pipeline(
     revalidate_fn=None,
     renew_lease=None,
     notify_fn=None,
+    forwarded=(),
 ) -> int:
     # Late-bound rather than default arguments so tests (and any caller) can
     # substitute them by patching the module attribute.
@@ -222,6 +248,7 @@ def run_pipeline(
             argv = [sys.executable, stage.script]
             if stage.takes_scrape_flags:
                 argv += scrape_flags
+            argv += _forwarded(stage, forwarded)
             print(f"  would run: {' '.join(argv)}")
         return 0
 
@@ -253,6 +280,7 @@ def run_pipeline(
         argv = [sys.executable, stage.script]
         if stage.takes_scrape_flags:
             argv += scrape_flags
+        argv += _forwarded(stage, forwarded)
         started = time.monotonic()
         print(f"[{stage.name}] {' '.join(argv)}", flush=True)
         code = runner(argv, log_handle=log_handle)
@@ -316,6 +344,7 @@ def main() -> int:
         print(f"pipeline: {exc}")
         return 2
 
+    forwarded = _collect_forwarded(argv)
     scrape_flags = [a for a in argv if a in SCRAPE_FLAGS]
     scrape_flags += [a for a in argv if a.startswith(SCRAPE_FLAG_PREFIXES)]
     dry_run = "--dry-run" in argv
@@ -323,7 +352,9 @@ def main() -> int:
 
     if dry_run:
         print("pipeline --dry-run:")
-        return run_pipeline(stages, scrape_flags=scrape_flags, dry_run=True)
+        return run_pipeline(
+            stages, scrape_flags=scrape_flags, dry_run=True, forwarded=forwarded
+        )
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     lock_file = LOCK_PATH.open("w")
@@ -372,6 +403,7 @@ def main() -> int:
                 marker=MARKER_PATH,
                 max_age_hours=max_age_hours,
                 log_handle=log_handle,
+                forwarded=forwarded,
                 renew_lease=lambda: renew_pipeline_lease(lease_conn, lease_token),
             )
     except Skipped as exc:
