@@ -1,5 +1,7 @@
 # score_photos.py
 import json
+import os
+import socket
 import sys
 import time
 from pathlib import Path
@@ -11,6 +13,9 @@ from anthropic.types.messages.batch_create_params import Request
 from src.config import load_env
 from src.turso_db import stage_connection
 from src.db import (
+    clear_vision_batch,
+    load_vision_batches,
+    record_vision_batch,
     get_amenities,
     get_listing_ids_missing_visual_score,
     query_listings,
@@ -65,24 +70,47 @@ REQUEST_OVERHEAD_BYTES = 5_000
 # regardless of how far a prior run got before crashing -- and listing_ids
 # already covered by an already-submitted batch are excluded from what still
 # needs submitting on resume, so nothing is submitted (and paid for) twice.
-BATCH_STATE_PATH = DATA_DIR / ".photo_scoring_batch_state.json"
+# It used to live here, as a file. It now lives in Turso -- see
+# src/db.py's load_vision_batches for why: a file can only ever protect one
+# machine, and both execution homes share one database, so a laptop run
+# interrupted mid-batch would leave a cloud run free to resubmit and pay
+# again. This path survives only so a legacy file can be migrated once.
+LEGACY_BATCH_STATE_PATH = DATA_DIR / ".photo_scoring_batch_state.json"
 
 
-def _load_checkpoint() -> list[dict]:
-    if not BATCH_STATE_PATH.exists():
-        return []
-    return json.loads(BATCH_STATE_PATH.read_text())
+def _this_home() -> str:
+    """Which execution home submitted a batch. Recorded so an operator can
+    tell where an in-flight batch came from."""
+    return os.environ.get("HOME_SEARCH_HOME") or socket.gethostname()
 
 
-def _append_checkpoint(batch_id: str, garage_expected_by_id: dict[str, bool]) -> None:
-    batches = _load_checkpoint()
-    batches.append({"batch_id": batch_id, "garage_expected_by_id": garage_expected_by_id})
-    BATCH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    BATCH_STATE_PATH.write_text(json.dumps(batches))
+def _migrate_legacy_checkpoint(conn) -> None:
+    """Import a pre-Turso checkpoint file exactly once, then rename it.
 
-
-def _clear_checkpoint() -> None:
-    BATCH_STATE_PATH.unlink(missing_ok=True)
+    Deleting it outright would be wrong: if the import fails halfway, the
+    file is the only record that money was already spent. Renaming leaves it
+    recoverable and stops it being read again.
+    """
+    if not LEGACY_BATCH_STATE_PATH.exists():
+        return
+    try:
+        entries = json.loads(LEGACY_BATCH_STATE_PATH.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"warning: could not read {LEGACY_BATCH_STATE_PATH} ({exc}); leaving it alone")
+        return
+    known = {batch["batch_id"] for batch in load_vision_batches(conn)}
+    imported = 0
+    for entry in entries:
+        if entry["batch_id"] in known:
+            continue
+        record_vision_batch(
+            conn, entry["batch_id"], entry["garage_expected_by_id"], "legacy-file"
+        )
+        imported += 1
+    LEGACY_BATCH_STATE_PATH.rename(
+        LEGACY_BATCH_STATE_PATH.with_suffix(".json.migrated")
+    )
+    print(f"migrated {imported} batch(es) from {LEGACY_BATCH_STATE_PATH} into Turso")
 
 
 def _chunk_by_size(entries: list[tuple], max_bytes: int) -> list[list[tuple]]:
@@ -269,15 +297,16 @@ def main() -> None:
 
     # Batches already submitted (this run or a prior, interrupted one) --
     # trusted as-is, never recomputed from the DB's current state. See the
-    # comment on BATCH_STATE_PATH for why that distinction matters.
-    submitted_batches = _load_checkpoint()
+    # comment on load_vision_batches in src/db.py for why that matters.
+    _migrate_legacy_checkpoint(conn)
+    submitted_batches = load_vision_batches(conn)
     already_submitted_ids = {
         listing_id
         for batch_entry in submitted_batches
         for listing_id in batch_entry["garage_expected_by_id"]
     }
     if submitted_batches:
-        print(f"resuming {len(submitted_batches)} already-submitted batch(es) (found {BATCH_STATE_PATH})")
+        print(f"resuming {len(submitted_batches)} already-submitted batch(es) from Turso")
 
     listings_by_id = {row["listing_id"]: row for row in query_listings(conn)}
     # --rescore-all re-scores every listing, not just those without a score.
@@ -328,7 +357,7 @@ def main() -> None:
             chunk_garage_expected = {entry[0]: entry[2] for entry in chunk}
             chunk_bytes = sum(entry[3] for entry in chunk)
             batch = client.messages.batches.create(requests=chunk_requests)
-            _append_checkpoint(batch.id, chunk_garage_expected)
+            record_vision_batch(conn, batch.id, chunk_garage_expected, _this_home())
             submitted_batches.append(
                 {"batch_id": batch.id, "garage_expected_by_id": chunk_garage_expected}
             )
@@ -359,6 +388,10 @@ def main() -> None:
                 _process_batch_results(
                     client, conn, batch_id, batch_entry["garage_expected_by_id"]
                 )
+                # Cleared per batch, the moment its results land -- not all
+                # at the end. A crash between two batches must not make this
+                # one look unprocessed and get resubmitted.
+                clear_vision_batch(conn, batch_id)
             else:
                 still_pending.append(batch_entry)
         pending_batches = still_pending
@@ -369,7 +402,6 @@ def main() -> None:
             )
             time.sleep(POLL_INTERVAL_SECONDS)
 
-    _clear_checkpoint()
     conn.close()
 
 
