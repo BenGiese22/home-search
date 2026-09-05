@@ -10,7 +10,6 @@ from src.scraper import derive_pinned_ids_from_urls, fetch_collection_tabs
 
 DATA_DIR = Path("data")
 PHOTOS_DIR = DATA_DIR / "photos"
-STORE_DIR = DATA_DIR / "listings"
 AUTH_STATE_PATH = DATA_DIR / ".auth" / "compass_state.json"
 LOGIN_URL = "https://www.compass.com/login/"
 
@@ -66,7 +65,7 @@ def main() -> None:
 
     report = compute_changes(present, before, pinned_ids=pinned_ids)
     run_delisting(
-        db_conn, PHOTOS_DIR, STORE_DIR, fetch_succeeded, report, before, pinned_ids,
+        db_conn, PHOTOS_DIR, fetch_succeeded, report, before, pinned_ids,
         # Without this, a delisting that happens to run through check.py
         # deletes the hosted_photos rows and strands their blobs -- the same
         # asymmetry that let 1,813 orphans accumulate when bulk_delete_listings
