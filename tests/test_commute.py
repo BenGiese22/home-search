@@ -1,6 +1,14 @@
 import pytest
 
-from src.commute import CommuteResult, compute_commute, geocode, resolve_destination, route_miles_minutes
+from src.commute import (
+    CommuteResult,
+    compute_commute,
+    geocode,
+    geocode_census,
+    geocode_with_fallback,
+    resolve_destination,
+    route_miles_minutes,
+)
 
 DENVER = (39.7527, -105.0016)
 MEDTRONIC = (39.9997, -105.0908)
@@ -126,3 +134,64 @@ def test_compute_commute_marks_failed_when_a_route_fails():
     assert result.geocode_failed is True
     assert result.denver_miles == 5.0
     assert result.medtronic_miles is None
+
+
+# --- Census fallback -------------------------------------------------------
+
+CENSUS_HIT = {
+    "result": {
+        "addressMatches": [
+            {"coordinates": {"x": -105.10862, "y": 39.88788}}
+        ]
+    }
+}
+
+
+def test_census_reads_lat_from_y_and_lon_from_x():
+    """Census names its coordinates x/y, not lon/lat. Reading them in the
+    obvious order puts every Colorado listing in Kazakhstan."""
+    assert geocode_census("10538 Kipling Place", lambda _u: CENSUS_HIT) == (
+        39.88788,
+        -105.10862,
+    )
+
+
+def test_census_returns_none_for_no_match():
+    assert geocode_census("nowhere", lambda _u: {"result": {"addressMatches": []}}) is None
+
+
+def test_census_survives_an_unexpected_payload():
+    for payload in ({}, {"result": {}}, {"result": {"addressMatches": [{}]}}):
+        assert geocode_census("x", lambda _u, p=payload: p) is None
+
+
+def test_fallback_is_not_called_when_the_primary_succeeds():
+    """Nominatim stays primary because Census cannot resolve a POI name, and
+    the destinations are POI names."""
+    calls = []
+    coords, used = geocode_with_fallback(
+        "somewhere",
+        lambda _a: (1.0, 2.0),
+        lambda a: calls.append(a),
+    )
+    assert coords == (1.0, 2.0)
+    assert used is False
+    assert calls == []
+
+
+def test_fallback_runs_when_the_primary_returns_nothing():
+    coords, used = geocode_with_fallback(
+        "9313 West 91st Place",
+        lambda _a: None,
+        lambda _a: (39.86278, -105.10381),
+    )
+    assert coords == (39.86278, -105.10381)
+    assert used is True
+
+
+def test_both_failing_reports_the_fallback_was_tried():
+    """used_fallback is about which path ran, not whether it worked -- a run
+    needs to distinguish 'Nominatim is fine' from 'both geocoders failed'."""
+    coords, used = geocode_with_fallback("x", lambda _a: None, lambda _a: None)
+    assert coords is None
+    assert used is True

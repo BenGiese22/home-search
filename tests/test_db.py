@@ -830,3 +830,27 @@ def test_missing_commute_can_skip_retries_when_asked(tmp_path: Path):
     upsert_listing(conn, SAMPLE)
     _commute_row(conn, "abc123", failed=True, minutes=None)
     assert get_listing_ids_missing_commute(conn, retry_failed=False) == []
+
+
+def test_force_returns_every_listing_even_when_already_computed(tmp_path: Path):
+    """Nothing else invalidates a commute row -- no TTL, no source check --
+    so a complete row computed under an old provider is never re-selected
+    and keeps its stale duration forever. --force is the only way to
+    re-measure a corpus after changing how commutes are computed."""
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    _commute_row(conn, "abc123", failed=False, minutes=18.0)
+
+    assert get_listing_ids_missing_commute(conn) == []
+    assert get_listing_ids_missing_commute(conn, force=True) == ["abc123"]
+
+
+def test_force_overrides_only_new(tmp_path: Path):
+    """--force and --only-new are contradictory; force wins rather than
+    silently narrowing to nothing."""
+    conn = get_connection(_db_path(tmp_path))
+    upsert_listing(conn, SAMPLE)
+    _commute_row(conn, "abc123", failed=False, minutes=18.0)
+
+    assert get_listing_ids_missing_commute(conn, retry_failed=False) == []
+    assert get_listing_ids_missing_commute(conn, retry_failed=False, force=True) == ["abc123"]
