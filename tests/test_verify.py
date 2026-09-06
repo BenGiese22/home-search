@@ -14,6 +14,7 @@ import pytest
 from verify import (
     CHECKS,
     check_addresses_are_unique,
+    check_properties_are_unique,
     check_active_listings_have_photos,
     check_corpus_is_not_empty,
     check_every_listing_is_scored,
@@ -315,3 +316,53 @@ def test_an_empty_commute_table_does_not_fail_uniformity_on_its_own(conn):
     """With no listings there is nothing to be inconsistent about, and the
     empty-corpus check already speaks to that case."""
     assert [v.check for v in run_checks(conn)] == ["empty_corpus"]
+
+
+def test_two_listings_sharing_a_property_id_are_a_violation(conn):
+    """Compass's own answer to "same house". Unlike the address check this
+    has no false-positive case -- a duplex shares an address, never a
+    property id."""
+    add_listing(conn, "L1", address="12651 James Circle", urls=3, hosted=3)
+    add_listing(conn, "L2", address="12651 James Cir", urls=3, hosted=3)
+    for lid in ("L1", "L2"):
+        conn.execute(
+            "INSERT INTO property_ids (listing_id, property_id, resolved_at)"
+            " VALUES (?, '131FZM', '2026-09-06T00:00:00+00:00')",
+            (lid,),
+        )
+    conn.commit()
+
+    violations = run_checks(conn)
+
+    assert [v.check for v in violations] == ["duplicate_properties"]
+    assert "131FZM" in violations[0].rows[0]
+
+
+def test_a_relist_that_changed_its_address_text_is_invisible_to_the_address_check(conn):
+    """The reason the property-id check exists. "James Cir" for "James
+    Circle" is enough to hide a duplicate from every address-based check."""
+    add_listing(conn, "L1", address="12651 James Circle", urls=3, hosted=3)
+    add_listing(conn, "L2", address="12651 James Cir", urls=3, hosted=3)
+
+    assert check_addresses_are_unique(conn) is None
+
+
+def test_a_duplex_does_not_violate_the_property_check(conn):
+    add_listing(conn, "L1", address="100 Duplex Way", urls=3, hosted=3)
+    add_listing(conn, "L2", address="100 Duplex Way", urls=3, hosted=3)
+    for lid, pid in (("L1", "AAA"), ("L2", "BBB")):
+        conn.execute(
+            "INSERT INTO property_ids (listing_id, property_id, resolved_at)"
+            " VALUES (?, ?, '2026-09-06T00:00:00+00:00')",
+            (lid, pid),
+        )
+    conn.commit()
+
+    assert check_properties_are_unique(conn) is None
+
+
+def test_unresolved_listings_assert_nothing(conn):
+    add_listing(conn, "L1", address="One", urls=3, hosted=3)
+    add_listing(conn, "L2", address="Two", urls=3, hosted=3)
+
+    assert check_properties_are_unique(conn) is None

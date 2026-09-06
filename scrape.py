@@ -10,7 +10,7 @@ from src.config import load_config, load_env
 from src.turso_db import stage_connection
 from src.csv_writer import write_csv
 from src.db import (
-    find_relisted,
+    find_relisted_all,
     bulk_upsert_listings,
     get_amenities_by_listing,
     get_listing_ids_missing_fields,
@@ -19,10 +19,12 @@ from src.db import (
     get_price_snapshot,
     hosted_photo_index,
     listing_ids_with_any_hosted_or_no_urls,
+    listing_ids_missing_property_id,
     listings_from_rows,
     needs_photo_work,
     query_listings,
     upsert_listing,
+    upsert_property_id,
 )
 from src.diff import (
     collection_fetch_is_trustworthy,
@@ -34,6 +36,7 @@ from src.gallery import write_gallery
 from src.models import Listing, select_present_listings
 from src.photo_upload import upload_photos
 from src.photos import download_photos
+from src.property_id import resolve_property_id
 from src.scraper import (
     derive_listing_id_from_url,
     derive_pinned_ids_from_urls,
@@ -58,6 +61,55 @@ PHOTO_JITTER_MAX_SECONDS = 0.5
 
 def _photo_jitter() -> None:
     time.sleep(random.uniform(PHOTO_JITTER_MIN_SECONDS, PHOTO_JITTER_MAX_SECONDS))
+
+
+def _build_head_request(page: Page):
+    """A HEAD that does not follow redirects, through the authenticated page.
+
+    Same reasoning as _build_fetch_bytes: reusing the browser session's
+    cookies and TLS fingerprint means this looks like the site being used,
+    not a separate script hitting it from the same IP.
+
+    max_redirects=0 is the whole point -- the answer we want IS the redirect.
+    Following it would fetch a megabyte of HTML to learn something the
+    Location header already said.
+    """
+
+    def http_head(url: str):
+        response = page.request.head(url, max_redirects=0)
+        return response.status, response.headers
+
+    return http_head
+
+
+def _resolve_property_ids(db_conn, page) -> None:
+    """Cache Compass's stable property id for any listing lacking one.
+
+    A listing id is disposable -- relisting a house mints a new one -- while
+    the property id survives, which makes it the only non-heuristic answer to
+    "are these two rows the same house". Every listing URL 301-redirects to
+    the canonical property URL, so one HEAD per listing buys it.
+
+    Cheap because it is cached and a property id cannot change: a listing
+    pays once, ever. A steady-state run resolves only what arrived since the
+    last one, which is usually nothing.
+
+    Never fatal. An unresolved listing falls back to the address rule, which
+    is what ran before this existed.
+    """
+    missing = listing_ids_missing_property_id(db_conn)
+    if not missing:
+        return
+    urls = {row["listing_id"]: row["listing_url"] for row in query_listings(db_conn)}
+    http_head = _build_head_request(page)
+    resolved = 0
+    for listing_id in missing:
+        _photo_jitter()
+        property_id = resolve_property_id(urls.get(listing_id) or "", http_head)
+        if property_id:
+            upsert_property_id(db_conn, listing_id, property_id)
+            resolved += 1
+    print(f"property ids: resolved {resolved}/{len(missing)}")
 
 
 def _build_fetch_bytes(page: Page):
@@ -462,9 +514,12 @@ def main() -> None:
             # failed tab makes "not in this fetch" mean nothing, and this
             # deletes rows.
             if fetch_succeeded:
+                # Before the supersession, so a listing that arrived this run
+                # is matched on its property id rather than only its address.
+                _resolve_property_ids(db_conn, page)
                 supersede_relisted(
                     db_conn,
-                    find_relisted(
+                    find_relisted_all(
                         db_conn,
                         {listing.listing_id for listing in present_listings},
                     ),
