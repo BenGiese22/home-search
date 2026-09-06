@@ -1492,6 +1492,91 @@ def upsert_visual_score(
         )
 
 
+# How much of two listings' photography has to be shared before a vision
+# score computed for one can be trusted for the other.
+#
+# The asymmetry is the whole reason there is a threshold rather than a plain
+# copy. Carrying a score we should not have carried leaves a house ranked on
+# how it used to look -- and a relist often happens BECAUSE something changed,
+# so a re-photographed listing is exactly the case where the old condition
+# score is wrong in the direction that hides a good house. Re-scoring when we
+# needn't have costs one vision call. The goal is finding a house, so the bar
+# is set where a miss is unlikely rather than where the spend is lowest.
+PHOTO_OVERLAP_TO_CARRY = 0.8
+
+
+def photo_url_overlap(conn, a_id: str, b_id: str) -> float:
+    """The share of the smaller photo set that both listings have in common.
+
+    Measured against the smaller set rather than the union, because Compass
+    re-uploading the same twenty photographs plus four new ones is the same
+    photography -- a plain Jaccard scores that 0.83 and re-buys it.
+
+    Compares the source URLs from the scrape, so this is an identity test on
+    the actual image files, not a guess from counts.
+    """
+    def urls(listing_id):
+        return {
+            row[0]
+            for row in conn.execute(
+                "SELECT url FROM photo_urls WHERE listing_id = ?", (listing_id,)
+            )
+        }
+
+    a, b = urls(a_id), urls(b_id)
+    if not a or not b:
+        # Zero, not one. An empty set is trivially a subset of anything, and
+        # 1.0 here would carry a score onto a listing whose photographs
+        # nothing has ever seen.
+        return 0.0
+    return len(a & b) / min(len(a), len(b))
+
+
+def carry_visual_score(conn, from_id: str, to_id: str) -> bool:
+    """Move a paid-for vision score onto a relisted listing. Returns whether
+    it was carried.
+
+    A relist is the same house under a new listing id, so the superseded
+    row's score describes the survivor -- provided it describes the same
+    photographs, which is what the overlap gate checks.
+
+    Declines in three cases, each for its own reason:
+
+    - the photo sets have diverged (see PHOTO_OVERLAP_TO_CARRY)
+    - the score is a recorded failure, where copying it forward buys nothing
+      and suppresses the retry that would fix it
+    - the survivor already has its own score, which was computed from its own
+      photographs and is by definition the newer measurement
+
+    `computed_at` is deliberately not restamped. It answers "when did we look
+    at these photographs", and copying the row does not change the answer.
+    """
+    existing = conn.execute(
+        "SELECT 1 FROM visual_scores WHERE listing_id = ?", (to_id,)
+    ).fetchone()
+    if existing:
+        return False
+
+    source = conn.execute(
+        "SELECT * FROM visual_scores WHERE listing_id = ?", (from_id,)
+    ).fetchone()
+    if source is None or source["photo_score_unavailable"]:
+        return False
+
+    if photo_url_overlap(conn, from_id, to_id) < PHOTO_OVERLAP_TO_CARRY:
+        return False
+
+    columns = [k for k in source.keys() if k != "listing_id"]
+    placeholders = ", ".join("?" * (len(columns) + 1))
+    with conn:
+        conn.execute(
+            f"INSERT INTO visual_scores (listing_id, {', '.join(columns)})"
+            f" VALUES ({placeholders})",
+            [to_id, *[source[c] for c in columns]],
+        )
+    return True
+
+
 def get_visual_score(conn: sqlite3.Connection, listing_id: str) -> sqlite3.Row | None:
     return conn.execute(
         "SELECT * FROM visual_scores WHERE listing_id = ?", (listing_id,)

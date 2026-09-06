@@ -19,6 +19,7 @@ from src.db import (
     find_relisted_by_property_id,
     listing_ids_missing_property_id,
     upsert_property_id,
+    upsert_visual_score,
 )
 from src.diff import supersede_relisted
 from src.turso_db import ensure_schema
@@ -350,3 +351,76 @@ def test_only_unresolved_listings_are_selected_for_lookup(conn):
     pid(conn, "known", "P1")
 
     assert listing_ids_missing_property_id(conn) == ["fresh"]
+
+
+# --- the vision score survives the supersession --------------------------
+#
+# apply_delisting takes the whole child cascade with it, and visual_scores is
+# the one child row that cost money to produce. Three relists so far means
+# three houses re-photographed by the vision API for no new information.
+
+
+def _photos(conn, lid, urls):
+    for i, url in enumerate(urls):
+        conn.execute(
+            "INSERT INTO photo_urls (listing_id, position, url) VALUES (?, ?, ?)",
+            (lid, i, url),
+        )
+    conn.commit()
+
+
+def _score(conn, lid, condition=82.0):
+    from src.vision import VisualScoreResult
+
+    upsert_visual_score(
+        conn,
+        lid,
+        VisualScoreResult(condition_photo_score=condition, outdoor_photo_score=71.0),
+    )
+
+
+_SHARED = [f"https://cdn/{i}.jpg" for i in range(10)]
+
+
+def test_superseding_a_relist_carries_its_vision_score(conn):
+    add(conn, "old")
+    add(conn, "new")
+    _photos(conn, "old", _SHARED)
+    _photos(conn, "new", _SHARED)
+    _score(conn, "old", condition=82.0)
+
+    supersede_relisted(
+        conn,
+        [("12651 James Circle", "new", "old")],
+        photos_dir=Path("/tmp/nonexistent"),
+        delete_fn=lambda urls, token: None,
+    )
+
+    survivor = conn.execute(
+        "SELECT condition_photo_score FROM visual_scores WHERE listing_id = 'new'"
+    ).fetchone()
+    assert survivor is not None, "the paid-for score was deleted with the old row"
+    assert survivor[0] == 82.0
+    assert conn.execute("SELECT COUNT(*) FROM listings WHERE listing_id='old'").fetchone()[0] == 0
+
+
+def test_a_reshot_relist_is_left_to_be_scored_again(conn):
+    """The carry-over must not outrank the reason to re-look. A relist after
+    a renovation has new photographs, and the old condition score would keep
+    the house ranked on how it used to be."""
+    add(conn, "old")
+    add(conn, "new")
+    _photos(conn, "old", _SHARED)
+    _photos(conn, "new", [f"https://cdn/reshoot-{i}.jpg" for i in range(10)])
+    _score(conn, "old")
+
+    supersede_relisted(
+        conn,
+        [("12651 James Circle", "new", "old")],
+        photos_dir=Path("/tmp/nonexistent"),
+        delete_fn=lambda urls, token: None,
+    )
+
+    assert conn.execute(
+        "SELECT COUNT(*) FROM visual_scores WHERE listing_id = 'new'"
+    ).fetchone()[0] == 0

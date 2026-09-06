@@ -4,7 +4,12 @@ from pathlib import Path
 from typing import Callable
 
 from src.blob_upload import delete_blobs
-from src.db import bulk_delete_listings, delete_listing, parse_price
+from src.db import (
+    bulk_delete_listings,
+    carry_visual_score,
+    delete_listing,
+    parse_price,
+)
 from src.models import Listing
 from src.photos import delete_photos
 
@@ -261,6 +266,11 @@ def supersede_relisted(
     exempt from it regardless. The two rows then coexist -- one property
     scored twice, ranked twice, and paid for twice at the vision API.
 
+    The vision score is carried onto the survivor first, when the two share
+    the same photographs. Without that, superseding a relist re-buys a look
+    at photographs we have already paid to look at -- and the survivor spends
+    a run scoring on the neutral fallback while it waits for a batch.
+
     Reuses run_delisting's blob handling rather than calling delete_listing
     directly, and that is not incidental. hosted_photos.blob_url is the ONLY
     record of an uploaded image, so the URLs have to be read before the rows
@@ -269,9 +279,15 @@ def supersede_relisted(
     """
     if not relists:
         return []
-    for address, keep, drop in relists:
-        print(f"relist: {address} -- {drop} superseded by {keep}")
-    doomed = [drop for _address, _keep, drop in relists]
+    for label, keep, drop in relists:
+        print(f"relist: {label} -- {drop} superseded by {keep}")
+        # Before the delete, not after: apply_delisting takes the whole child
+        # cascade with it, and visual_scores is the one child row that cost
+        # money to produce. Carried only when the two listings share the same
+        # photographs -- carry_visual_score owns that judgement.
+        if carry_visual_score(conn, drop, keep):
+            print(f"  carried the vision score from {drop} (same photographs)")
+    doomed = [drop for _label, _keep, drop in relists]
     apply_delisting(
         conn, photos_dir, doomed, blob_token=blob_token, delete_fn=delete_fn
     )
