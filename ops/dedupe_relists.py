@@ -20,7 +20,9 @@ printed rather than assumed:
 Both are tiebreaks, not evidence. Anything less clear-cut than these should
 be looked at by a person, which is why this prints and requires --apply.
 
-Deletion goes through src/diff.apply_delisting, never delete_listing:
+Deletion goes through src/diff.supersede_relisted, which reclaims the blobs
+and carries the vision score onto the survivor when the two listings share
+the same photographs. Never delete_listing:
 hosted_photos.blob_url is the only record of an uploaded image, so the URLs
 have to be read before the rows go. tests/test_delete_paths.py enforces
 that, and this module is subject to it.
@@ -33,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import load_env
 from src.db import duplicate_address_groups
-from src.diff import apply_delisting
+from src.diff import supersede_relisted
 from src.turso_db import stage_connection
 
 PHOTOS_DIR = Path("data") / "photos"
@@ -72,7 +74,7 @@ def main() -> int:
         print("no duplicate addresses")
         return 0
 
-    doomed = []
+    relists = []
     for address, ids in groups:
         print(f"\n{address}")
         for i in ids:
@@ -88,17 +90,22 @@ def main() -> int:
             print(f"  SKIP: {exc}")
             continue
         print(f"  -> keep {keep}, drop {drop} ({why})")
-        doomed.append(drop)
+        relists.append((address, keep, drop))
 
-    if not doomed:
+    if not relists:
         return 0
     if not apply:
-        print(f"\n{len(doomed)} row(s) would be removed. Re-run with --apply.")
+        print(f"\n{len(relists)} row(s) would be removed. Re-run with --apply.")
         return 0
 
-    print(f"\nremoving {len(doomed)} row(s), reclaiming their blobs")
-    apply_delisting(
-        conn, PHOTOS_DIR, doomed,
+    print(f"\nremoving {len(relists)} row(s), reclaiming their blobs")
+    # Through supersede_relisted rather than apply_delisting directly, so this
+    # inherits the vision-score carry-over. Deleting a paid-for score by hand
+    # is the same waste whether a cron or a person does it.
+    supersede_relisted(
+        conn,
+        relists,
+        photos_dir=PHOTOS_DIR,
         blob_token=load_env().get("BLOB_READ_WRITE_TOKEN"),
     )
     remaining = duplicate_address_groups(conn)
