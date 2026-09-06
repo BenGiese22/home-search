@@ -1087,3 +1087,72 @@ stage, because it is the one printing.
 Against a local sqlite copy of the production corpus, not production: 101/101
 routed, exit 0, one `commute_source`, one `arrive_by`, no NULL durations, no
 route errors, both new invariants green, and the full rescore above.
+
+## 2026-09-06 — The address was never the key; the property id is
+
+The commute rebuild's first production run went clean — 102 listings, one
+`commute_source`, no route errors. The same morning `verify` started failing
+on something else, and it is worth recording because the failure mode was one
+the system had already been designed against and still admitted.
+
+**Compass returned two listing ids for one house in the same collection
+fetch.** `find_relisted` supersedes a relist by address, but only when
+exactly one of the pair is live — its docstring says plainly that two live
+ids "is something else — a genuine duplex, or Compass listing a property
+twice — and is left alone deliberately". That was a defensible call when
+address was the only signal. It meant a duplicate nothing would ever clear,
+scored twice and ranked twice, and `verify` failing every six hours until
+someone intervened.
+
+The evidence it was a relist rather than a duplex: identical beds, baths,
+sqft, year built and price to the dollar. What differed was `lot_sqft`
+(7,997 vs 7,840), `hoa_annual` (2,455.52 vs 2,456.00) and photo count (34 vs
+30) — re-entered MLS data, not a second building.
+
+### What we were missing
+
+A listing id is disposable. Take a house off the market and put it back and
+Compass issues a new one. The **property id** survives, and Compass publishes
+the mapping for free: every `_lid` URL 301-redirects to the canonical `_pid`
+URL, unauthenticated, one request.
+
+```
+.../12651-James-Cir-Broomfield-CO-80020/2075764477594584425_lid/
+.../12651-James-Cir-Broomfield-CO-80020/2129537334206711753_lid/
+                                    both -> .../131FZM_pid/
+```
+
+This was known — the 2026-09-05 entry records `_pid` as "the authoritative
+dedupe key" and address as "the free proxy we use, since reading `_pid` costs
+a request per listing". That cost estimate was the mistake. A property id
+cannot change, so it is resolved once per listing and cached: a steady-state
+run pays for the listings that arrived since the last one, which is usually
+none. The dedupe key was one HEAD request away the whole time.
+
+### The bug that nearly shipped
+
+The obvious merge — run the property-id rule, then the address rule, drop
+what either names — **deletes one unit of a duplex.** The property-id rule
+correctly leaves two units at one address alone, because their property ids
+differ. The address rule then gets a second look at the same pair and drops
+one.
+
+Caught by a test written for exactly that case, before it ran anywhere. The
+fix is a rule worth keeping: *"these are different houses" is an opinion,
+and the better-informed rule owns it.* The address pass now skips any pair
+whose ids are both resolved. A pair with only one side resolved is still the
+address rule's business, because nothing could have compared them.
+
+The second near-miss is smaller and the same shape. Compass redirects a dead
+listing to a search page; parsing a property id out of whatever comes back
+would have collapsed every dead listing into a single "property", of which
+this code deletes all but one row. The parser is anchored on the `_pid`
+suffix and returns None for anything else.
+
+### Where this leaves the invariants
+
+`verify` now carries both checks. `check_properties_are_unique` is stricter
+and has no false positive — two rows sharing a property id are the same house
+by Compass's own reckoning. `check_addresses_are_unique` stays anyway: when a
+genuine duplex first appears it *should* fail, and a person should look at it
+rather than have a rule quietly decide.

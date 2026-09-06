@@ -27,7 +27,7 @@ from typing import Callable
 
 from src.commute import COMMUTE_SOURCE
 from src.config import load_env  # noqa: F401  (kept for .env side effects)
-from src.db import duplicate_address_groups
+from src.db import duplicate_address_groups, duplicate_property_groups
 from src.turso_db import stage_connection
 
 
@@ -138,6 +138,32 @@ def check_addresses_are_unique(conn) -> Violation | None:
     )
 
 
+def check_properties_are_unique(conn) -> Violation | None:
+    """One property, one row -- checked against Compass's own property id.
+
+    The stricter twin of check_addresses_are_unique, and it catches what that
+    one cannot: a relist where Compass re-entered the address text, so the
+    two rows never grouped by address at all and the duplicate is invisible
+    to every address-based check.
+
+    It also cannot produce that check's one false positive. A duplex shares
+    an address without being one property, and the address check has to fail
+    on it; two rows sharing a PROPERTY id are the same house by Compass's own
+    reckoning, with no ambiguity left.
+
+    Silent until property ids have been resolved, which is correct: nothing
+    is asserted about listings we have not looked up.
+    """
+    groups = duplicate_property_groups(conn)
+    if not groups:
+        return None
+    return Violation(
+        "duplicate_properties",
+        f"{len(groups)} propert(ies) held by more than one listing",
+        [f"{property_id}: {', '.join(ids)}" for property_id, ids in groups],
+    )
+
+
 def check_every_listing_has_a_commute_row(conn) -> Violation | None:
     """The commutes stage writes a row for every listing it attempts,
     including the ones that fail. A listing with no row at all therefore
@@ -218,6 +244,7 @@ CHECKS: tuple[Callable, ...] = (
     check_every_listing_is_scored,
     check_no_orphaned_children,
     check_addresses_are_unique,
+    check_properties_are_unique,
     check_every_listing_has_a_commute_row,
     check_commutes_share_one_source,
 )

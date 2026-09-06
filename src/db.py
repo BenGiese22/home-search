@@ -54,6 +54,18 @@ CREATE TABLE IF NOT EXISTS photo_urls (
     url TEXT NOT NULL
 );
 
+-- Compass's stable property id for a listing, cached.
+--
+-- Deliberately its own table rather than a listings column. It is not
+-- scraped data -- it comes from a separate HTTP request whose answer does
+-- not change -- and keeping it separate means a listing row can be replaced
+-- wholesale by a re-scrape without discarding a lookup we already paid for.
+CREATE TABLE IF NOT EXISTS property_ids (
+    listing_id TEXT PRIMARY KEY REFERENCES listings(listing_id),
+    property_id TEXT NOT NULL,
+    resolved_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS commute (
     listing_id TEXT PRIMARY KEY REFERENCES listings(listing_id),
     lat REAL,
@@ -888,6 +900,167 @@ def duplicate_address_groups(conn) -> list[tuple[str, list[str]]]:
         """
     ).fetchall()
     return [(f"{r[0]}, {r[1]}", sorted(str(r[2]).split(","))) for r in rows]
+
+
+def upsert_property_id(conn, listing_id: str, property_id: str) -> None:
+    with conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO property_ids (listing_id, property_id, resolved_at)"
+            " VALUES (?, ?, ?)",
+            (listing_id, property_id, datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def get_property_ids(conn) -> dict[str, str]:
+    """listing_id -> property_id for every listing we have resolved.
+
+    One statement, like the other set-at-a-time readers: a statement against
+    Turso is a ~240ms round-trip, so a per-listing lookup would cost half a
+    minute for data that is one SELECT.
+    """
+    return {
+        row["listing_id"]: row["property_id"]
+        for row in conn.execute("SELECT listing_id, property_id FROM property_ids")
+    }
+
+
+def listing_ids_missing_property_id(conn) -> list[str]:
+    """Listings whose property id has never been resolved.
+
+    This is what keeps the lookup cheap. A property id cannot change, so a
+    listing pays for it exactly once ever -- a steady-state run resolves only
+    the listings that arrived since the last one, which is usually none.
+    """
+    return [
+        row["listing_id"]
+        for row in conn.execute(
+            """
+            SELECT l.listing_id FROM listings l
+            LEFT JOIN property_ids p ON p.listing_id = l.listing_id
+            WHERE p.listing_id IS NULL
+            ORDER BY l.listing_id
+            """
+        )
+    ]
+
+
+def duplicate_property_groups(conn) -> list[tuple[str, list[str]]]:
+    """Property ids held by more than one listing_id: (property_id, ids).
+
+    The authoritative version of duplicate_address_groups. Address is a proxy
+    that fails in both directions -- Compass re-enters "James Circle" as
+    "James Cir" and the group is missed, while a genuine duplex shares an
+    address without being one property. A property id is Compass's own answer
+    to "is this the same house".
+    """
+    rows = conn.execute(
+        """
+        SELECT p.property_id, GROUP_CONCAT(p.listing_id)
+        FROM property_ids p
+        JOIN listings l ON l.listing_id = p.listing_id
+        GROUP BY p.property_id
+        HAVING COUNT(*) > 1
+        ORDER BY p.property_id
+        """
+    ).fetchall()
+    return [(str(r[0]), sorted(str(r[1]).split(","))) for r in rows]
+
+
+def find_relisted_by_property_id(
+    conn, fetched_ids: Collection[str]
+) -> list[tuple[str, str, str]]:
+    """Stale duplicates of one property: (property_id, keep_id, drop_id).
+
+    Unlike the address rule this resolves the case where BOTH ids are live in
+    the collection, because there is no ambiguity left to protect against:
+    two listing ids sharing a property id are the same house by Compass's own
+    reckoning, and one of them has to go.
+
+    Which one is a tiebreak, not evidence, and is documented as such:
+
+    - a fetched id beats an unfetched one -- Compass just told us which is
+      current by returning it
+    - among equals, more hosted photos wins, as the more completely ingested
+      of the two
+
+    The photo count is read in the same statement as the grouping rather than
+    per row: this runs inside a scrape that has already paid for a hundred
+    round-trips and does not need more.
+    """
+    fetched = set(fetched_ids)
+    groups = duplicate_property_groups(conn)
+    if not groups:
+        return []
+
+    candidates = [lid for _pid, ids in groups for lid in ids]
+    placeholders = ",".join("?" * len(candidates))
+    photo_counts = {
+        row["listing_id"]: row["n"]
+        for row in conn.execute(
+            f"""
+            SELECT l.listing_id AS listing_id,
+                   (SELECT COUNT(*) FROM hosted_photos h
+                     WHERE h.listing_id = l.listing_id) AS n
+            FROM listings l WHERE l.listing_id IN ({placeholders})
+            """,
+            candidates,
+        )
+    }
+
+    out = []
+    for property_id, ids in groups:
+        ranked = sorted(
+            ids,
+            key=lambda i: (i in fetched, photo_counts.get(i, 0), i),
+            reverse=True,
+        )
+        keep, drops = ranked[0], ranked[1:]
+        for drop in drops:
+            out.append((property_id, keep, drop))
+    return out
+
+
+def find_relisted_all(conn, fetched_ids: Collection[str]) -> list[tuple[str, str, str]]:
+    """Every stale duplicate, by property id first and address second.
+
+    The two rules answer different questions and both are needed.
+
+    The property id is authoritative and resolves cases address cannot: two
+    ids that are both live in the collection, and a relist where Compass
+    re-entered the address text ("James Cir" for "James Circle") so the rows
+    never grouped in the first place.
+
+    The address rule stays because a property id is not always available --
+    a listing added this run may not be resolved yet, and Compass can answer
+    something unexpected. Falling back to what we had before is strictly
+    better than doing nothing.
+
+    Property id wins wherever it has an opinion, and "these are different
+    houses" is an opinion. So the address pass skips any pair whose ids are
+    BOTH resolved: the property-id rule already compared them with better
+    information, and if it did not group them that is an answer, not a gap.
+    Without that, a duplex -- one address, two property ids -- has its second
+    unit deleted by the address rule immediately after the property-id rule
+    correctly left it alone.
+
+    A pair with only one side resolved is still the address rule's business:
+    nothing could have compared them, so the older proxy is the best answer
+    available, which is what ran before any of this existed.
+    """
+    by_property = find_relisted_by_property_id(conn, fetched_ids)
+    # Excluded as whole pairs rather than deduplicated by drop id: if the two
+    # rules disagreed about which id to KEEP, honouring both would delete
+    # every row in the group.
+    claimed = {lid for _label, keep, drop in by_property for lid in (keep, drop)}
+    resolved = set(get_property_ids(conn))
+    by_address = [
+        (label, keep, drop)
+        for label, keep, drop in find_relisted(conn, fetched_ids)
+        if keep not in claimed
+        and drop not in claimed
+        and not (keep in resolved and drop in resolved)
+    ]
+    return by_property + by_address
 
 
 def find_relisted(conn, fetched_ids: Collection[str]) -> list[tuple[str, str, str]]:
