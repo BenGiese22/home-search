@@ -1179,11 +1179,21 @@ Four things follow, and three of them shape how a write should be built.
 `launch_authenticated_page` cannot reproduce. The API route is viable and the
 Playwright-UI fallback is not needed.
 
-**It is a `commands/` namespace**, so siblings almost certainly exist for
-favouriting and for moving a listing back to matches. The undo was not
-captured — Ben left the test listing in not-interested — so the rollback path
-is still unknown. That is the one gap, and it matters: rollback is a
-prerequisite for a write, not a nicety.
+**It is a `commands/` namespace**, and the sibling is exactly symmetric.
+Captured on the same day:
+
+```
+PUT https://www.compass.com/api/v3/collections/commands/listings/unmark_not_interested
+
+{"collectionIdToListingIds":{"<collectionId>":["<listingId>"]}}
+
+200 {}
+```
+
+Same body shape, same empty response, same headers. So the rollback path for
+#92 is a one-word change to the URL, and a write that goes wrong is undoable
+by the same code that made it. That is the single thing that most reduces the
+risk of writing at all.
 
 **The body takes an array of listing ids.** Inherently batchable, which is
 convenient and dangerous in the same breath. A malformed loop could mark the
