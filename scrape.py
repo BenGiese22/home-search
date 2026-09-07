@@ -19,8 +19,12 @@ from src.db import (
     get_price_snapshot,
     hosted_photo_index,
     listing_ids_with_any_hosted_or_no_urls,
+    KIND_DELISTED,
+    KIND_NEW,
+    KIND_PRICE,
     listing_ids_missing_property_id,
     listings_from_rows,
+    record_change_events,
     needs_photo_work,
     query_listings,
     upsert_listing,
@@ -61,6 +65,37 @@ PHOTO_JITTER_MAX_SECONDS = 0.5
 
 def _photo_jitter() -> None:
     time.sleep(random.uniform(PHOTO_JITTER_MIN_SECONDS, PHOTO_JITTER_MAX_SECONDS))
+
+
+def _record_changes(db_conn, report, fetch_succeeded: bool) -> None:
+    """Persist what this run found, for the digest stage to report later.
+
+    `compute_changes` has always produced this and `scrape.py` has only ever
+    used the delisting half -- so a new listing arrived, was scored, was
+    ranked, and nobody was told. This is the other half finally going
+    somewhere.
+
+    Gated on fetch_succeeded for the same reason delisting is: when a
+    collection tab fails, "absent from this fetch" means nothing, and an
+    email announcing eighty imaginary delistings is worse than silence.
+    """
+    events = [(KIND_NEW, listing.listing_id, listing.address)
+              for listing in report.new_listings]
+    events += [(KIND_PRICE, change.listing.listing_id,
+                f"{change.old_price} -> {change.new_price}")
+               for change in report.price_changes]
+    if fetch_succeeded:
+        # The address is captured here because the listings row is about to
+        # be deleted, and "12651 James Circle" is what makes the event
+        # readable a week later. A bare id is not a change anyone can read.
+        addresses = {
+            row["listing_id"]: row["address"] for row in query_listings(db_conn)
+        }
+        events += [(KIND_DELISTED, lid, addresses.get(lid))
+                   for lid in report.delisted_ids]
+    written = record_change_events(db_conn, events)
+    if written:
+        print(f"recorded {written} change event(s) for the digest")
 
 
 def _build_head_request(page: Page):
@@ -497,6 +532,11 @@ def main() -> None:
             # the only record of them, and pruning the rows without it is how
             # 1,813 orphans (~371 MB) accumulated. Absent (no token
             # configured), the URLs are printed instead of lost.
+            # Recorded BEFORE the delisting cascade runs: a delisted
+            # listing's row is about to be deleted, and the address is the
+            # only thing that makes the event readable afterwards.
+            _record_changes(db_conn, report, fetch_succeeded)
+
             run_delisting(
                 db_conn, PHOTOS_DIR, fetch_succeeded, report, before,
                 frozenset(pinned_ids),

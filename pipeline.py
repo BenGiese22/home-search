@@ -41,6 +41,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.config import load_env, this_home
+from src.mailer import send_email
 from src.notify import notify
 from src.db import (
     acquire_pipeline_lease,
@@ -81,6 +82,11 @@ STAGES: tuple[Stage, ...] = (
     Stage("commutes", "compute_commutes.py", forwards={"--force-commutes": "--force"}),
     Stage("score-photos", "score_photos.py"),
     Stage("score", "score.py"),
+    # After score, so the digest can say where a new listing ranks -- an
+    # address and a price are not enough to decide whether to look at a
+    # house. Before verify, because verify is allowed to fail the run and a
+    # new listing is still worth reporting when some other invariant broke.
+    Stage("notify", "notify_changes.py"),
     # Last, and deliberately able to fail the run.
     #
     # Every stage above can succeed while producing something wrong -- three
@@ -170,23 +176,39 @@ def _default_revalidate() -> bool:
 
 
 def _default_notify(title: str, message: str) -> bool:
-    """Push a pipeline failure to a phone.
+    """Tell someone the run failed. Returns whether anything was delivered.
+
+    Email AND ntfy, both attempted, neither required. That is not belt and
+    braces for its own sake: the ntfy path shipped configured and looked
+    healthy for the life of the project while publishing to a topic nobody
+    had ever subscribed to, so every failure alert went into a void. A
+    channel that cannot be observed to be working is not a channel, and the
+    only defence is more than one of them.
 
     Only failures. A nightly success that says so is a notification people
     learn to swipe away, and by the time one matters they no longer read it;
-    the canary is what proves the pipeline is alive. Unset NTFY_TOPIC is a
-    silent no-op, which is exactly the behaviour of every run before this.
+    the canary is what proves the pipeline is alive.
 
-    Never raises and never blocks a run -- see src/notify.py. A failed
-    notification about a failed run must not become the thing that hides it.
+    Never raises and never blocks a run -- see src/notify.py and
+    src/mailer.py. A failed notification about a failed run must not become
+    the thing that hides it.
     """
-    return notify(
-        load_env().get("NTFY_TOPIC", ""),
+    env = load_env()
+    emailed = send_email(
+        env.get("RESEND_API_KEY", ""),
+        env.get("DIGEST_EMAIL_TO", ""),
+        f"home-search: {title}",
+        message,
+        sender=env.get("RESEND_FROM", "home-search <onboarding@resend.dev>"),
+    )
+    pushed = notify(
+        env.get("NTFY_TOPIC", ""),
         title,
         message,
         priority="high",
         tags=("rotating_light",),
     )
+    return emailed or pushed
 
 
 def _lease_connection():

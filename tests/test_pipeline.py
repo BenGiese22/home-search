@@ -55,7 +55,7 @@ def test_stages_run_in_dependency_order():
     # verify runs last and can fail the run: every stage before it can
     # succeed while producing something wrong.
     assert [s.name for s in plan] == [
-        "scrape", "commutes", "score-photos", "score", "verify"
+        "scrape", "commutes", "score-photos", "score", "notify", "verify"
     ]
 
 
@@ -74,7 +74,7 @@ def test_only_runs_a_single_stage():
 
 def test_from_resumes_at_a_stage_and_continues():
     assert [s.name for s in build_plan(start_from="score-photos")] == [
-        "score-photos", "score", "verify"
+        "score-photos", "score", "notify", "verify"
     ]
 
 
@@ -296,3 +296,53 @@ def test_force_commutes_is_not_mistaken_for_the_scrape_force_flag():
     scrape_flags = [a for a in argv if a in pipeline.SCRAPE_FLAGS]
     scrape_flags += [a for a in argv if a.startswith(pipeline.SCRAPE_FLAG_PREFIXES)]
     assert scrape_flags == []
+
+
+def test_the_digest_runs_after_scoring_and_before_verify():
+    """After score, because the digest reports where a new listing ranks and
+    nothing knows that until scoring has run. Before verify, because verify
+    is allowed to fail the run -- and a new listing is still worth reporting
+    on a run where some unrelated invariant broke."""
+    names = [s.name for s in build_plan()]
+    assert names.index("score") < names.index("notify") < names.index("verify")
+
+
+def test_a_failure_is_sent_by_email_and_push(monkeypatch):
+    """Both attempted, neither required. The ntfy path shipped configured and
+    looked healthy for the life of the project while publishing to a topic
+    nobody had ever subscribed to -- every failure alert went into a void. A
+    channel that cannot be observed to be working is not a channel."""
+    sent = {}
+    monkeypatch.setattr(pipeline, "load_env", lambda: {
+        "RESEND_API_KEY": "re_key", "DIGEST_EMAIL_TO": "ben@example.com",
+        "NTFY_TOPIC": "topic",
+    })
+    def record(channel):
+        def fn(*args, **kwargs):
+            sent[channel] = (args, kwargs)
+            return True
+        return fn
+
+    monkeypatch.setattr(pipeline, "send_email", record("email"))
+    monkeypatch.setattr(pipeline, "notify", record("ntfy"))
+
+    assert pipeline._default_notify("run failed", "verify: 1 violation") is True
+    assert "email" in sent and "ntfy" in sent
+
+
+def test_one_dead_channel_does_not_silence_the_other(monkeypatch):
+    monkeypatch.setattr(pipeline, "load_env", lambda: {"RESEND_API_KEY": "re_key"})
+    monkeypatch.setattr(pipeline, "send_email", lambda *a, **k: False)
+    monkeypatch.setattr(pipeline, "notify", lambda *a, **k: True)
+    assert pipeline._default_notify("t", "m") is True
+
+    monkeypatch.setattr(pipeline, "send_email", lambda *a, **k: True)
+    monkeypatch.setattr(pipeline, "notify", lambda *a, **k: False)
+    assert pipeline._default_notify("t", "m") is True
+
+
+def test_no_channel_configured_reports_nothing_delivered(monkeypatch):
+    monkeypatch.setattr(pipeline, "load_env", lambda: {})
+    monkeypatch.setattr(pipeline, "send_email", lambda *a, **k: False)
+    monkeypatch.setattr(pipeline, "notify", lambda *a, **k: False)
+    assert pipeline._default_notify("t", "m") is False

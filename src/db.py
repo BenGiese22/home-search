@@ -902,6 +902,65 @@ def duplicate_address_groups(conn) -> list[tuple[str, list[str]]]:
     return [(f"{r[0]}, {r[1]}", sorted(str(r[2]).split(","))) for r in rows]
 
 
+KIND_NEW = "new"
+KIND_PRICE = "price"
+KIND_DELISTED = "delisted"
+
+
+def record_change_events(conn, events) -> int:
+    """Persist what a run found, for a later stage to report. Returns the
+    count written.
+
+    `events` is an iterable of (kind, listing_id, detail). The id is derived
+    from the content rather than random, so a stage that runs twice over the
+    same fetch records the change once -- a re-run must not produce a second
+    email about the same price drop.
+    """
+    rows = []
+    now = datetime.now(timezone.utc).isoformat()
+    for kind, listing_id, detail in events:
+        # Date-scoped rather than fully content-addressed: the same house
+        # dropping to the same price twice in one day is one event, but the
+        # same drop next month is genuinely news again.
+        event_id = f"{now[:10]}:{kind}:{listing_id}:{detail or ''}"
+        rows.append((event_id, kind, listing_id, detail, now))
+    if not rows:
+        return 0
+    with conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO change_events"
+            " (event_id, kind, listing_ref, detail, detected_at, notified_at)"
+            " VALUES (?, ?, ?, ?, ?, NULL)",
+            rows,
+        )
+    return len(rows)
+
+
+def unnotified_change_events(conn) -> list[sqlite3.Row]:
+    """Everything detected and not yet reported, oldest first.
+
+    Nothing is deleted once notified. The table is the archive of what
+    happened while nobody was looking, which is worth more than the email.
+    """
+    return conn.execute(
+        "SELECT * FROM change_events WHERE notified_at IS NULL"
+        " ORDER BY detected_at, kind, listing_ref"
+    ).fetchall()
+
+
+def mark_change_events_notified(conn, event_ids) -> None:
+    """Stamp events as reported. Only ever called after a send succeeded, so
+    a failed email is retried on the next run rather than silently dropped."""
+    ids = list(event_ids)
+    if not ids:
+        return
+    with conn:
+        conn.executemany(
+            "UPDATE change_events SET notified_at = ? WHERE event_id = ?",
+            [(datetime.now(timezone.utc).isoformat(), i) for i in ids],
+        )
+
+
 def upsert_property_id(conn, listing_id: str, property_id: str) -> None:
     with conn:
         conn.execute(
