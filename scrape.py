@@ -56,6 +56,7 @@ from src.scraper import (
     derive_listing_id_from_url,
     extract_collection_id,
     fetch_collection_tabs,
+    fetch_not_interested_ids,
     scrape_listing,
 )
 
@@ -193,31 +194,52 @@ def _sync_rejections_to_compass(db_conn, page, collection_url) -> dict[str, str]
     return to_send
 
 
-def _confirm_rejection_sync(db_conn, sent, fetch) -> None:
-    """Record only the rejections the collection fetch proves Compass acted on.
+def _confirm_rejection_sync(db_conn, page, collection_url, sent, fetch) -> None:
+    """Record only what Compass can be shown to have done.
 
-    The write returns `200 {}` -- no echo, no state -- so a 200 means the
-    request was accepted, not that the listing moved. Absence from the fetch
-    that followed it is the difference.
+    The write returns `200 {}` -- no echo, no state -- so the request being
+    accepted is not the listing moving. This asks the discarded pile
+    directly: one extra paginated read, and the answer is positive rather
+    than inferred.
 
-    A failed or partial fetch is not evidence of anything: a tab that errored
-    is missing every listing in it, which would read as every rejection
-    succeeding at once. Nothing is stamped unless the fetch is trustworthy.
+    It inferred until 2026-09-07. Absence from the fetched tabs was taken as
+    proof of a move, and 5012 West 77th Drive was stamped synced while the
+    id we sent was in no filter at all -- it was the same "plausible counts,
+    wrong answer" this whole read-back exists to catch, built into the
+    read-back.
+
+    A failed or partial fetch is still not evidence: a tab that errored is
+    missing every listing in it, which reads as every rejection succeeding at
+    once. And if the pile itself cannot be read, nothing is recorded --
+    retrying costs one request, a false confirmation costs the rejection.
     """
     if not sent:
         return
     if fetch.errors or not fetch.counts:
         print("collection fetch was incomplete; leaving rejections unconfirmed")
         return
+    try:
+        not_interested = fetch_not_interested_ids(page, collection_url)
+    except Exception as exc:  # noqa: BLE001 -- see docstring
+        print(f"could not read the notInterested pile: {exc}; leaving unconfirmed")
+        return
+
     fetched_ids = {listing.listing_id for listing in fetch.listings}
-    confirmed, unconfirmed = confirm_sync(sent, fetched_ids)
-    mark_rejections_synced(db_conn, confirmed)
+    confirmed, still_present, absent = confirm_sync(sent, not_interested, fetched_ids)
+
+    mark_rejections_synced(db_conn, confirmed, "confirmed")
+    mark_rejections_synced(db_conn, absent, "absent")
     if confirmed:
         print(f"Compass confirmed {len(confirmed)} rejection(s)")
-    for property_id in unconfirmed:
+    for property_id in still_present:
         print(
             f"rejection {property_id} was accepted but listing "
             f"{sent[property_id]} is still in the collection; will retry"
+        )
+    for property_id in absent:
+        print(
+            f"rejection {property_id}: Compass does not hold listing "
+            f"{sent[property_id]}; nothing to mark, not retrying"
         )
 
 
@@ -445,7 +467,9 @@ def main() -> None:
             fetch = fetch_collection_tabs(
                 page, config.collection_url, config.collection_tabs
             )
-            _confirm_rejection_sync(db_conn, sent_rejections, fetch)
+            _confirm_rejection_sync(
+                db_conn, page, config.collection_url, sent_rejections, fetch
+            )
             for tab, count in fetch.counts.items():
                 print(f"collection/{tab} returned {count} listings")
             for tab, exc in fetch.errors.items():

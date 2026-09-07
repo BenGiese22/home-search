@@ -240,13 +240,13 @@ def test_the_listing_id_outlives_the_listing(conn):
 def test_a_synced_rejection_stops_being_pending(conn):
     add(conn, "L1", pid="131FZM")
     reject_property(conn, "131FZM", listing_ref="L1")
-    mark_rejections_synced(conn, ["131FZM"])
+    mark_rejections_synced(conn, ["131FZM"], "confirmed")
 
     assert rejections_pending_compass_sync(conn) == []
 
 
 def test_marking_nothing_synced_is_not_an_error(conn):
-    mark_rejections_synced(conn, [])
+    mark_rejections_synced(conn, [], "confirmed")
 
 
 def test_a_backlog_comes_back_oldest_first(conn):
@@ -272,7 +272,7 @@ def test_re_rejecting_a_relisted_house_tells_compass_again(conn):
     survived the relist; Compass's did not, and the sync has to run again."""
     add(conn, "L1", pid="131FZM")
     reject_property(conn, "131FZM", listing_ref="L1", address="1 Test St")
-    mark_rejections_synced(conn, ["131FZM"])
+    mark_rejections_synced(conn, ["131FZM"], "confirmed")
     assert rejections_pending_compass_sync(conn) == []
 
     add(conn, "L2", pid="131FZM")

@@ -140,7 +140,13 @@ CREATE TABLE IF NOT EXISTS rejections (
     listing_ref TEXT,
     reason TEXT,
     rejected_at TEXT NOT NULL,
-    compass_synced_at TEXT
+    compass_synced_at TEXT,
+    -- Why we stopped asking. "confirmed" means the listing was found in
+    -- Compass's discarded pile. "absent" means Compass does not hold that
+    -- listing id at all, so re-sending would never do anything. Both stop
+    -- the retry, and only one of them is good news -- collapsing them into
+    -- a bare timestamp is what let 5012 West 77th Drive read as confirmed.
+    compass_sync_note TEXT
 );
 
 -- What changed in a run, so a later stage can report it.
@@ -173,6 +179,22 @@ CREATE TABLE IF NOT EXISTS hosted_photos (
     PRIMARY KEY (listing_id, position)
 );
 """
+
+def _strip_sql_comments(sql: str) -> str:
+    """Remove `-- ...` line comments.
+
+    Applied before both splitting statements and parsing columns, because a
+    comment is ordinary SQL that both steps mis-read. A `;` inside one
+    truncates the statement it documents, and a comment line inside a table
+    body parses as a column named `--`, which reaches sqlite as
+    `ALTER TABLE t ADD COLUMN -- ...` and fails with "incomplete input".
+
+    Both happened within a minute of each other while adding one column, and
+    neither error names comments -- so the schema was one careless sentence
+    away from a migration that could not run.
+    """
+    return "\n".join(line.split("--", 1)[0] for line in sql.splitlines())
+
 
 _CREATE_TABLE_RE = re.compile(
     r"CREATE TABLE IF NOT EXISTS\s+(\w+)\s*\((.*?)\)\s*;", re.DOTALL
@@ -208,7 +230,7 @@ def _parse_columns(schema_sql: str) -> dict[str, dict[str, str]]:
     SQLite's ALTER TABLE ... ADD COLUMN does not accept on an existing
     table), ready to append after `ALTER TABLE t ADD COLUMN <name> `."""
     tables: dict[str, dict[str, str]] = {}
-    for match in _CREATE_TABLE_RE.finditer(schema_sql):
+    for match in _CREATE_TABLE_RE.finditer(_strip_sql_comments(schema_sql)):
         table_name, body = match.group(1), match.group(2)
         columns: dict[str, str] = {}
         for part in _split_top_level(body):
@@ -258,7 +280,7 @@ def ensure_schema(conn) -> None:
     from src.db import _SCHEMA
 
     for fragment in (_SCHEMA, TURSO_SCHEMA_EXTRA):
-        for statement in fragment.split(";"):
+        for statement in _strip_sql_comments(fragment).split(";"):
             statement = statement.strip()
             if not statement:
                 continue

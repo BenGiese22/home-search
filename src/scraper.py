@@ -7,7 +7,7 @@ from urllib.parse import quote
 from playwright.sync_api import Page
 
 from src.backfill import dedupe_by_listing_id
-from src.config import COLLECTION_TABS
+from src.config import COLLECTION_TABS, NOT_INTERESTED_FILTER
 from src.json_extract import find_listing_dicts_in_html
 from src.listing_parser import parse_listing_object
 from src.models import Listing
@@ -80,8 +80,10 @@ def fetch_collection_listings(
     `page.request` shares with the browser session automatically.
     """
     if listings_filter not in COLLECTION_TABS.values():
-        # Guards the one value that must never be fetched (3 = notInterested)
-        # and any typo, before a request goes out.
+        # Guards the value that must never be scraped into the corpus
+        # (NOT_INTERESTED_FILTER) and any typo, before a request goes out.
+        # The pile is readable -- fetch_not_interested_ids does it -- but
+        # only to prove a rejection arrived, never to ingest.
         raise ValueError(
             f"refusing to fetch listingsFilter {listings_filter}; "
             f"expected one of {sorted(COLLECTION_TABS.values())}"
@@ -126,6 +128,55 @@ def fetch_collection_listings(
         )
 
     return all_listings
+
+
+def fetch_not_interested_ids(page: Page, collection_url: str) -> frozenset[str]:
+    """The listing ids Compass currently has in the discarded pile.
+
+    Deliberately separate from fetch_collection_listings, which refuses this
+    filter outright: nothing may scrape the pile into the corpus. The one
+    caller is the rejection read-back, and it needs the opposite question --
+    proof that a listing ARRIVED here.
+
+    Returns ids only, not Listings, so there is nothing to accidentally
+    upsert. Raises on a short read for the same reason the fetch above does:
+    a partial answer here reads as "the rejection did not land", and silently
+    retrying forever is better than silently confirming, but neither is as
+    good as saying so.
+    """
+    collection_id = extract_collection_id(collection_url)
+    ids: set[str] = set()
+    skip, limit, total = 0, 120, None
+    while total is None or skip < total:
+        query = json.dumps(
+            {
+                "collectionId": collection_id,
+                "pagination": {"skip": skip, "limit": limit},
+                "query": {
+                    "listingsFilter": NOT_INTERESTED_FILTER,
+                    "sort": {"collectionListingsSortOrder": 1},
+                    "searchCriteria": {},
+                    "enrichments": [0, 1, 2],
+                },
+            }
+        )
+        data = page.request.get(
+            "https://www.compass.com/api/v3/collections/listings/paginated"
+            f"?json={quote(query)}"
+        ).json()
+        total = data["totalListings"]
+        for item in data.get("currentPageListings", []):
+            listing_id = item.get("listingData", {}).get("listingIdSHA")
+            if listing_id:
+                ids.add(str(listing_id))
+        skip += limit
+
+    if len(ids) != total:
+        raise ValueError(
+            f"notInterested returned {len(ids)} ids but reported "
+            f"totalListings={total}"
+        )
+    return frozenset(ids)
 
 
 @dataclass(frozen=True)

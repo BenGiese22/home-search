@@ -130,33 +130,41 @@ def plan_sync(pending) -> tuple[dict[str, str], dict[str, str]]:
     return to_send, skipped
 
 
-def confirm_sync(sent, fetched_ids) -> tuple[list[str], list[str]]:
-    """Which of the ids we sent Compass actually acted on.
+def confirm_sync(sent, not_interested_ids, fetched_ids):
+    """What Compass actually did with the ids we sent.
 
-    `sent` is plan_sync's first return value; `fetched_ids` is every listing
-    id in the collection fetch made AFTER the write. Marking a listing
-    notInterested moves it into filter 3, and filters 0 and 1 are the only
-    ones scrape fetches -- so a listing that has left the fetch is one
-    Compass moved.
+    Returns `(confirmed, still_present, absent)`, all lists of property ids.
 
-    This exists because the response body is `{}`. A 200 says the request was
-    accepted; only the next fetch says the listing moved, and the run is
-    making that fetch anyway.
+    This used to confirm on ABSENCE from the collection fetch -- a listing
+    that had left filters 0 and 1 was taken to have moved. That was the
+    weakest available evidence dressed up as proof, and it produced exactly
+    the failure it was written to prevent: 5012 West 77th Drive was stamped
+    synced on 2026-09-07 while the id we sent was in no filter at all.
 
-    An unconfirmed property is left pending rather than reported as failed:
-    the retry costs one request next run, and a false "synced" costs a
-    rejection Compass never hears about.
+    The pile is readable (listingsFilter 2, probed the same day the wrong
+    number in config.py was found), so the check is now positive: the id we
+    sent is IN the discarded pile.
 
-    A listing that had already left the collection for its own reasons --
-    sold, or removed by whoever curates it -- reads as confirmed here. That
-    is the right answer by accident and by intent: there is no longer
-    anything in the collection to mark.
+    - `confirmed`   -- in the pile. Compass moved it. Stop.
+    - `still_present` -- back in filters 0/1. The 200 meant "accepted", not
+      "moved". Stays pending; retrying costs one request next run.
+    - `absent`      -- in none of them. Compass does not hold this listing id,
+      so re-sending it will never do anything. Reported separately rather
+      than folded into `confirmed`, because "we could not find it" and
+      "Compass moved it" are different facts and only one of them is good
+      news. 5012 was in the pile under an older, Expired listing id for the
+      same address -- the right outcome by accident, which is precisely why
+      it must not be recorded as a confirmation.
     """
-    confirmed = [pid for pid, lid in sent.items() if lid not in fetched_ids]
-    unconfirmed = [pid for pid, lid in sent.items() if lid in fetched_ids]
-    return confirmed, unconfirmed
-
-
+    confirmed, still_present, absent = [], [], []
+    for property_id, listing_id in sent.items():
+        if listing_id in not_interested_ids:
+            confirmed.append(property_id)
+        elif listing_id in fetched_ids:
+            still_present.append(property_id)
+        else:
+            absent.append(property_id)
+    return confirmed, still_present, absent
 # Headers Compass's own collection app sends with this command, minus the
 # ones Playwright fills in. `x-hydra-app-name` names the front-end making the
 # call; origin and referer are what the browser would attach and are not set
