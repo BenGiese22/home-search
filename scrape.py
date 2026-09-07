@@ -9,6 +9,13 @@ from src.auth import launch_authenticated_page
 from src.config import load_config, load_env
 from src.turso_db import stage_connection
 from src.csv_writer import write_csv
+from src.compass_reject import (
+    CompassWriteRefused,
+    build_put_json,
+    confirm_sync,
+    mark_not_interested,
+    plan_sync,
+)
 from src.db import (
     find_relisted_all,
     bulk_upsert_listings,
@@ -24,7 +31,9 @@ from src.db import (
     listing_ids_missing_property_id,
     listings_from_rows,
     get_property_ids,
+    mark_rejections_synced,
     record_change_events,
+    rejections_pending_compass_sync,
     rejected_listing_ids,
     rejected_property_ids,
     needs_photo_work,
@@ -45,6 +54,7 @@ from src.photos import download_photos
 from src.property_id import resolve_property_id
 from src.scraper import (
     derive_listing_id_from_url,
+    extract_collection_id,
     fetch_collection_tabs,
     scrape_listing,
 )
@@ -146,6 +156,69 @@ def _resolve_property_ids(db_conn, page) -> None:
             upsert_property_id(db_conn, listing_id, property_id)
             resolved += 1
     print(f"property ids: resolved {resolved}/{len(missing)}")
+
+
+def _sync_rejections_to_compass(db_conn, page, collection_url) -> dict[str, str]:
+    """Tell Compass about rejections it has not heard about. Returns what was
+    sent, as {property_id: listing_id}, for the caller to verify.
+
+    Runs BEFORE the collection fetch on purpose. Marking a listing
+    notInterested moves it out of the two filters this run is about to fetch,
+    so the fetch that follows is the read-back -- the verification costs no
+    extra request, and it is a request the run was making anyway.
+
+    Never fatal. Compass changing this endpoint, or refusing the write, must
+    not stop a scrape: the rejection is already recorded on our side, which
+    is the half that governs what Ben sees. Compass being out of step is an
+    inconvenience, and it stays pending for the next run.
+    """
+    if not collection_url:
+        return {}
+    to_send, skipped = plan_sync(rejections_pending_compass_sync(db_conn))
+    for property_id, why in skipped.items():
+        print(f"rejection {property_id} not sent to Compass: {why}")
+    if not to_send:
+        return {}
+    try:
+        collection_id = extract_collection_id(collection_url)
+        mark_not_interested(
+            collection_id,
+            list(to_send.values()),
+            build_put_json(page, collection_url),
+        )
+    except (CompassWriteRefused, ValueError) as exc:
+        print(f"could not mark {len(to_send)} listing(s) not interested: {exc}")
+        return {}
+    print(f"marked {len(to_send)} listing(s) not interested on Compass")
+    return to_send
+
+
+def _confirm_rejection_sync(db_conn, sent, fetch) -> None:
+    """Record only the rejections the collection fetch proves Compass acted on.
+
+    The write returns `200 {}` -- no echo, no state -- so a 200 means the
+    request was accepted, not that the listing moved. Absence from the fetch
+    that followed it is the difference.
+
+    A failed or partial fetch is not evidence of anything: a tab that errored
+    is missing every listing in it, which would read as every rejection
+    succeeding at once. Nothing is stamped unless the fetch is trustworthy.
+    """
+    if not sent:
+        return
+    if fetch.errors or not fetch.counts:
+        print("collection fetch was incomplete; leaving rejections unconfirmed")
+        return
+    fetched_ids = {listing.listing_id for listing in fetch.listings}
+    confirmed, unconfirmed = confirm_sync(sent, fetched_ids)
+    mark_rejections_synced(db_conn, confirmed)
+    if confirmed:
+        print(f"Compass confirmed {len(confirmed)} rejection(s)")
+    for property_id in unconfirmed:
+        print(
+            f"rejection {property_id} was accepted but listing "
+            f"{sent[property_id]} is still in the collection; will retry"
+        )
 
 
 def _build_fetch_bytes(page: Page):
@@ -363,10 +436,16 @@ def main() -> None:
         if backfill_missing else set()
     )
     with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
+        # Before the fetch, so the fetch is the read-back -- see
+        # _sync_rejections_to_compass.
+        sent_rejections = _sync_rejections_to_compass(
+            db_conn, page, config.collection_url
+        )
         if config.collection_url:
             fetch = fetch_collection_tabs(
                 page, config.collection_url, config.collection_tabs
             )
+            _confirm_rejection_sync(db_conn, sent_rejections, fetch)
             for tab, count in fetch.counts.items():
                 print(f"collection/{tab} returned {count} listings")
             for tab, exc in fetch.errors.items():

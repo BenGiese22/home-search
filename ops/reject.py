@@ -27,12 +27,49 @@ from pathlib import Path
 # repo root. Same line as ops/canary.py, for the same reason.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src.auth import launch_authenticated_page
+from src.compass_reject import (
+    CompassWriteRefused,
+    build_put_json,
+    unmark_not_interested,
+)
+from src.config import load_config, load_env
 from src.db import (
     reject_property,
     rejected_property_ids,
     unreject_property,
 )
+from src.scraper import extract_collection_id
 from src.turso_db import stage_connection
+
+LOGIN_URL = "https://www.compass.com/login/"
+AUTH_STATE_PATH = Path("data/auth_state.json")
+
+
+def _unmark_on_compass(listing_ref: str) -> bool:
+    """Undo the not_interested on Compass itself, through a real session.
+
+    The pipeline can only ever mark. Unmarking is a deliberate act by a
+    person, so it lives here -- and it lives beside the marking rather than
+    in a script of its own, because a write whose undo is somewhere else is
+    a write nobody reaches for in a hurry.
+    """
+    config = load_config(load_env())
+    if not config.collection_url:
+        print("COMPASS_COLLECTION_URL is not set; cannot unmark on Compass",
+              file=sys.stderr)
+        return False
+    try:
+        with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
+            unmark_not_interested(
+                extract_collection_id(config.collection_url),
+                [listing_ref],
+                build_put_json(page, config.collection_url),
+            )
+    except (CompassWriteRefused, ValueError) as exc:
+        print(f"could not unmark {listing_ref} on Compass: {exc}", file=sys.stderr)
+        return False
+    return True
 
 
 def _find(conn, needle: str):
@@ -69,15 +106,40 @@ def main() -> int:
             return 0
         print(f"{len(pids)} rejected propert(ies):")
         for row in conn.execute(
-            "SELECT property_id, address, city, reason, rejected_at"
+            "SELECT property_id, address, city, reason, rejected_at,"
+            "       listing_ref, compass_synced_at"
             " FROM rejections ORDER BY rejected_at"
         ):
             where = ", ".join(p for p in (row["address"], row["city"]) if p) or "(unknown)"
-            print(f"  {row['rejected_at'][:10]}  {where:34} {row['property_id']:8} {row['reason'] or ''}")
+            # Whether Compass has been told is worth a column: ours and
+            # theirs drifting silently is the thing #92 exists to prevent.
+            if row["compass_synced_at"]:
+                compass = "compass:ok "
+            elif row["listing_ref"]:
+                compass = "compass:due"
+            else:
+                compass = "compass:n/a"
+            print(f"  {row['rejected_at'][:10]}  {where:34} {row['property_id']:8} "
+                  f"{compass}  {row['reason'] or ''}")
         return 0
 
     if "--undo" in args:
         pid = args[args.index("--undo") + 1]
+        # Read before deleting: the row is the only place the Compass listing
+        # id still exists, and un-rejecting without unmarking there leaves
+        # the house invisible in the collection Megan and the agent use.
+        row = conn.execute(
+            "SELECT listing_ref, compass_synced_at FROM rejections"
+            " WHERE property_id = ?",
+            (pid,),
+        ).fetchone()
+        if row is not None and row["compass_synced_at"] and row["listing_ref"]:
+            if _unmark_on_compass(row["listing_ref"]):
+                print(f"unmarked {row['listing_ref']} on Compass")
+            else:
+                print("refusing to un-reject locally while Compass still has it "
+                      "marked -- the two would disagree silently", file=sys.stderr)
+                return 1
         unreject_property(conn, pid)
         print(f"un-rejected {pid}. It will be re-ingested on the next run.")
         return 0
@@ -108,11 +170,13 @@ def main() -> int:
         address=row["address"],
         city=row["city"],
         listing_url=row["listing_url"],
+        listing_ref=row["listing_id"],
     )
     print(f"rejected {row['address']}, {row['city']}")
     print(f"  property {row['property_id']} (listing {row['listing_id']})")
     print("  It will be removed on the next run and will not come back, even")
     print("  if Compass relists it under a new listing id.")
+    print("  The next run also marks it not interested on Compass.")
     return 0
 
 

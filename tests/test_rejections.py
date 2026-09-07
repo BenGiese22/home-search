@@ -14,9 +14,12 @@ import sqlite3
 import pytest
 
 from src.db import (
+    delete_orphaned_rows,
     is_rejected,
+    mark_rejections_synced,
     reject_property,
     rejected_property_ids,
+    rejections_pending_compass_sync,
     unreject_property,
     upsert_property_id,
 )
@@ -198,3 +201,108 @@ def test_a_repeat_rejection_does_not_blank_what_was_captured(conn):
     row = conn.execute("SELECT * FROM rejections WHERE property_id='131FZM'").fetchone()
     assert row["address"] == "5012 West 77th Drive"
     assert row["reason"] == "changed my mind, still no"
+
+
+# --- telling Compass (#92) ----------------------------------------------
+#
+# Our record is the one that governs what Ben sees, and it survives a relist.
+# Compass's is the one his wife and their agent look at. Keeping them in step
+# is one PUT, and every test here is about the bookkeeping around it, because
+# the PUT itself answers `200 {}` and tells us nothing.
+
+
+def test_the_compass_listing_id_is_captured_at_rejection_time(conn):
+    """It has to be captured now. Rejecting a house is what removes it from
+    the corpus on the next run, and property_ids goes with the listing -- by
+    the time we want to tell Compass, nothing else knows which listing it
+    was."""
+    add(conn, "L1", pid="131FZM")
+    reject_property(conn, "131FZM", listing_ref="L1")
+
+    assert [r["listing_ref"] for r in rejections_pending_compass_sync(conn)] == ["L1"]
+
+
+def test_the_listing_id_outlives_the_listing(conn):
+    """The delete_orphaned_rows sweep finds child tables by a `listing_id`
+    column. The column here is `listing_ref` for exactly that reason: naming
+    it `listing_id` would enrol the rejections table in a sweep that deletes
+    precisely the rejections doing their job."""
+    add(conn, "L1", pid="131FZM")
+    reject_property(conn, "131FZM", listing_ref="L1", address="1 Test St")
+    conn.execute("DELETE FROM listings WHERE listing_id = 'L1'")
+    delete_orphaned_rows(conn)
+
+    pending = rejections_pending_compass_sync(conn)
+    assert [r["property_id"] for r in pending] == ["131FZM"]
+    assert pending[0]["listing_ref"] == "L1"
+
+
+def test_a_synced_rejection_stops_being_pending(conn):
+    add(conn, "L1", pid="131FZM")
+    reject_property(conn, "131FZM", listing_ref="L1")
+    mark_rejections_synced(conn, ["131FZM"])
+
+    assert rejections_pending_compass_sync(conn) == []
+
+
+def test_marking_nothing_synced_is_not_an_error(conn):
+    mark_rejections_synced(conn, [])
+
+
+def test_a_backlog_comes_back_oldest_first(conn):
+    """plan_sync sends the first few and defers the rest, so the order here
+    decides who waits -- and the one who has waited longest should not."""
+    for i, pid in enumerate(("AAA", "BBB", "CCC")):
+        add(conn, f"L{i}", pid=pid)
+        reject_property(conn, pid, listing_ref=f"L{i}")
+        conn.execute(
+            "UPDATE rejections SET rejected_at = ? WHERE property_id = ?",
+            (f"2026-09-0{i + 1}T00:00:00+00:00", pid),
+        )
+    conn.commit()
+
+    assert [r["property_id"] for r in rejections_pending_compass_sync(conn)] == [
+        "AAA", "BBB", "CCC",
+    ]
+
+
+def test_re_rejecting_a_relisted_house_tells_compass_again(conn):
+    """Compass keys notInterested on the listing, so a relist is a house it
+    considers un-rejected under an id it has never been told about. Ours
+    survived the relist; Compass's did not, and the sync has to run again."""
+    add(conn, "L1", pid="131FZM")
+    reject_property(conn, "131FZM", listing_ref="L1", address="1 Test St")
+    mark_rejections_synced(conn, ["131FZM"])
+    assert rejections_pending_compass_sync(conn) == []
+
+    add(conn, "L2", pid="131FZM")
+    reject_property(conn, "131FZM", listing_ref="L2")
+
+    pending = rejections_pending_compass_sync(conn)
+    assert [r["listing_ref"] for r in pending] == ["L2"]
+    # ...and the address captured the first time is still there.
+    assert pending[0]["address"] == "1 Test St"
+
+
+def test_a_rejection_predating_the_column_finds_its_listing_anyway(conn):
+    """The three rejections already in production were recorded before
+    listing_ref existed. While their listing is still in the corpus the
+    mapping is right there in property_ids, and not using it would make them
+    permanently unsendable."""
+    add(conn, "L1", pid="131FZM")
+    reject_property(conn, "131FZM")
+    conn.execute("UPDATE rejections SET listing_ref = NULL")
+    conn.commit()
+
+    assert [r["listing_ref"] for r in rejections_pending_compass_sync(conn)] == ["L1"]
+
+
+def test_a_rejection_with_no_listing_id_never_becomes_pending_forever(conn):
+    """It is returned, so it is visible; plan_sync is what skips it. Hiding
+    it here would make a rejection Compass can never hear about look
+    synced."""
+    reject_property(conn, "131FZM")
+
+    pending = rejections_pending_compass_sync(conn)
+    assert [r["property_id"] for r in pending] == ["131FZM"]
+    assert pending[0]["listing_ref"] is None
