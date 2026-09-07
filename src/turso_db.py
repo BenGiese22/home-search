@@ -102,6 +102,28 @@ CREATE TABLE IF NOT EXISTS vision_batches (
     submitted_by TEXT NOT NULL
 );
 
+-- What changed in a run, so a later stage can report it.
+--
+-- Its own table because the report has to outlive the stage that produces
+-- it: scrape knows what is new, but rank and composite do not exist until
+-- score.py has run, and a digest worth reading needs both.
+--
+-- The column is `listing_ref`, not `listing_id`, and that is load-bearing.
+-- delete_orphaned_rows discovers child tables by that column name and prunes
+-- rows whose listing is gone -- which would delete every delisting event, the
+-- one kind that is ABOUT a listing being gone. Naming it differently makes
+-- the table invisible to that sweep with no exclusion list to keep in step,
+-- and hand-maintained lists going stale is what orphaned a visual_scores row
+-- per delisting for months.
+CREATE TABLE IF NOT EXISTS change_events (
+    event_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    listing_ref TEXT NOT NULL,
+    detail TEXT,
+    detected_at TEXT NOT NULL,
+    notified_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS hosted_photos (
     listing_id TEXT NOT NULL,
     position INTEGER NOT NULL,
