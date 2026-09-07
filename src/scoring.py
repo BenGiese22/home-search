@@ -182,12 +182,26 @@ def score_hoa(annual_hoa: float | None) -> float:
     return _clamp(NEUTRAL_SCORE - HOA_MAX_PENALTY * fee / (fee + midpoint))
 
 
+# Megan wants two or more spaces, and the scores say so rather than merely
+# ranking them. One space used to score 90 -- a 10-point gap that made a
+# one-car house very nearly as good as a two-car one on this factor, which is
+# not what "really wants two" means (Ben, 2026-09-07).
+#
+# Zero stays a hard zero. That contradicts this project's usual "missing
+# stat -> neutral 50, never 0" rule, and deliberately: zero is not a missing
+# measurement, it is a measured absence, and a house with nowhere to put a car
+# is genuinely disqualifying rather than unknown.
+PARKING_TWO_PLUS_SCORE = 100.0
+PARKING_ONE_SPACE_SCORE = 50.0
+PARKING_NONE_SCORE = 0.0
+
+
 def score_parking(parking_spaces: int) -> float:
     if parking_spaces >= 2:
-        return 100.0
+        return PARKING_TWO_PLUS_SCORE
     if parking_spaces == 1:
-        return 90.0
-    return 0.0
+        return PARKING_ONE_SPACE_SCORE
+    return PARKING_NONE_SCORE
 
 
 def passes_filters(baths: float, lot_sqft: int) -> bool:

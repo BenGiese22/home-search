@@ -165,11 +165,18 @@ def test_score_parking_two_or_more_spaces_is_full():
     assert score_parking(4) == 100.0
 
 
-def test_score_parking_one_space_is_high_but_not_full():
-    assert score_parking(1) == 90.0
+def test_score_parking_one_space_is_a_real_penalty():
+    """Megan wants two or more, and the score says so rather than merely
+    ranking them. One space used to score 90 -- a 10-point gap that made a
+    one-car house very nearly as good as a two-car one on this factor."""
+    assert score_parking(1) == 50.0
+    assert score_parking(1) < score_parking(2)
 
 
-def test_score_parking_zero_or_missing_is_zero():
+def test_score_parking_zero_is_a_hard_zero_not_a_neutral():
+    """Deliberately against this project's usual "missing stat -> neutral 50"
+    rule. Zero is not a missing measurement, it is a measured absence, and a
+    house with nowhere to put a car is disqualifying rather than unknown."""
     assert score_parking(0) == 0.0
 
 
