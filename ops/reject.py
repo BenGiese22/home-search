@@ -43,7 +43,10 @@ from src.scraper import extract_collection_id
 from src.turso_db import stage_connection
 
 LOGIN_URL = "https://www.compass.com/login/"
-AUTH_STATE_PATH = Path("data/auth_state.json")
+# The same path scrape.py uses. A different one here would mean --undo drove
+# Compass's login form -- the one step in this system a human has to babysit
+# -- every single time, while a perfectly good session sat next to it.
+AUTH_STATE_PATH = Path("data") / ".auth" / "compass_state.json"
 
 
 def _unmark_on_compass(listing_ref: str) -> bool:
