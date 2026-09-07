@@ -61,7 +61,13 @@ def _location_of(headers) -> str | None:
 
 
 def resolve_property_id(listing_url: str, http_head: HttpHead) -> str | None:
-    """Follow one redirect from a listing URL to find its property id.
+    """Find a listing URL's property id, following one redirect if needed.
+
+    A URL that is already canonical is answered without a request. Pinned
+    listings arrive from LISTING_URLS as whatever was pasted, and a `_pid`
+    URL is what Compass hands you when you copy from the address bar -- it
+    does not redirect, so asking the network returns 200 and no Location,
+    and the id sitting in the string goes unread.
 
     None on anything unexpected — no redirect, no Location, a transport
     failure, a redirect somewhere that is not a property page. The caller
@@ -73,6 +79,9 @@ def resolve_property_id(listing_url: str, http_head: HttpHead) -> str | None:
     """
     if not listing_url:
         return None
+    already = parse_property_id(listing_url)
+    if already:
+        return already
     try:
         status, headers = http_head(listing_url)
     except Exception:  # noqa: BLE001 -- see docstring; a miss is not fatal

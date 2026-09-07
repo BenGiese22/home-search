@@ -128,3 +128,27 @@ def test_an_empty_url_is_not_requested_at_all():
     http_head = redirect_to(PID_URL)
     assert resolve_property_id("", http_head) is None
     assert http_head.calls == []
+
+
+def test_a_url_that_is_already_canonical_costs_no_request():
+    """Pinned listings arrive from LISTING_URLS as whatever was pasted, and a
+    `_pid` URL is what Compass gives you from the address bar. It does not
+    redirect, so the request returns 200 with no Location and the id sitting
+    in the string goes unread -- which is how 960 East 9th Avenue was the one
+    listing of 101 that never resolved."""
+    http_head = redirect_to(PID_URL)
+
+    assert resolve_property_id(PID_URL, http_head) == "131FZM"
+    assert http_head.calls == []
+
+
+def test_a_pid_url_with_a_query_string_is_still_recognised():
+    http_head = redirect_to(PID_URL)
+    assert resolve_property_id(f"{PID_URL}?from=search", http_head) == "131FZM"
+    assert http_head.calls == []
+
+
+def test_an_lid_url_still_goes_to_the_network():
+    http_head = redirect_to(PID_URL)
+    assert resolve_property_id(LID_URL, http_head) == "131FZM"
+    assert http_head.calls == [LID_URL]
