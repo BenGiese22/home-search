@@ -23,7 +23,10 @@ from src.db import (
     KIND_PRICE,
     listing_ids_missing_property_id,
     listings_from_rows,
+    get_property_ids,
     record_change_events,
+    rejected_listing_ids,
+    rejected_property_ids,
     needs_photo_work,
     query_listings,
     upsert_listing,
@@ -380,8 +383,15 @@ def main() -> None:
             # circuit-breaker-protected removal path rather than new logic.
             # A favorite that has gone Pending is exempt -- see
             # select_present_listings and issue #50.
+            # Rejected properties never enter the corpus again -- that is
+            # what stops a relist re-scraping, re-photographing and re-paying
+            # for vision scoring on a house Ben has already said no to.
+            rejected_pids = rejected_property_ids(db_conn)
             present_listings = select_present_listings(
-                collection_listings, fetch.favorite_ids
+                collection_listings,
+                fetch.favorite_ids,
+                rejected_property_ids=rejected_pids,
+                property_id_by_listing=get_property_ids(db_conn),
             )
             inactive_count = len(collection_listings) - len(present_listings)
             if inactive_count:
@@ -467,7 +477,8 @@ def main() -> None:
                 _backfill_orphans(db_conn, page, skip_photos)
 
             report = compute_changes(
-                present_listings, before
+                present_listings, before,
+                rejected_ids=rejected_listing_ids(db_conn, rejected_pids),
             )
             # The blob token is passed so a delisted listing's hosted photos
             # are reclaimed rather than stranded -- hosted_photos.blob_url is

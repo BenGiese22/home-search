@@ -102,6 +102,23 @@ CREATE TABLE IF NOT EXISTS vision_batches (
     submitted_by TEXT NOT NULL
 );
 
+-- Houses Ben has said no to. Keyed on the PROPERTY, deliberately.
+--
+-- Compass keys its own notInterested on the listing id, so a relist mints a
+-- new one and the rejection is forgotten -- we would re-scrape, re-photograph
+-- and re-pay for vision scoring on a house already rejected. The property id
+-- survives that, which is the whole reason #86 chose it as the identity.
+--
+-- No foreign key, and it lives here rather than in _SCHEMA, for the same
+-- reason as change_events and vision_batches: a rejection has to outlive
+-- every listing of the house it is about, and an FK would enrol it in the
+-- cascade it exists to survive.
+CREATE TABLE IF NOT EXISTS rejections (
+    property_id TEXT PRIMARY KEY,
+    reason TEXT,
+    rejected_at TEXT NOT NULL
+);
+
 -- What changed in a run, so a later stage can report it.
 --
 -- Its own table because the report has to outlive the stage that produces
