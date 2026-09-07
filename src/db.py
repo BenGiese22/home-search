@@ -943,17 +943,44 @@ def mark_change_events_notified(conn, event_ids) -> None:
         )
 
 
-def reject_property(conn, property_id: str, reason: str | None = None) -> None:
+def reject_property(
+    conn,
+    property_id: str,
+    reason: str | None = None,
+    address: str | None = None,
+    city: str | None = None,
+    listing_url: str | None = None,
+) -> None:
     """Record that Ben does not want this house, whatever it is listed as.
 
-    Idempotent: rejecting twice replaces the reason rather than failing, so a
-    caller never has to check first.
+    The address is stored ON the rejection rather than looked up later, and
+    that is not denormalisation for speed. A rejection outlives every listing
+    of the house it is about -- the entire reason it is keyed on the property
+    -- so by the time anyone reads one back there is nothing left to join to.
+    Without this, `--list` prints six opaque characters and a date.
+
+    Idempotent, but a repeat must not blank details a first call captured: a
+    second rejection with no address keeps the address already recorded.
     """
+    existing = conn.execute(
+        "SELECT address, city, listing_url, reason FROM rejections WHERE property_id = ?",
+        (property_id,),
+    ).fetchone()
+    if existing is not None:
+        address = address or existing["address"]
+        city = city or existing["city"]
+        listing_url = listing_url or existing["listing_url"]
+        reason = reason or existing["reason"]
+
     with conn:
         conn.execute(
-            "INSERT OR REPLACE INTO rejections (property_id, reason, rejected_at)"
-            " VALUES (?, ?, ?)",
-            (property_id, reason, datetime.now(timezone.utc).isoformat()),
+            "INSERT OR REPLACE INTO rejections"
+            " (property_id, address, city, listing_url, reason, rejected_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                property_id, address, city, listing_url, reason,
+                datetime.now(timezone.utc).isoformat(),
+            ),
         )
 
 

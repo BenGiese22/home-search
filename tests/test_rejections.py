@@ -159,3 +159,42 @@ def test_rejection_beats_the_favorite_exemption(conn):
 def test_nothing_changes_when_nothing_is_rejected(conn):
     present = select_present_listings([listing("L1"), listing("L2")])
     assert [l.listing_id for l in present] == ["L1", "L2"]
+
+
+# --- legibility after the listing is gone ---------------------------------
+
+
+def test_the_address_is_kept_on_the_rejection(conn):
+    """A rejection outlives every listing of the house it is about, so by the
+    time anyone reads one back there is nothing left to join to. Without this
+    the record is six opaque characters and a date."""
+    reject_property(
+        conn, "131FZM", reason="backyard is dirt",
+        address="5012 West 77th Drive", city="Westminster",
+        listing_url="https://compass.com/x",
+    )
+    row = conn.execute("SELECT * FROM rejections WHERE property_id='131FZM'").fetchone()
+    assert row["address"] == "5012 West 77th Drive"
+    assert row["city"] == "Westminster"
+    assert row["listing_url"] == "https://compass.com/x"
+
+
+def test_the_address_survives_the_listing_being_deleted(conn):
+    add(conn, "L1", pid="131FZM")
+    reject_property(conn, "131FZM", address="5012 West 77th Drive", city="Westminster")
+    conn.execute("DELETE FROM listings WHERE listing_id='L1'")
+    conn.commit()
+
+    row = conn.execute("SELECT address FROM rejections WHERE property_id='131FZM'").fetchone()
+    assert row["address"] == "5012 West 77th Drive"
+
+
+def test_a_repeat_rejection_does_not_blank_what_was_captured(conn):
+    """Idempotent must not mean destructive. A second call from a path that
+    has no address to hand keeps the one already recorded."""
+    reject_property(conn, "131FZM", address="5012 West 77th Drive", city="Westminster")
+    reject_property(conn, "131FZM", reason="changed my mind, still no")
+
+    row = conn.execute("SELECT * FROM rejections WHERE property_id='131FZM'").fetchone()
+    assert row["address"] == "5012 West 77th Drive"
+    assert row["reason"] == "changed my mind, still no"

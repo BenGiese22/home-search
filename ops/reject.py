@@ -40,7 +40,7 @@ def _find(conn, needle: str):
     property_id). Refuses an ambiguous match rather than picking one."""
     rows = conn.execute(
         """
-        SELECT l.listing_id, l.address, l.city, p.property_id
+        SELECT l.listing_id, l.address, l.city, l.listing_url, p.property_id
         FROM listings l LEFT JOIN property_ids p ON p.listing_id = l.listing_id
         WHERE l.listing_id = ? OR LOWER(l.address) LIKE LOWER(?)
         """,
@@ -69,9 +69,11 @@ def main() -> int:
             return 0
         print(f"{len(pids)} rejected propert(ies):")
         for row in conn.execute(
-            "SELECT property_id, reason, rejected_at FROM rejections ORDER BY rejected_at"
+            "SELECT property_id, address, city, reason, rejected_at"
+            " FROM rejections ORDER BY rejected_at"
         ):
-            print(f"  {row['property_id']:10} {row['rejected_at'][:10]}  {row['reason'] or ''}")
+            where = ", ".join(p for p in (row["address"], row["city"]) if p) or "(unknown)"
+            print(f"  {row['rejected_at'][:10]}  {where:34} {row['property_id']:8} {row['reason'] or ''}")
         return 0
 
     if "--undo" in args:
@@ -99,7 +101,14 @@ def main() -> int:
         )
         return 1
 
-    reject_property(conn, row["property_id"], reason=reason)
+    reject_property(
+        conn,
+        row["property_id"],
+        reason=reason,
+        address=row["address"],
+        city=row["city"],
+        listing_url=row["listing_url"],
+    )
     print(f"rejected {row['address']}, {row['city']}")
     print(f"  property {row['property_id']} (listing {row['listing_id']})")
     print("  It will be removed on the next run and will not come back, even")
