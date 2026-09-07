@@ -119,13 +119,28 @@ CREATE TABLE IF NOT EXISTS vision_batches (
 -- one back, nothing else in the database knows what `1272DA` was. Keying on
 -- identity without carrying legibility made `--list` print six opaque
 -- characters and a date.
+--
+-- `listing_ref` is the Compass listing id, captured at rejection time so the
+-- rejection can be pushed back to Compass (#92). It has to be captured then,
+-- because a rejected listing is dropped from the corpus on the very next run
+-- -- that is what rejecting it does -- and property_ids goes with it. By the
+-- time we want to tell Compass, nothing else in the database still knows
+-- which listing the house was.
+--
+-- The name is `listing_ref`, not `listing_id`, for the same load-bearing
+-- reason as change_events below: delete_orphaned_rows finds child tables by
+-- looking for a `listing_id` column and deletes rows whose listing is gone.
+-- Calling it `listing_id` would enrol the rejections table in a sweep that
+-- deletes precisely the rejections that are doing their job.
 CREATE TABLE IF NOT EXISTS rejections (
     property_id TEXT PRIMARY KEY,
     address TEXT,
     city TEXT,
     listing_url TEXT,
+    listing_ref TEXT,
     reason TEXT,
-    rejected_at TEXT NOT NULL
+    rejected_at TEXT NOT NULL,
+    compass_synced_at TEXT
 );
 
 -- What changed in a run, so a later stage can report it.

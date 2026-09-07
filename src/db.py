@@ -950,6 +950,7 @@ def reject_property(
     address: str | None = None,
     city: str | None = None,
     listing_url: str | None = None,
+    listing_ref: str | None = None,
 ) -> None:
     """Record that Ben does not want this house, whatever it is listed as.
 
@@ -963,24 +964,75 @@ def reject_property(
     second rejection with no address keeps the address already recorded.
     """
     existing = conn.execute(
-        "SELECT address, city, listing_url, reason FROM rejections WHERE property_id = ?",
+        "SELECT address, city, listing_url, listing_ref, reason FROM rejections"
+        " WHERE property_id = ?",
         (property_id,),
     ).fetchone()
     if existing is not None:
         address = address or existing["address"]
         city = city or existing["city"]
         listing_url = listing_url or existing["listing_url"]
+        listing_ref = listing_ref or existing["listing_ref"]
         reason = reason or existing["reason"]
 
+    # compass_synced_at is deliberately reset to NULL. Re-rejecting is how a
+    # relisted house gets rejected again, and the new listing carries a new
+    # Compass listing id -- one this run has never told Compass about.
     with conn:
         conn.execute(
             "INSERT OR REPLACE INTO rejections"
-            " (property_id, address, city, listing_url, reason, rejected_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
+            " (property_id, address, city, listing_url, listing_ref, reason,"
+            "  rejected_at, compass_synced_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
             (
-                property_id, address, city, listing_url, reason,
+                property_id, address, city, listing_url, listing_ref, reason,
                 datetime.now(timezone.utc).isoformat(),
             ),
+        )
+
+
+def rejections_pending_compass_sync(conn) -> list[dict]:
+    """Rejections Compass has not been told about, oldest first.
+
+    One statement, and usually zero rows: a rejection is told to Compass on
+    the next run after it is made and never again.
+
+    Ordered by rejected_at so a backlog drains in the order Ben created it --
+    plan_sync sends the first few and leaves the rest for the following run.
+
+    Falls back to property_ids when the row has no listing_ref of its own.
+    Rejections made before that column existed would otherwise be permanently
+    unsendable, and while the listing is still in the corpus the mapping is
+    right there. LIMIT 1 among several is safe by construction: every listing
+    sharing a property id is the same house.
+    """
+    return [
+        {"property_id": row[0], "listing_ref": row[1], "address": row[2]}
+        for row in conn.execute(
+            "SELECT property_id,"
+            "       COALESCE(listing_ref, (SELECT listing_id FROM property_ids p"
+            "         WHERE p.property_id = rejections.property_id LIMIT 1)),"
+            "       address"
+            " FROM rejections WHERE compass_synced_at IS NULL"
+            " ORDER BY rejected_at"
+        )
+    ]
+
+
+def mark_rejections_synced(conn, property_ids) -> None:
+    """Stamp rejections as known to Compass.
+
+    Only ever called for ids confirmed absent from the collection fetch that
+    followed the write, never on the strength of a 200 -- the response body
+    is `{}` and says nothing about whether the listing moved.
+    """
+    ids = list(property_ids)
+    if not ids:
+        return
+    with conn:
+        conn.executemany(
+            "UPDATE rejections SET compass_synced_at = ? WHERE property_id = ?",
+            [(datetime.now(timezone.utc).isoformat(), pid) for pid in ids],
         )
 
 
