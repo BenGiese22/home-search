@@ -1156,3 +1156,53 @@ and has no false positive — two rows sharing a property id are the same house
 by Compass's own reckoning. `check_addresses_are_unique` stays anyway: when a
 genuine duplex first appears it *should* fail, and a person should look at it
 rather than have a rule quietly decide.
+
+## 2026-09-07 — Compass's not-interested mutation, captured
+
+Issue #91 asked what a "not interested" click actually sends. Ben captured it
+in devtools on 2026-09-07 and the answer is simpler than expected.
+
+```
+PUT https://www.compass.com/api/v3/collections/commands/listings/not_interested
+Content-Type: application/json
+
+{"collectionIdToListingIds":{"<collectionId>":["<listingId>"]}}
+
+200 {}
+```
+
+Four things follow, and three of them shape how a write should be built.
+
+**No CSRF token.** The headers are cookies, `content-type`, `origin`/
+`referer`, and two pieces of app metadata (`x-hydra-app-name: collection`,
+`x-anonymous-id`). Nothing that a `page.request.put` through
+`launch_authenticated_page` cannot reproduce. The API route is viable and the
+Playwright-UI fallback is not needed.
+
+**It is a `commands/` namespace**, so siblings almost certainly exist for
+favouriting and for moving a listing back to matches. The undo was not
+captured — Ben left the test listing in not-interested — so the rollback path
+is still unknown. That is the one gap, and it matters: rollback is a
+prerequisite for a write, not a nicety.
+
+**The body takes an array of listing ids.** Inherently batchable, which is
+convenient and dangerous in the same breath. A malformed loop could mark the
+whole collection in one request. The hard cap in #92 is not defensive
+paranoia; it is sized against this shape.
+
+**The response is `{}`.** No echo, no state, no confirmation of what changed.
+A 200 here means "the request was accepted", not "the listing moved" — which
+is exactly this project's recurring failure signature. Any write must read
+the listing back from the paginated API and assert `reviewStage.currentStage`
+before believing it worked.
+
+### The thing the capture taught that nobody asked
+
+Ben marked one listing not-interested during the capture and left it there.
+That listing is now absent from both fetched tabs, which means the delisting
+cascade will hard-delete it on the next run — the row, 34 photos, their Blob
+objects, and a paid vision score — and the digest will report it as
+`DELISTED`, indistinguishable from a house that sold.
+
+So #90 stopped being a hypothetical the moment the spike ran. The spike
+demonstrated the defect it was scheduled behind.
