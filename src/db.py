@@ -943,6 +943,60 @@ def mark_change_events_notified(conn, event_ids) -> None:
         )
 
 
+def reject_property(conn, property_id: str, reason: str | None = None) -> None:
+    """Record that Ben does not want this house, whatever it is listed as.
+
+    Idempotent: rejecting twice replaces the reason rather than failing, so a
+    caller never has to check first.
+    """
+    with conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO rejections (property_id, reason, rejected_at)"
+            " VALUES (?, ?, ?)",
+            (property_id, reason, datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def unreject_property(conn, property_id: str) -> None:
+    """Undo a rejection. Safe for a property that was never rejected."""
+    with conn:
+        conn.execute("DELETE FROM rejections WHERE property_id = ?", (property_id,))
+
+
+def rejected_listing_ids(conn, rejected_pids) -> frozenset[str]:
+    """The listing ids currently mapped to a rejected property.
+
+    Rejection is recorded against the property; delisting and scoring both
+    work in listing ids, so this is the translation. One statement.
+    """
+    if not rejected_pids:
+        return frozenset()
+    placeholders = ",".join("?" * len(rejected_pids))
+    return frozenset(
+        row[0] for row in conn.execute(
+            f"SELECT listing_id FROM property_ids WHERE property_id IN ({placeholders})",
+            list(rejected_pids),
+        )
+    )
+
+
+def rejected_property_ids(conn) -> frozenset[str]:
+    """Every rejected property, in ONE statement.
+
+    A statement against Turso is a ~240ms round-trip, so this is read once per
+    run and passed down rather than asked per listing.
+    """
+    return frozenset(
+        row[0] for row in conn.execute("SELECT property_id FROM rejections")
+    )
+
+
+def is_rejected(conn, property_id: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM rejections WHERE property_id = ?", (property_id,)
+    ).fetchone() is not None
+
+
 def upsert_property_id(conn, listing_id: str, property_id: str) -> None:
     with conn:
         conn.execute(

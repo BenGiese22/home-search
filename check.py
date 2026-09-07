@@ -3,7 +3,13 @@ from pathlib import Path
 from src.auth import launch_authenticated_page
 from src.config import load_config, load_env
 from src.turso_db import stage_connection
-from src.db import get_price_snapshot, upsert_listing
+from src.db import (
+    get_price_snapshot,
+    get_property_ids,
+    rejected_listing_ids,
+    rejected_property_ids,
+    upsert_listing,
+)
 from src.diff import collection_fetch_is_trustworthy, compute_changes, format_report, run_delisting
 from src.models import select_present_listings
 from src.scraper import fetch_collection_tabs
@@ -45,7 +51,12 @@ def main() -> None:
     # upserting and delisting purposes alike, exactly like one that dropped
     # out of the collection API's results entirely -- see scrape.py's
     # matching logic for the full rationale. Pinned listings are exempt.
-    present = select_present_listings(fetched, fetch.favorite_ids)
+    rejected_pids = rejected_property_ids(db_conn)
+    present = select_present_listings(
+        fetched, fetch.favorite_ids,
+        rejected_property_ids=rejected_pids,
+        property_id_by_listing=get_property_ids(db_conn),
+    )
 
     # Deliberately loop over `present`, not the raw `fetched` list: an
     # inactive listing must never be upserted here, even for the
@@ -59,7 +70,10 @@ def main() -> None:
         # scrape LISTING_URLS), but a collection listing that's already
         upsert_listing(db_conn, listing)
 
-    report = compute_changes(present, before)
+    report = compute_changes(
+        present, before,
+        rejected_ids=rejected_listing_ids(db_conn, rejected_pids),
+    )
     run_delisting(
         db_conn, PHOTOS_DIR, fetch_succeeded, report, before,
         # Without this, a delisting that happens to run through check.py

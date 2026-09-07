@@ -1,5 +1,5 @@
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -26,11 +26,15 @@ class ChangeReport:
     new_listings: list[Listing]
     price_changes: list[PriceChange]
     delisted_ids: list[str]
+    # Listings leaving because Ben rejected the house, not because it sold.
+    # Same removal, different story -- and the digest must not conflate them.
+    rejected_ids: list[str] = field(default_factory=list)
 
 
 def compute_changes(
     fetched: list[Listing],
     before: dict[str, tuple[str, float | None]],
+    rejected_ids: frozenset[str] = frozenset(),
 ) -> ChangeReport:
     """Compares freshly-fetched listings against a price snapshot taken
     before this run's upserts. A listing_id absent from `before` is new;
@@ -51,9 +55,18 @@ def compute_changes(
         old_price, old_price_numeric = prior
         if parse_price(listing.price) != old_price_numeric:
             price_changes.append(PriceChange(listing, old_price, listing.price))
-    delisted_ids = sorted(set(before.keys()) - seen_ids)
+    # A rejected listing is leaving on purpose, so it is reported separately
+    # rather than as a delisting. Both still remove the row -- the difference
+    # is what Ben is told, and being emailed about his own rejection as though
+    # a house had sold is the half of this that is actually wrong.
+    gone = set(before.keys()) - seen_ids
+    rejected_gone = sorted(gone & rejected_ids)
+    delisted_ids = sorted(gone - rejected_ids)
     return ChangeReport(
-        new_listings=new_listings, price_changes=price_changes, delisted_ids=delisted_ids
+        new_listings=new_listings,
+        price_changes=price_changes,
+        delisted_ids=delisted_ids,
+        rejected_ids=rejected_gone,
     )
 
 

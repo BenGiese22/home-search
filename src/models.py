@@ -89,7 +89,12 @@ def is_pending_status(localized_status: str) -> bool:
     return bool(localized_status) and localized_status.startswith("Pending")
 
 
-def select_present_listings(listings, favorite_ids=frozenset()):
+def select_present_listings(
+    listings,
+    favorite_ids=frozenset(),
+    rejected_property_ids=frozenset(),
+    property_id_by_listing=None,
+):
     """The listings worth keeping in the dataset this run.
 
     One function because both scrape.py and check.py delist off this decision
@@ -97,7 +102,13 @@ def select_present_listings(listings, favorite_ids=frozenset()):
     hard-deleted, rows, photos and paid vision scores together. That drift is
     exactly what made favorites deletable before they were ever fetched.
 
-    Two ways to stay:
+    A rejected property is dropped first and unconditionally. Rejection is the
+    most recent and most specific statement of intent Ben can make about a
+    house, so it beats every reason to keep one -- including the favorite
+    exemption below, which a house can still be carrying from before he
+    changed his mind.
+
+    Otherwise, two ways to stay:
 
     - an active status, per is_active_status;
     - a favorite that has gone Pending. A favorite is the strongest interest
@@ -112,12 +123,21 @@ def select_present_listings(listings, favorite_ids=frozenset()):
     gone. A pin could not un-sell a house, and six of seven had gone stale --
     set from a LISTING_URLS entry since removed, with nothing able to clear
     the flag (issue #31). Two sold houses sat at ranks 30 and 50 on it.
+
+    `property_id_by_listing` may be missing a listing entirely: ids are
+    resolved after the fact, so one that arrived this run may not have one
+    yet. An unknown property is not a rejected one, and must not be dropped
+    on a guess.
     """
+    by_listing = property_id_by_listing or {}
     return [
         listing for listing in listings
-        if is_active_status(listing.localized_status)
-        or (
-            listing.listing_id in favorite_ids
-            and is_pending_status(listing.localized_status)
+        if by_listing.get(listing.listing_id) not in rejected_property_ids
+        and (
+            is_active_status(listing.localized_status)
+            or (
+                listing.listing_id in favorite_ids
+                and is_pending_status(listing.localized_status)
+            )
         )
     ]
