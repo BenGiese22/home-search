@@ -183,6 +183,54 @@ def read_bytes(path: Path) -> bytes:
     return path.read_bytes()
 
 
+def hydrate_from_blob(conn, listing_id: str, fetch=None) -> int:
+    """Restore a listing's photos from Blob onto local disk. Returns the count.
+
+    The vision request is built from files, and the files are the one part of
+    this pipeline that does not survive a sandbox. `hosted_photos.blob_url` is
+    the durable copy, so this is how a listing that was scored on one machine
+    can be re-scored on another.
+
+    Written with `photo_filename` rather than an ad-hoc name, so the result is
+    indistinguishable from a fresh download: position-first ordering, the same
+    PHOTO_GLOB, and a hash that still identifies the source URL.
+
+    Never raises. A listing whose photos cannot be fetched is one the caller
+    will record as unscorable, which is the honest outcome -- turning it into
+    an exception would fail a run over one house.
+    """
+    import requests
+
+    from src.photos import photo_filename
+
+    rows = conn.execute(
+        "SELECT position, blob_url, source_url FROM hosted_photos"
+        " WHERE listing_id = ? ORDER BY position",
+        (listing_id,),
+    ).fetchall()
+    if not rows:
+        return 0
+
+    fetch = fetch or (lambda url: requests.get(url, timeout=60).content)
+    listing_dir = PHOTOS_DIR / listing_id
+    listing_dir.mkdir(parents=True, exist_ok=True)
+    restored = 0
+    for row in rows:
+        name = photo_filename(row["position"], row["source_url"] or row["blob_url"])
+        target = listing_dir / name
+        if target.exists():
+            restored += 1
+            continue
+        try:
+            target.write_bytes(fetch(row["blob_url"]))
+            restored += 1
+        except Exception as exc:  # noqa: BLE001 -- see docstring
+            print(f"  could not restore {name} for {listing_id}: {exc}")
+    if restored:
+        print(f"  restored {restored} photo(s) from Blob for {listing_id}")
+    return count_downloaded_photos(PHOTOS_DIR, listing_id)
+
+
 def _optional(row, key):
     """Row access that tolerates a pre-migration db (sqlite3.Row raises
     IndexError rather than returning None for an unknown column)."""
@@ -332,6 +380,14 @@ def main() -> None:
     for listing_id in missing_ids:
         row = listings_by_id[listing_id]
         photo_count = count_downloaded_photos(PHOTOS_DIR, listing_id)
+        if not has_enough_photos(photo_count):
+            # Nothing on disk does not mean nothing exists. `data/photos/`
+            # does not survive the sandbox, and scrape will not re-download a
+            # listing whose URLs are all already hosted -- so a retry keyed on
+            # disk alone would find zero photos, re-record the failure, and do
+            # it again every run forever. Blob is the copy that outlives the
+            # machine; pull it back before giving up.
+            photo_count = hydrate_from_blob(conn, listing_id)
         if not has_enough_photos(photo_count):
             upsert_visual_score(conn, listing_id, None)
             print(

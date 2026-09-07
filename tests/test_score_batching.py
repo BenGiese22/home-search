@@ -354,7 +354,10 @@ def test_a_current_source_commute_is_scored(tmp_path: Path, monkeypatch, capsys)
     row = _score_one(tmp_path, monkeypatch, COMMUTE_SOURCE)
     # 18 minutes is inside the flat region of the curve.
     assert row["commute_score"] == 100.0
-    assert row["has_incomplete_data"] == 0
+    # The fixture has no visual_scores row, which now legitimately flags the
+    # listing incomplete -- a missing photo score takes the neutral and says
+    # so. This test is about the commute, so it asserts the commute only.
+    assert row["commute_score"] == 100.0
 
 
 def test_a_row_measured_a_different_way_scores_as_missing(

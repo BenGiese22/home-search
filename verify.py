@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from src.commute import COMMUTE_SOURCE
+from src.vision import MIN_PHOTOS_FOR_VISION_SCORING
 from src.config import load_env  # noqa: F401  (kept for .env side effects)
 from src.db import duplicate_address_groups, duplicate_property_groups
 from src.turso_db import stage_connection
@@ -138,6 +139,43 @@ def check_addresses_are_unique(conn) -> Violation | None:
     )
 
 
+def check_photos_are_scored(conn) -> Violation | None:
+    """A listing with enough photos must have a usable visual score.
+
+    The gap this closes: two listings carried `photo_score_unavailable = 1`
+    for a week while holding 37 and 10 hosted photos. Nothing noticed. The
+    existing photo check asks whether URLs were hosted, which both passed --
+    it has never asked whether the hosted photos were ever looked at.
+
+    The cost of not asking was not a blank field. The keyword fallback that
+    used to cover a missing photo score returned 100 for the word "backyard"
+    in the seller's own copy, so the two unscored listings were ranked 19th
+    and 29th on a perfect outdoor score. A missing answer is now neutral and
+    flagged, which is honest -- but a listing sitting unscored for a week
+    should be visible without anyone going looking.
+    """
+    rows = _rows(
+        conn,
+        f"""
+        SELECT l.listing_id, l.address,
+               (SELECT COUNT(*) FROM hosted_photos h
+                 WHERE h.listing_id = l.listing_id) AS photos
+        FROM listings l
+        LEFT JOIN visual_scores v ON v.listing_id = l.listing_id
+        WHERE (v.listing_id IS NULL OR v.photo_score_unavailable = 1)
+          AND photos >= {MIN_PHOTOS_FOR_VISION_SCORING}
+        ORDER BY l.listing_id
+        """,
+    )
+    if not rows:
+        return None
+    return Violation(
+        "photos_never_scored",
+        f"{len(rows)} listing(s) have photos nothing has scored",
+        [f"{row['address']} ({row['photos']} photos)" for row in rows],
+    )
+
+
 def check_properties_are_unique(conn) -> Violation | None:
     """One property, one row -- checked against Compass's own property id.
 
@@ -245,6 +283,7 @@ CHECKS: tuple[Callable, ...] = (
     check_no_orphaned_children,
     check_addresses_are_unique,
     check_properties_are_unique,
+    check_photos_are_scored,
     check_every_listing_has_a_commute_row,
     check_commutes_share_one_source,
 )
