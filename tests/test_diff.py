@@ -145,26 +145,6 @@ def test_format_report_no_delisted_reads_clean():
     assert "0 delisted" in text
 
 
-def test_pinned_id_absent_from_fetched_is_not_delisted():
-    before = {"abc123": ("$650,000", 650000.0), "pinned789": ("$1", 1.0)}
-
-    report = compute_changes([SAMPLE], before, pinned_ids=frozenset({"pinned789"}))
-
-    assert report.delisted_ids == []
-
-
-def test_pinned_id_does_not_suppress_other_delisted_ids():
-    before = {
-        "abc123": ("$650,000", 650000.0),
-        "pinned789": ("$1", 1.0),
-        "gone456": ("$500,000", 500000.0),
-    }
-
-    report = compute_changes([SAMPLE], before, pinned_ids=frozenset({"pinned789"}))
-
-    assert report.delisted_ids == ["gone456"]
-
-
 def test_apply_delisting_removes_the_db_row_and_the_photos(tmp_path: Path):
     """Two things now, not three. The JSON store used to be the third, and
     delisting deleted its file; the scrape no longer writes one, so
@@ -225,7 +205,7 @@ def test_should_apply_delisting_false_when_fetch_failed():
     before = {"abc123": ("$1", 1.0), "gone456": ("$1", 1.0)}
     report = compute_changes([], before)  # would look like both are delisted
 
-    assert should_apply_delisting(False, report, before, frozenset()) is False
+    assert should_apply_delisting(False, report, before) is False
 
 
 def test_should_apply_delisting_true_for_a_normal_small_delist():
@@ -235,7 +215,7 @@ def test_should_apply_delisting_true_for_a_normal_small_delist():
     fetched = [Listing(**{**SAMPLE.__dict__, "listing_id": lid}) for lid in fetched_ids]
     report = compute_changes(fetched, before)
 
-    assert should_apply_delisting(True, report, before, frozenset()) is True
+    assert should_apply_delisting(True, report, before) is True
 
 
 def test_should_apply_delisting_false_when_almost_everything_looks_delisted():
@@ -245,29 +225,11 @@ def test_should_apply_delisting_false_when_almost_everything_looks_delisted():
     before = {f"id{i}": ("$1", 1.0) for i in range(5)}
     report = compute_changes([], before)
 
-    assert should_apply_delisting(True, report, before, frozenset()) is False
+    assert should_apply_delisting(True, report, before) is False
 
 
 def test_should_apply_delisting_true_when_no_listings_known_yet():
-    assert should_apply_delisting(True, compute_changes([], {}), {}, frozenset()) is True
-
-
-def test_should_apply_delisting_excludes_pinned_ids_from_the_denominator():
-    # 1 of 2 *eligible* (non-pinned) listings delisted -- the pinned
-    # listing must not count toward "everything known" or appear in
-    # delisted_ids itself.
-    before = {
-        "pinned1": ("$1", 1.0),
-        "stays123": ("$1", 1.0),
-        "gone456": ("$1", 1.0),
-    }
-    fetched = [Listing(**{**SAMPLE.__dict__, "listing_id": "stays123"})]
-    report = compute_changes(fetched, before, pinned_ids=frozenset({"pinned1"}))
-
-    assert report.delisted_ids == ["gone456"]
-    # eligible = {stays123, gone456} = 2; delisted = 1 -> 0.5, at the
-    # threshold (<=), so this is still considered safe.
-    assert should_apply_delisting(True, report, before, frozenset({"pinned1"})) is True
+    assert should_apply_delisting(True, compute_changes([], {}), {}) is True
 
 
 def test_should_apply_delisting_false_for_total_wipeout_even_with_few_listings():
@@ -279,7 +241,7 @@ def test_should_apply_delisting_false_for_total_wipeout_even_with_few_listings()
     before = {"a": ("$1", 1.0), "b": ("$1", 1.0), "c": ("$1", 1.0)}
     report = compute_changes([], before)
 
-    assert should_apply_delisting(True, report, before, frozenset()) is False
+    assert should_apply_delisting(True, report, before) is False
 
 
 def test_run_delisting_removes_listings_when_safe(tmp_path: Path):
@@ -291,7 +253,7 @@ def test_run_delisting_removes_listings_when_safe(tmp_path: Path):
     fetched = [Listing(**{**SAMPLE.__dict__, "listing_id": "other456"})]  # abc123 delisted
     report = compute_changes(fetched, before)
 
-    run_delisting(conn, tmp_path / "photos", True, report, before, frozenset())
+    run_delisting(conn, tmp_path / "photos", True, report, before)
 
     assert [row["listing_id"] for row in query_listings(conn)] == ["other456"]
 
@@ -302,7 +264,7 @@ def test_run_delisting_skips_and_prints_when_unsafe(tmp_path: Path, capsys):
     before = {"abc123": ("$1", 1.0)}
     report = compute_changes([], before)
 
-    run_delisting(conn, tmp_path / "photos", False, report, before, frozenset())
+    run_delisting(conn, tmp_path / "photos", False, report, before)
 
     assert [row["listing_id"] for row in query_listings(conn)] == ["abc123"]
     assert "1" in capsys.readouterr().out
@@ -312,7 +274,7 @@ def test_run_delisting_prints_nothing_when_nothing_delisted(tmp_path: Path, caps
     conn = get_connection(tmp_path / "listings.db")
     report = compute_changes([], {})
 
-    run_delisting(conn, tmp_path / "photos", True, report, {}, frozenset())
+    run_delisting(conn, tmp_path / "photos", True, report, {})
 
     assert capsys.readouterr().out == ""
 
@@ -400,11 +362,11 @@ def test_failed_favorites_tab_cannot_delist_the_favorites_bucket():
 
     assert set(report.delisted_ids) == set(FAV_ONLY_IDS)
     # The fraction check alone would happily allow it ...
-    assert should_apply_delisting(True, report, before, frozenset()) is True
+    assert should_apply_delisting(True, report, before) is True
     # ... so the trust gate is what has to say no.
     fetch = StubFetch(counts={"matches": 149}, errors={"favorites": "boom"})
     trustworthy = collection_fetch_is_trustworthy(fetch, before)
-    assert should_apply_delisting(trustworthy, report, before, frozenset()) is False
+    assert should_apply_delisting(trustworthy, report, before) is False
 
 
 def test_failed_matches_tab_cannot_delist_either():
@@ -415,7 +377,7 @@ def test_failed_matches_tab_cannot_delist_either():
     report = compute_changes(fetched, before)
     fetch = StubFetch(counts={"favorites": 10}, errors={"matches": "boom"})
     trustworthy = collection_fetch_is_trustworthy(fetch, before)
-    assert should_apply_delisting(trustworthy, report, before, frozenset()) is False
+    assert should_apply_delisting(trustworthy, report, before) is False
 
 
 def test_first_run_with_favorites_adds_without_delisting():
@@ -432,7 +394,7 @@ def test_first_run_with_favorites_adds_without_delisting():
     assert report.delisted_ids == []
     fetch = StubFetch(counts={"favorites": 26, "matches": 149})
     assert should_apply_delisting(
-        collection_fetch_is_trustworthy(fetch, before), report, before, frozenset()
+        collection_fetch_is_trustworthy(fetch, before), report, before
     ) is True
 
 
@@ -606,9 +568,7 @@ def test_run_delisting_passes_the_blob_token_through(tmp_path: Path):
     )
     seen = []
 
-    run_delisting(
-        conn, tmp_path / "photos", True, report, before,
-        frozenset(), blob_token="tok",
+    run_delisting(conn, tmp_path / "photos", True, report, before, blob_token="tok",
         delete_fn=lambda urls, token: seen.append((urls, token)),
     )
 

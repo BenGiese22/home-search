@@ -30,9 +30,9 @@ def add(conn, lid, hosted=0):
         """INSERT INTO listings (
              listing_id, address, city, state, zip_code, price, beds, baths,
              sqft, lot_sqft, parking_spaces, year_built, description,
-             listing_url, is_pinned, property_type, localized_status
+             listing_url, property_type, localized_status
            ) VALUES (?, 'A St', 'Arvada', 'CO', '80003', '$1', 3, 2.0, 1800,
-                     7000, 2, 1990, 'd', 'https://x/l', 0, 'Single Family', 'Active')""",
+                     7000, 2, 1990, 'd', 'https://x/l', 'Single Family', 'Active')""",
         (lid,),
     )
     for i in range(hosted):

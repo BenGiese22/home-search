@@ -117,8 +117,7 @@ def test_the_scrapes_database_work_does_not_grow_with_the_corpus():
         get_amenities_by_listing,
         get_listing_ids_missing_fields,
         get_photo_urls_by_listing,
-        get_pinned_listing_ids,
-        get_price_snapshot,
+            get_price_snapshot,
         hosted_photo_index,
         listing_ids_with_any_hosted_or_no_urls,
         listings_from_rows,
@@ -140,7 +139,6 @@ def test_the_scrapes_database_work_does_not_grow_with_the_corpus():
 
         # --- setup, exactly as main() does it ---
         get_price_snapshot(conn)
-        get_pinned_listing_ids(conn)
         hosted_photo_index(conn)
         set(get_listing_ids_missing_fields(conn, scrape.BACKFILL_FIELDS))
         listing_ids_with_any_hosted_or_no_urls(conn)

@@ -119,7 +119,7 @@ def test_pending_favorite_is_kept():
     """The whole point of #50: a favorite that goes under contract keeps its
     row, photos and paid vision scoring, because Pending deals fall through."""
     kept = select_present_listings(
-        [_l("fav", "Pending")], pinned_ids=frozenset(), favorite_ids=frozenset({"fav"})
+        [_l("fav", "Pending")], favorite_ids=frozenset({"fav"})
     )
     assert [l.listing_id for l in kept] == ["fav"]
 
@@ -128,7 +128,7 @@ def test_pending_non_favorite_is_still_excluded():
     """Ben's 2026-08-27 call stands for listings generally -- the exemption is
     scoped to favorites, not a change to is_active_status."""
     assert select_present_listings(
-        [_l("match", "Pending")], pinned_ids=frozenset(), favorite_ids=frozenset()
+        [_l("match", "Pending")], favorite_ids=frozenset()
     ) == []
 
 
@@ -137,17 +137,10 @@ def test_dead_favorite_is_still_excluded(status):
     """Pending only. A Closed or Expired favorite is genuinely gone and would
     otherwise accumulate forever."""
     assert select_present_listings(
-        [_l("fav", status)], pinned_ids=frozenset(), favorite_ids=frozenset({"fav"})
+        [_l("fav", status)], favorite_ids=frozenset({"fav"})
     ) == []
-
-
-def test_active_and_pinned_paths_are_unchanged():
-    listings = [_l("active", "Active"), _l("coming", "Coming Soon"),
-                _l("pinned", "Expired"), _l("dead", "Closed")]
-    kept = select_present_listings(listings, pinned_ids=frozenset({"pinned"}))
-    assert [l.listing_id for l in kept] == ["active", "coming", "pinned"]
 
 
 def test_favorite_ids_defaults_to_empty():
     """Callers that pass no favorites get exactly the old behaviour."""
-    assert select_present_listings([_l("fav", "Pending")], pinned_ids=frozenset()) == []
+    assert select_present_listings([_l("fav", "Pending")]) == []

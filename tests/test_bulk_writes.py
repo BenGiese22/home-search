@@ -128,21 +128,6 @@ def test_re_upserting_a_listing_replaces_rather_than_appends_children(tmp_path):
     assert get_amenities_by_listing(conn)["L0001"] == ["Amenity 1-0"]
 
 
-def test_pin_status_is_preserved_per_listing(tmp_path):
-    """upsert_listing fully replaces the row, so pin status must be passed
-    per listing on every write or a pinned listing is silently un-pinned."""
-    conn = get_connection(tmp_path / "db.sqlite")
-    listings = [_listing(1), _listing(2)]
-
-    bulk_upsert_listings(conn, listings, pinned_ids={"L0002"})
-
-    pinned = {
-        row["listing_id"]: row["is_pinned"]
-        for row in conn.execute("SELECT listing_id, is_pinned FROM listings")
-    }
-    assert pinned == {"L0001": 0, "L0002": 1}
-
-
 def test_an_empty_batch_is_a_clean_no_op(tmp_path):
     conn = get_connection(tmp_path / "db.sqlite")
 

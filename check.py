@@ -3,10 +3,10 @@ from pathlib import Path
 from src.auth import launch_authenticated_page
 from src.config import load_config, load_env
 from src.turso_db import stage_connection
-from src.db import get_pinned_listing_ids, get_price_snapshot, upsert_listing
+from src.db import get_price_snapshot, upsert_listing
 from src.diff import collection_fetch_is_trustworthy, compute_changes, format_report, run_delisting
 from src.models import select_present_listings
-from src.scraper import derive_pinned_ids_from_urls, fetch_collection_tabs
+from src.scraper import fetch_collection_tabs
 
 DATA_DIR = Path("data")
 PHOTOS_DIR = DATA_DIR / "photos"
@@ -25,9 +25,6 @@ def main() -> None:
     # match: a listing whose pin predates this feature (or that a schema
     # migration reset) is still protected here even before scrape.py next
     # runs to durably re-pin it.
-    pinned_ids = get_pinned_listing_ids(db_conn) | derive_pinned_ids_from_urls(
-        config.listing_urls
-    )
     before = get_price_snapshot(db_conn)
 
     with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
@@ -48,10 +45,10 @@ def main() -> None:
     # upserting and delisting purposes alike, exactly like one that dropped
     # out of the collection API's results entirely -- see scrape.py's
     # matching logic for the full rationale. Pinned listings are exempt.
-    present = select_present_listings(fetched, pinned_ids, fetch.favorite_ids)
+    present = select_present_listings(fetched, fetch.favorite_ids)
 
     # Deliberately loop over `present`, not the raw `fetched` list: an
-    # inactive, non-pinned listing must never be upserted here, even for the
+    # inactive listing must never be upserted here, even for the
     # first time -- compute_changes()/run_delisting() below can only remove
     # a listing that was already tracked (present in `before`) and then
     # drops out; a listing that shows up already inactive and was never
@@ -60,12 +57,11 @@ def main() -> None:
     for listing in present:
         # Preserve pin status: check.py never sets a pin itself (it doesn't
         # scrape LISTING_URLS), but a collection listing that's already
-        # pinned from a prior scrape.py run must not be un-pinned here.
-        upsert_listing(db_conn, listing, is_pinned=listing.listing_id in pinned_ids)
+        upsert_listing(db_conn, listing)
 
-    report = compute_changes(present, before, pinned_ids=pinned_ids)
+    report = compute_changes(present, before)
     run_delisting(
-        db_conn, PHOTOS_DIR, fetch_succeeded, report, before, pinned_ids,
+        db_conn, PHOTOS_DIR, fetch_succeeded, report, before,
         # Without this, a delisting that happens to run through check.py
         # deletes the hosted_photos rows and strands their blobs -- the same
         # asymmetry that let 1,813 orphans accumulate when bulk_delete_listings

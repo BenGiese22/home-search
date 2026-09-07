@@ -54,10 +54,10 @@ def add_listing(
         """INSERT INTO listings (
              listing_id, address, city, state, zip_code, price, beds, baths,
              sqft, lot_sqft, parking_spaces, year_built, description,
-             listing_url, is_pinned, property_type, localized_status
+             listing_url, property_type, localized_status
            ) VALUES (?, ?, 'Arvada', 'CO', '80003', '$500,000', 3, 2.0,
                      1800, 7000, 2, 1990, 'a house',
-                     'https://x/l', 0, 'Single Family', 'Active')""",
+                     'https://x/l', 'Single Family', 'Active')""",
         (lid, address),
     )
     for i in range(urls):

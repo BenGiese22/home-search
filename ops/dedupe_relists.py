@@ -43,7 +43,7 @@ PHOTOS_DIR = Path("data") / "photos"
 
 def _row(conn, listing_id):
     return conn.execute(
-        """SELECT localized_status, price, is_pinned,
+        """SELECT localized_status, price,
              (SELECT COUNT(*) FROM hosted_photos h WHERE h.listing_id = ?) AS photos
            FROM listings WHERE listing_id = ?""",
         (listing_id, listing_id),
@@ -58,10 +58,10 @@ def choose(conn, ids: list[str]) -> tuple[str, str, str]:
         keep = with_status[0]
         return keep, next(i for i in ids if i != keep), "only one has a status"
 
-    by_photos = sorted(ids, key=lambda i: rows[i][3], reverse=True)
-    if rows[by_photos[0]][3] != rows[by_photos[1]][3]:
+    by_photos = sorted(ids, key=lambda i: rows[i][2], reverse=True)
+    if rows[by_photos[0]][2] != rows[by_photos[1]][2]:
         return by_photos[0], by_photos[1], (
-            f"more hosted photos ({rows[by_photos[0]][3]} vs {rows[by_photos[1]][3]})"
+            f"more hosted photos ({rows[by_photos[0]][2]} vs {rows[by_photos[1]][2]})"
         )
     raise ValueError("no clear winner; needs a human")
 
@@ -80,7 +80,7 @@ def main() -> int:
         for i in ids:
             r = _row(conn, i)
             status = (r[0] or "(no status)")
-            print(f"  {i}  {status:14} {r[1]:>9}  pinned={r[2]}  photos={r[3]}")
+            print(f"  {i}  {status:14} {r[1]:>9}  photos={r[2]}")
         if len(ids) != 2:
             print("  SKIP: more than two rows, needs a human")
             continue

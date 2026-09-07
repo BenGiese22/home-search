@@ -15,7 +15,6 @@ from src.db import (
     get_amenities_by_listing,
     get_listing_ids_missing_fields,
     get_photo_urls_by_listing,
-    get_pinned_listing_ids,
     get_price_snapshot,
     hosted_photo_index,
     listing_ids_with_any_hosted_or_no_urls,
@@ -43,7 +42,6 @@ from src.photos import download_photos
 from src.property_id import resolve_property_id
 from src.scraper import (
     derive_listing_id_from_url,
-    derive_pinned_ids_from_urls,
     fetch_collection_tabs,
     scrape_listing,
 )
@@ -255,10 +253,11 @@ def orphan_ids(db_conn, backfill_fields=BACKFILL_FIELDS) -> set[str]:
 def _backfill_orphans(db_conn, page: Page, skip_photos: bool) -> None:
     """Refresh stale listings that neither ingestion path can reach.
 
-    A listing pinned in the DB but no longer in LISTING_URLS and no longer in
-    the active collection is invisible to both branches above -- it would keep
-    whatever fields it had when it was last scraped, forever. Its listing_url
-    is still on its row, so re-scrape it from that.
+    A listing can be in the corpus, need work, and be reachable by no branch
+    above -- fields added since it was last scraped, or photo_urls with
+    nothing hosted behind them (issue #70: 5012 West 77th Drive sat with 37
+    photo URLs and zero hosted photos while every run reported success). Its
+    listing_url is still on its row, so re-scrape it from that.
     """
     # One statement for the whole corpus, not one file open per listing.
     stale_ids = orphan_ids(db_conn)
@@ -266,11 +265,10 @@ def _backfill_orphans(db_conn, page: Page, skip_photos: bool) -> None:
     if not stale:
         return
     print(f"backfill: {len(stale)} unreachable listing(s) to refresh by stored URL")
-    pinned_ids = get_pinned_listing_ids(db_conn)
     for row in stale:
         try:
             listing = scrape_listing(page, row["listing_url"])
-            upsert_listing(db_conn, listing, is_pinned=row["listing_id"] in pinned_ids)
+            upsert_listing(db_conn, listing)
             _save_listing(listing, skip_photos, page)
         except Exception as exc:
             print(f"skip listing (failed to refresh {row['address']}): {exc}")
@@ -347,20 +345,10 @@ def main() -> None:
             "could not be hosted. Set it, or pass --skip-photos."
         )
     db_conn = stage_connection()
-    # Snapshot BEFORE any upserts this run touch the DB -- including the
-    # explicit-URL loop below -- so a genuine price change on a listing
-    # that's both pinned and collection-fetched is still detected. Taking
-    # this after that loop would read back the price it just wrote.
+    # Snapshot BEFORE any upserts this run touch the DB, so a genuine price
+    # change is still detected -- taking it afterwards would read back the
+    # price this run just wrote.
     before = get_price_snapshot(db_conn)
-    # Tracks pin status across this run: starts as the union of the
-    # authoritative persisted flag and a best-effort URL match (protects a
-    # pin a schema migration reset, or one that predates a re-run of this
-    # script), then grows further as the explicit-URL loop below actually
-    # confirms real listing_ids via scraping -- the authoritative source
-    # for anything not already in the DB or config.
-    pinned_ids: set[str] = set(
-        get_pinned_listing_ids(db_conn) | derive_pinned_ids_from_urls(config.listing_urls)
-    )
     # One read of the whole hosted index, mutated in memory as listings are
     # scraped. This is what replaced is_scraped()'s per-listing file check:
     # a question the database can answer, so it works with no disk at all.
@@ -371,47 +359,7 @@ def main() -> None:
         set(get_listing_ids_missing_fields(db_conn, BACKFILL_FIELDS))
         if backfill_missing else set()
     )
-    # Only needed by the explicit-URL loop, which decides before it knows a
-    # listing's photo URLs. Skipped entirely when LISTING_URLS is unset.
-    prefetch_settled = (
-        listing_ids_with_any_hosted_or_no_urls(db_conn) if config.listing_urls else frozenset()
-    )
-
     with launch_authenticated_page(config, LOGIN_URL, AUTH_STATE_PATH) as page:
-        for url in config.listing_urls:
-            precheck_id = derive_listing_id_from_url(url)
-            # --backfill-missing must reach pinned listings too. They take the
-            # detail-page branch rather than the collection one, so filtering
-            # only the collection batch left every pinned listing stale.
-            stale = (
-                backfill_missing and precheck_id is not None and precheck_id in stale_ids
-            )
-            # A weak gate, and deliberately so: this runs BEFORE the detail
-            # page is fetched, so the listing's current photo URLs are not
-            # known yet. Membership means "nothing suggests work is needed";
-            # the real decision is made below, once the URLs are in hand.
-            if (
-                not force and not stale and precheck_id
-                and precheck_id in prefetch_settled
-            ):
-                print(f"skip (already scraped): {url}")
-                continue
-            try:
-                listing = scrape_listing(page, url)
-                pinned_ids.add(listing.listing_id)
-                upsert_listing(db_conn, listing, is_pinned=True)
-                stale = stale or (backfill_missing and listing.listing_id in stale_ids)
-                if not should_process(
-                    force=force, scraped=not needs_photo_work(listing, hosted), stale=stale
-                ):
-                    print(f"skip (already scraped): {listing.address}")
-                    continue
-                _save_listing(listing, skip_photos, page)
-                record_hosted(hosted, listing)
-            except Exception as exc:
-                print(f"skip listing (failed to process {url}): {exc}")
-                continue
-
         if config.collection_url:
             fetch = fetch_collection_tabs(
                 page, config.collection_url, config.collection_tabs
@@ -428,26 +376,23 @@ def main() -> None:
             # Sold, Withdrawn, ...) is treated as absent from the
             # collection for every purpose below -- upserting, photo/JSON
             # saving, and delisting -- exactly like one that dropped out of
-            # every fetched tab entirely, going through the same
-            # reviewed, circuit-breaker-protected removal path rather than
-            # new logic. Pinned listings are exempt, same as delisting
-            # already exempts them: an explicit pin means Ben wants it
-            # tracked regardless of what the MLS status says. A favorite
-            # that has gone Pending is exempt too -- see
+            # every fetched tab entirely, going through the same reviewed,
+            # circuit-breaker-protected removal path rather than new logic.
+            # A favorite that has gone Pending is exempt -- see
             # select_present_listings and issue #50.
             present_listings = select_present_listings(
-                collection_listings, pinned_ids, fetch.favorite_ids
+                collection_listings, fetch.favorite_ids
             )
             inactive_count = len(collection_listings) - len(present_listings)
             if inactive_count:
                 print(f"{inactive_count} listing(s) no longer active (expired/sold/withdrawn), excluding")
 
-            # Refresh every present (active/pinned) listing's DB row
+            # Refresh every present listing's DB row
             # regardless of --limit/--new-listing -- cheap (no network), and
             # it's what keeps price-change detection correct even during a
             # deliberately limited/staged run that skips most photos.
             # Deliberately NOT looping over the raw collection_listings: an
-            # inactive, non-pinned listing must never be upserted here, even
+            # inactive listing must never be upserted here, even
             # for the first time -- compute_changes()/run_delisting() below
             # can only remove a listing that was already tracked (present in
             # `before`) and then drops out; a listing that shows up already
@@ -459,10 +404,7 @@ def main() -> None:
             # (one per amenity and one per photo URL, because
             # turso_serverless's executemany loops), which is ~8,385
             # round-trips -- about 33 minutes -- across this corpus.
-            # pinned_ids carries the CURRENT pin status of every listing, for
-            # the same reason upsert_listing takes is_pinned: this is a full
-            # row replace, so a listing missing from it is actively un-pinned.
-            bulk_upsert_listings(db_conn, present_listings, pinned_ids=pinned_ids)
+            bulk_upsert_listings(db_conn, present_listings)
 
             # --limit caps how many listings this run downloads photos for
             # and saves to the JSON store -- e.g. for a first smoke test of
@@ -488,7 +430,7 @@ def main() -> None:
                 flags = f"--limit={limit}" + (" --new-listing" if new_listing_only else "")
                 print(
                     f"{flags}: processing {len(to_process)} of "
-                    f"{len(present_listings)} active/pinned listings this run"
+                    f"{len(present_listings)} active listings this run"
                 )
 
             if backfill_missing:
@@ -525,7 +467,7 @@ def main() -> None:
                 _backfill_orphans(db_conn, page, skip_photos)
 
             report = compute_changes(
-                present_listings, before, pinned_ids=frozenset(pinned_ids)
+                present_listings, before
             )
             # The blob token is passed so a delisted listing's hosted photos
             # are reclaimed rather than stranded -- hosted_photos.blob_url is
@@ -539,14 +481,13 @@ def main() -> None:
 
             run_delisting(
                 db_conn, PHOTOS_DIR, fetch_succeeded, report, before,
-                frozenset(pinned_ids),
                 blob_token=load_env().get("BLOB_READ_WRITE_TOKEN"),
             )
 
             # A relist arrives as a NEW listing_id for a house already in the
             # corpus, so nothing above notices: the old row is not delisted
-            # (Compass stopped returning that id, but pinned rows are exempt
-            # and an unpinned one only goes when the cascade runs) and the new
+            # (Compass stopped returning that id, and it only goes when the
+            # cascade runs) and the new
             # row is inserted beside it. The result is one property scored
             # twice, ranked twice, and paid for twice at the vision API.
             #

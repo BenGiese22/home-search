@@ -34,7 +34,6 @@ CREATE TABLE IF NOT EXISTS listings (
     year_built INTEGER NOT NULL,
     description TEXT NOT NULL,
     listing_url TEXT NOT NULL,
-    is_pinned INTEGER NOT NULL DEFAULT 0,
     property_type TEXT NOT NULL DEFAULT '',
     localized_status TEXT NOT NULL DEFAULT '',
     hoa_annual REAL,
@@ -194,8 +193,6 @@ def init_db(conn: sqlite3.Connection) -> None:
     if "hoa_score" not in existing_score_columns:
         conn.execute("ALTER TABLE scores ADD COLUMN hoa_score REAL NOT NULL DEFAULT 0")
     existing_listing_columns = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
-    if "is_pinned" not in existing_listing_columns:
-        conn.execute("ALTER TABLE listings ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
     if "property_type" not in existing_listing_columns:
         conn.execute("ALTER TABLE listings ADD COLUMN property_type TEXT NOT NULL DEFAULT ''")
     if "localized_status" not in existing_listing_columns:
@@ -236,29 +233,22 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def upsert_listing(conn: sqlite3.Connection, listing: Listing, is_pinned: bool = False) -> None:
+def upsert_listing(conn: sqlite3.Connection, listing: Listing) -> None:
     """Insert or fully replace a listing's row and its amenities/photo_urls.
     Safe to call repeatedly for the same listing_id — re-scraping a listing
     should reflect its current state, not accumulate stale child rows.
 
-    is_pinned marks a listing as individually tracked (scraped via a
-    LISTING_URLS entry rather than discovered through the collection),
-    which exempts it from delisting. Because this is a full row replace,
-    every caller must pass the listing's CURRENT pin status on every call
-    — omitting it silently un-pins a previously pinned listing the next
-    time it's upserted from a different source (e.g. the collection).
-    Look it up via get_pinned_listing_ids() first if you're not the one
-    setting the pin."""
+"""
     with conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO listings (
                 listing_id, address, city, state, zip_code,
                 price, price_numeric, beds, baths, sqft, lot_sqft,
-                parking_spaces, year_built, description, listing_url, is_pinned,
+                parking_spaces, year_built, description, listing_url,
                 property_type, localized_status, hoa_annual, tax_annual,
                 sqft_above_grade, sqft_below_grade, outdoor_spaces
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 listing.listing_id,
@@ -276,7 +266,6 @@ def upsert_listing(conn: sqlite3.Connection, listing: Listing, is_pinned: bool =
                 listing.year_built,
                 listing.description,
                 listing.listing_url,
-                int(is_pinned),
                 listing.property_type,
                 listing.localized_status,
                 listing.hoa_annual,
@@ -301,13 +290,13 @@ def upsert_listing(conn: sqlite3.Connection, listing: Listing, is_pinned: bool =
 _LISTING_COLUMNS = (
     "listing_id", "address", "city", "state", "zip_code", "price",
     "price_numeric", "beds", "baths", "sqft", "lot_sqft", "parking_spaces",
-    "year_built", "description", "listing_url", "is_pinned", "property_type",
+    "year_built", "description", "listing_url", "property_type",
     "localized_status", "hoa_annual", "tax_annual", "sqft_above_grade",
     "sqft_below_grade", "outdoor_spaces",
 )
 
 
-def _listing_values(listing: Listing, is_pinned: bool) -> tuple:
+def _listing_values(listing: Listing) -> tuple:
     return (
         listing.listing_id,
         listing.address,
@@ -324,7 +313,6 @@ def _listing_values(listing: Listing, is_pinned: bool) -> tuple:
         listing.year_built,
         listing.description,
         listing.listing_url,
-        int(is_pinned),
         listing.property_type,
         listing.localized_status,
         listing.hoa_annual,
@@ -372,9 +360,7 @@ def _delete_where_listing_in(conn, table: str, listing_ids: list[str]) -> None:
         )
 
 
-def bulk_upsert_listings(
-    conn, listings: list[Listing], pinned_ids: Collection[str] = ()
-) -> None:
+def bulk_upsert_listings(conn, listings: list[Listing]) -> None:
     """Insert or replace many listings and their children in a handful of
     statements. The set-at-a-time counterpart of upsert_listing().
 
@@ -387,10 +373,6 @@ def bulk_upsert_listings(
     Order matters: listings first, then children. Turso enforces the foreign
     keys local SQLite ignores, so writing an amenity before its listing row
     aborts the whole write.
-
-    pinned_ids must carry the CURRENT pin status of every listing in the
-    batch, for the same reason upsert_listing takes is_pinned: this is a full
-    row replace, so a listing absent from pinned_ids is actively un-pinned.
 
     Duplicates are removed first. `listings` is INSERT OR REPLACE on a primary
     key so a repeat is harmless there, but `amenities` and `photo_urls` have
@@ -405,14 +387,13 @@ def bulk_upsert_listings(
     if not listings:
         return
     listings = dedupe_by_listing_id(listings)
-    pinned = set(pinned_ids)
     listing_ids = [listing.listing_id for listing in listings]
 
     with conn:
         # Parents first.
         _insert_in_chunks(
             conn, "listings", _LISTING_COLUMNS,
-            [_listing_values(l, l.listing_id in pinned) for l in listings],
+            [_listing_values(l) for l in listings],
         )
         # Then children: clear the whole set in one statement per table
         # rather than one per listing, then insert the current set.
@@ -1151,15 +1132,6 @@ def find_relisted(conn, fetched_ids: Collection[str]) -> list[tuple[str, str, st
             for drop in stale:
                 out.append((address, live[0], drop))
     return out
-
-
-def get_pinned_listing_ids(conn: sqlite3.Connection) -> frozenset[str]:
-    """Listing_ids currently marked is_pinned — tracked individually via
-    LISTING_URLS rather than discovered through the collection, and
-    therefore exempt from delisting regardless of whether they show up in
-    a collection fetch."""
-    rows = conn.execute("SELECT listing_id FROM listings WHERE is_pinned = 1").fetchall()
-    return frozenset(row["listing_id"] for row in rows)
 
 
 def get_price_snapshot(conn: sqlite3.Connection) -> dict[str, tuple[str, float | None]]:
