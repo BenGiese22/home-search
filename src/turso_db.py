@@ -113,8 +113,17 @@ CREATE TABLE IF NOT EXISTS vision_batches (
 -- reason as change_events and vision_batches: a rejection has to outlive
 -- every listing of the house it is about, and an FK would enrol it in the
 -- cascade it exists to survive.
+--
+-- The address is denormalised on purpose. A rejection outlives the listing it
+-- was made against -- that is the entire point -- so by the time anyone reads
+-- one back, nothing else in the database knows what `1272DA` was. Keying on
+-- identity without carrying legibility made `--list` print six opaque
+-- characters and a date.
 CREATE TABLE IF NOT EXISTS rejections (
     property_id TEXT PRIMARY KEY,
+    address TEXT,
+    city TEXT,
+    listing_url TEXT,
     reason TEXT,
     rejected_at TEXT NOT NULL
 );
