@@ -2,7 +2,7 @@ import pytest
 
 from src.models import Listing
 from src.scoring import (
-    CONDITION_KEYWORD_WEIGHT,
+    CONDITION_PHOTO_WEIGHT,
     CONDITION_YEAR_WEIGHT,
     HOA_HALF_PENALTY_AT,
     HOA_MAX_PENALTY,
@@ -110,42 +110,40 @@ def test_score_sqft_no_variance_scores_full():
     assert score_sqft(2000, 2000, 2000) == 100.0
 
 
-def test_score_condition_renovation_keyword_dominates():
-    high = score_condition("Beautifully Renovated kitchen", [], 1960)
-    low = score_condition("Original condition", [], 1960)
-    assert high > low
+# The keyword fallback is retired. It read the seller's own marketing copy
+# and returned 100 for the word "backyard" -- and its ceiling sat ABOVE the
+# vision path's observed ceiling of 80, so failing the photo scoring scored a
+# listing higher than succeeding at it. A missing photo score is now treated
+# the way a missing commute is: neutral, and flagged.
 
 
-def test_score_condition_keyword_match_is_case_insensitive_and_checks_amenities():
-    result = score_condition("Charming home", ["Fully Remodeled"], 1980)
-    year_component = 0.2 * ((1980 - 1955) / (2005 - 1955) * 100.0)
-    assert result == 0.8 * 100.0 + year_component
+def test_a_missing_photo_score_is_neutral_not_a_guess_from_the_description():
+    """5012 West 77th Drive is why. Vision never ran; the description says
+    "backyard opens directly to open space... perfect for entertaining"; it
+    scored a perfect 100 on a yard Ben and Megan toured and called "one of the
+    worst aspects of this home". Ranked 19 of 101."""
+    assert score_outdoor(None) == NEUTRAL_SCORE
+    assert score_outdoor() == NEUTRAL_SCORE
+
+
+def test_a_missing_photo_score_can_never_beat_a_real_one():
+    """The defect in one line. The old fallback returned 100 where the vision
+    path's observed maximum across the corpus is 80."""
+    assert score_outdoor(None) < score_outdoor(80.0)
+
+
+def test_condition_falls_to_neutral_on_its_photo_component():
+    year_score = (1980 - YEAR_BUILT_MIN) / (YEAR_BUILT_MAX - YEAR_BUILT_MIN) * 100.0
+    expected = CONDITION_PHOTO_WEIGHT * NEUTRAL_SCORE + CONDITION_YEAR_WEIGHT * year_score
+    assert score_condition(1980) == pytest.approx(expected)
 
 
 def test_score_condition_missing_year_built_is_neutral_secondary_signal():
-    with_keyword_no_year = score_condition("Renovated", [], 0)
-    assert with_keyword_no_year == 0.8 * 100.0 + 0.2 * 50.0
+    assert score_condition(0, visual_condition_score=100.0) == 0.8 * 100.0 + 0.2 * 50.0
 
 
-def test_score_condition_newer_year_scores_higher_without_keyword():
-    older = score_condition("Original condition", [], 1955)
-    newer = score_condition("Original condition", [], 2005)
-    assert newer > older
-
-
-def test_score_outdoor_keyword_hit_scores_high():
-    result = score_outdoor("Private yard with mature trees", [])
-    assert result == 100.0
-
-
-def test_score_outdoor_checks_amenities_too():
-    result = score_outdoor("Charming home", ["Great for Entertaining"])
-    assert result == 100.0
-
-
-def test_score_outdoor_no_keyword_is_weak_not_zero():
-    result = score_outdoor("A house", [])
-    assert 0.0 < result < 100.0
+def test_score_condition_newer_year_scores_higher():
+    assert score_condition(2005) > score_condition(1955)
 
 
 def test_score_room_count_min_max_normalizes_across_collection():
@@ -239,7 +237,8 @@ def test_a_missing_denver_leg_no_longer_flags_a_listing_as_incomplete():
     would make has_incomplete_data mean two different things and dilute the
     one it is for."""
     stats = CollectionStats(sqft_min=1000, sqft_max=3000)
-    assert not score_listing(LISTING, medtronic_minutes=18.0, stats=stats).has_incomplete_data
+    assert not score_listing(LISTING, medtronic_minutes=18.0, stats=stats,
+        visual_condition_score=70.0, visual_outdoor_score=60.0).has_incomplete_data
 
 
 def test_score_listing_flags_incomplete_data_when_sqft_missing():
@@ -272,32 +271,38 @@ def test_score_listing_flags_incomplete_data_when_beds_missing():
 def test_score_listing_has_incomplete_data_false_when_all_present():
     stats = CollectionStats(sqft_min=1000, sqft_max=3000)
 
-    result = score_listing(LISTING, medtronic_minutes=18.0, stats=stats)
+    result = score_listing(LISTING, medtronic_minutes=18.0, stats=stats,
+        visual_condition_score=70.0, visual_outdoor_score=60.0)
 
     assert result.has_incomplete_data is False
 
 
 def test_score_condition_uses_visual_score_when_provided():
-    with_visual = score_condition("no renovation keywords here", [], 1980, visual_condition_score=90.0)
-    without_visual = score_condition("no renovation keywords here", [], 1980)
-
-    assert with_visual > without_visual
+    assert score_condition(1980, visual_condition_score=90.0) > score_condition(1980)
 
 
-def test_score_condition_visual_score_replaces_keyword_component_exactly():
+def test_score_condition_visual_score_carries_the_photo_component_exactly():
     year_score = (1980 - YEAR_BUILT_MIN) / (YEAR_BUILT_MAX - YEAR_BUILT_MIN) * 100.0
-    expected = CONDITION_KEYWORD_WEIGHT * 90.0 + CONDITION_YEAR_WEIGHT * year_score
-
-    result = score_condition("irrelevant text with no keywords", [], 1980, visual_condition_score=90.0)
-    assert result == pytest.approx(expected)
+    expected = CONDITION_PHOTO_WEIGHT * 90.0 + CONDITION_YEAR_WEIGHT * year_score
+    assert score_condition(1980, visual_condition_score=90.0) == pytest.approx(expected)
 
 
 def test_score_outdoor_uses_visual_score_when_provided():
-    assert score_outdoor("no outdoor keywords here", [], visual_outdoor_score=75.0) == 75.0
+    assert score_outdoor(75.0) == 75.0
 
 
-def test_score_outdoor_falls_back_to_keywords_when_visual_score_absent():
-    assert score_outdoor("Private yard with mature trees", []) == 100.0
+def test_a_listing_with_no_photo_score_is_flagged_incomplete():
+    """The neutral must not be silent. An unflagged fallback is exactly the
+    shape of wrongness this rubric keeps producing."""
+    stats = CollectionStats(sqft_min=1000, sqft_max=3000)
+    flagged = score_listing(LISTING, medtronic_minutes=18.0, stats=stats)
+    assert flagged.has_incomplete_data is True
+
+    scored = score_listing(
+        LISTING, medtronic_minutes=18.0, stats=stats,
+        visual_condition_score=70.0, visual_outdoor_score=60.0,
+    )
+    assert scored.has_incomplete_data is False
 
 
 def test_score_listing_passes_visual_scores_through():
@@ -314,7 +319,12 @@ def test_score_listing_passes_visual_scores_through():
     # everything else this task doesn't touch should be identical
     assert with_visual.room_count_score == without_visual.room_count_score
     assert with_visual.parking_score == without_visual.parking_score
-    assert with_visual.has_incomplete_data == without_visual.has_incomplete_data
+    # has_incomplete_data is deliberately NOT identical. A listing with no
+    # photo score now takes the neutral and says so -- which is the whole
+    # point of retiring the keyword fallback that used to guess 100 from the
+    # seller's own description.
+    assert with_visual.has_incomplete_data is False
+    assert without_visual.has_incomplete_data is True
 
 
 def test_score_hoa_unknown_is_neutral():
@@ -381,7 +391,8 @@ def test_score_listing_has_incomplete_data_false_when_hoa_confirmed_zero():
     field on Listing. This is the single most important regression test
     for the None-vs-0.0 design."""
     listing = LISTING.__class__(**{**LISTING.__dict__, "hoa_annual": 0.0})
-    result = score_listing(listing, medtronic_minutes=15.0, stats=STATS)
+    result = score_listing(listing, medtronic_minutes=15.0, stats=STATS,
+        visual_condition_score=70.0, visual_outdoor_score=60.0)
     assert result.has_incomplete_data is False
 
 

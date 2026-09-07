@@ -15,6 +15,7 @@ from verify import (
     CHECKS,
     check_addresses_are_unique,
     check_properties_are_unique,
+    check_photos_are_scored,
     check_active_listings_have_photos,
     check_corpus_is_not_empty,
     check_every_listing_is_scored,
@@ -366,3 +367,44 @@ def test_unresolved_listings_assert_nothing(conn):
     add_listing(conn, "L2", address="Two", urls=3, hosted=3)
 
     assert check_properties_are_unique(conn) is None
+
+
+def test_a_listing_whose_photos_were_never_scored_is_a_violation(conn):
+    """Two listings sat in exactly this state for a week, ranked 19th and 29th
+    on a keyword fallback that read the seller's marketing copy. The existing
+    photo check asks whether URLs were hosted; it never asked whether the
+    hosted photos were looked at."""
+    add_listing(conn, "L1", urls=37, hosted=37)
+    conn.execute(
+        "UPDATE visual_scores SET photo_score_unavailable = 1 WHERE listing_id = 'L1'"
+    )
+    conn.commit()
+
+    violations = run_checks(conn)
+
+    assert "photos_never_scored" in [v.check for v in violations]
+
+
+def test_a_listing_with_too_few_photos_to_score_is_not_a_violation(conn):
+    """Three photos is an answer, not a failure. Flagging it would train
+    people to ignore the check."""
+    add_listing(conn, "L1", urls=3, hosted=3)
+    conn.execute(
+        "UPDATE visual_scores SET photo_score_unavailable = 1 WHERE listing_id = 'L1'"
+    )
+    conn.commit()
+
+    assert check_photos_are_scored(conn) is None
+
+
+def test_a_scored_listing_holds(conn):
+    add_listing(conn, "L1", urls=37, hosted=37)
+    conn.execute(
+        """INSERT INTO visual_scores (
+             listing_id, condition_photo_score, outdoor_photo_score,
+             has_layout_plan, watermarked_staging_detected,
+             suspected_unwatermarked_staging, photo_score_unavailable, computed_at
+           ) VALUES ('L1', 70.0, 60.0, 0, 0, 0, 0, '2026-09-07T00:00:00+00:00')"""
+    )
+    conn.commit()
+    assert check_photos_are_scored(conn) is None

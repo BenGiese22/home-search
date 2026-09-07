@@ -8,6 +8,7 @@ from pathlib import Path
 
 from src.backfill import dedupe_by_listing_id
 from src.commute import COMMUTE_SOURCE, CommuteResult
+from src.vision import MIN_PHOTOS_FOR_VISION_SCORING
 from src.models import Listing
 from src.scoring import ScoreResult
 # chunk_size lives with the rest of the batched-write machinery in
@@ -1653,12 +1654,53 @@ def get_visual_scores_by_listing(conn: sqlite3.Connection) -> dict[str, sqlite3.
 
 
 def get_listing_ids_missing_visual_score(conn: sqlite3.Connection) -> list[str]:
-    """Listings with no visual_scores row yet -- a rerun only pays the vision
-    API cost for listings it hasn't already covered."""
+    """Listings whose photos still need scoring: no row at all, or a recorded
+    failure that now has enough photos to retry.
+
+    The second clause is the fix for a permanent stall. Selecting only rows
+    that do not exist made a `photo_score_unavailable = 1` row invisible
+    forever -- the same shape as the commute selector before #74, where a
+    failed geocode counted as "covered" and the listing scored on a fallback
+    for good. Two listings sat in exactly that state: both were written by the
+    below-the-floor skip during a run where their photos had not been
+    downloaded yet, and both have had 37 and 10 photos ever since.
+
+    Keyed on **hosted_photos**, not on files on disk. `data/photos/` does not
+    survive the sandbox, and `needs_photo_work` will not re-download a listing
+    whose URLs are all already hosted -- so a disk-keyed retry would find zero
+    photos, re-record the failure, and do it again on every run forever. The
+    hosted rows are the copy that exists in both execution homes. Same lesson
+    `needs_photo_work` already learned one stage earlier.
+    """
+    # hosted_photos lives only in the hosted schema -- the local sqlite path
+    # has never had it. Same filter delete_listing applies, for the same
+    # reason: a query naming a table the local database lacks is not a
+    # degraded answer, it is an exception. With no hosted rows to count there
+    # is nothing to retry from either, so the retry clause simply drops out.
+    has_hosted = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='hosted_photos'"
+    ).fetchone()
+
+    if not has_hosted:
+        rows = conn.execute(
+            """
+            SELECT listing_id FROM listings
+            WHERE listing_id NOT IN (SELECT listing_id FROM visual_scores)
+            ORDER BY listing_id
+            """
+        ).fetchall()
+        return [row["listing_id"] for row in rows]
+
     rows = conn.execute(
         """
-        SELECT listing_id FROM listings
-        WHERE listing_id NOT IN (SELECT listing_id FROM visual_scores)
-        """
+        SELECT l.listing_id FROM listings l
+        LEFT JOIN visual_scores v ON v.listing_id = l.listing_id
+        WHERE v.listing_id IS NULL
+           OR (v.photo_score_unavailable = 1
+               AND (SELECT COUNT(*) FROM hosted_photos h
+                     WHERE h.listing_id = l.listing_id) >= ?)
+        ORDER BY l.listing_id
+        """,
+        (MIN_PHOTOS_FOR_VISION_SCORING,),
     ).fetchall()
     return [row["listing_id"] for row in rows]
