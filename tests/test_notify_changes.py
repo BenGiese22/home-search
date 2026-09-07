@@ -25,10 +25,9 @@ def add(conn, lid, address="8221 West 93rd Way", composite=None):
         """INSERT INTO listings (
              listing_id, address, city, state, zip_code, price, beds, baths,
              sqft, lot_sqft, parking_spaces, year_built, description,
-             listing_url, is_pinned, property_type, localized_status
+             listing_url, property_type, localized_status
            ) VALUES (?, ?, 'Westminster', 'CO', '80021', '$625,000', 3, 2.5,
-                     2140, 7000, 2, 1990, 'd', 'https://x/l', 0,
-                     'Single Family', 'Active')""",
+                     2140, 7000, 2, 1990, 'd', 'https://x/l', 'Single Family', 'Active')""",
         (lid, address),
     )
     if composite is not None:

@@ -113,12 +113,12 @@ def test_ensure_schema_migrates_a_mirror_created_before_a_column_existed():
             parking_spaces INTEGER NOT NULL,
             year_built INTEGER NOT NULL,
             description TEXT NOT NULL,
-            listing_url TEXT NOT NULL,
-            is_pinned INTEGER NOT NULL DEFAULT 0
+            listing_url TEXT NOT NULL
         )
         """
     )
     cols_before = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
+    assert "is_pinned" not in cols_before
     assert "property_type" not in cols_before
     assert "localized_status" not in cols_before
     assert "hoa_annual" not in cols_before
@@ -138,9 +138,9 @@ def test_ensure_schema_migrates_a_mirror_created_before_a_column_existed():
     source.execute(
         "INSERT INTO listings (listing_id, address, city, state, zip_code, price, "
         "price_numeric, beds, baths, sqft, lot_sqft, parking_spaces, year_built, "
-        "description, listing_url, is_pinned, property_type, localized_status) "
+        "description, listing_url, property_type, localized_status) "
         "VALUES ('abc', '123 Main St', 'Denver', 'CO', '80202', '$500,000', 500000, "
-        "3, 2.0, 1500, 5000, 2, 2000, 'A house', 'https://example.com', 0, "
+        "3, 2.0, 1500, 5000, 2, 2000, 'A house', 'https://example.com', "
         "'SingleFamily', 'Active')"
     )
     row = source.execute("SELECT * FROM listings WHERE listing_id = 'abc'").fetchone()

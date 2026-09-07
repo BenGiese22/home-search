@@ -31,16 +31,12 @@ class ChangeReport:
 def compute_changes(
     fetched: list[Listing],
     before: dict[str, tuple[str, float | None]],
-    pinned_ids: frozenset[str] = frozenset(),
 ) -> ChangeReport:
     """Compares freshly-fetched listings against a price snapshot taken
     before this run's upserts. A listing_id absent from `before` is new;
     one present with a different price_numeric is a price change; a
     listing_id present in `before` but absent from `fetched` has dropped
-    out of the live collection — delisted. `pinned_ids` (listings tracked
-    individually via LISTING_URLS, not returned by any collection fetch)
-    are never treated as delisted — their absence from `fetched` doesn't
-    mean anything, since they were never expected to appear there."""
+    out of the live collection — delisted."""
     new_listings = []
     price_changes = []
     seen_ids: set[str] = set()
@@ -55,7 +51,7 @@ def compute_changes(
         old_price, old_price_numeric = prior
         if parse_price(listing.price) != old_price_numeric:
             price_changes.append(PriceChange(listing, old_price, listing.price))
-    delisted_ids = sorted(set(before.keys()) - seen_ids - pinned_ids)
+    delisted_ids = sorted(set(before.keys()) - seen_ids)
     return ChangeReport(
         new_listings=new_listings, price_changes=price_changes, delisted_ids=delisted_ids
     )
@@ -115,14 +111,13 @@ def should_apply_delisting(
     fetch_succeeded: bool,
     report: ChangeReport,
     before: dict[str, tuple[str, float | None]],
-    pinned_ids: frozenset[str],
 ) -> bool:
     """Guards the delisting cascade against two ways a bad collection fetch
     can masquerade as a real mass delisting: an exception during the fetch
     (caller passes fetch_succeeded=False), or a fetch that "succeeds" but
     returns empty or anomalously few results (e.g. a transient API glitch
     responding 200 OK with zero matches). If more than MAX_DELISTED_FRACTION
-    of every eligible (non-pinned) listing this project already knows about
+    of every listing this project already knows about
     would be wiped in one run, that's treated as more consistent with a bad
     fetch than a real mass delisting -- refuse and let a human investigate
     rather than deleting silently. Deliberately no small-count exemption:
@@ -132,7 +127,7 @@ def should_apply_delisting(
     happening automatically and silently."""
     if not fetch_succeeded:
         return False
-    eligible = len(set(before.keys()) - pinned_ids)
+    eligible = len(before)
     if eligible == 0:
         return True
     return len(report.delisted_ids) / eligible <= MAX_DELISTED_FRACTION
@@ -262,8 +257,7 @@ def supersede_relisted(
 
     A relist arrives as a new listing_id for a house already in the corpus,
     so the delisting cascade never sees it: the old row is not "absent from
-    the collection" in any way the cascade recognises, and pinned rows are
-    exempt from it regardless. The two rows then coexist -- one property
+    the collection" in any way the cascade recognises. The two rows coexist -- one property
     scored twice, ranked twice, and paid for twice at the vision API.
 
     The vision score is carried onto the survivor first, when the two share
@@ -300,7 +294,6 @@ def run_delisting(
     fetch_succeeded: bool,
     report: ChangeReport,
     before: dict[str, tuple[str, float | None]],
-    pinned_ids: frozenset[str],
     blob_token: str | None = None,
     delete_fn: Callable[[list[str], str], None] = delete_blobs,
 ) -> None:
@@ -312,7 +305,7 @@ def run_delisting(
     blob_token is optional so a caller with no Blob credentials (a
     --skip-photos run) still delists -- it just prints the stranded URLs
     rather than reclaiming them."""
-    if should_apply_delisting(fetch_succeeded, report, before, pinned_ids):
+    if should_apply_delisting(fetch_succeeded, report, before):
         apply_delisting(
             conn, photos_dir, report.delisted_ids,
             blob_token=blob_token, delete_fn=delete_fn,
