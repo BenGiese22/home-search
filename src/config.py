@@ -67,10 +67,25 @@ TAB_PRECEDENCE: dict[str, int] = {"favorites": 0, "matches": 1}
 
 DEFAULT_COLLECTION_TABS: tuple[str, ...] = ("favorites", "matches")
 
-# filter 3 / reviewStage 1 -- the deliberately discarded pile. Refused by
-# name rather than ignored: a URL naming it means the config is wrong, and
-# silently fetching something else is the exact trap this module removes.
+# The deliberately discarded pile. Refused by name rather than ignored: a URL
+# naming it means the config is wrong, and silently fetching something else is
+# the exact trap this module removes.
 NEVER_SCRAPED_TABS = frozenset({"notInterested"})
+
+# listingsFilter 2. This said 3 until 2026-09-07, on no evidence -- and the
+# wrong number was written down as a safety comment, which is the worst place
+# for a guess to hide. Probed live against the real collection:
+#
+#     0 -> 152  matches
+#     1 ->  27  favorites
+#     2 ->  24  notInterested   <- both hand-marked listings are in here
+#     3 -> 277  broader than the collection; unidentified
+#     4 -> 203  everything in the collection (152 + 27 + 24)
+#
+# It is a constant rather than an entry in COLLECTION_TABS on purpose. Nothing
+# may scrape this pile into the corpus; the one thing that reads it is the
+# rejection read-back, which needs to prove a listing ARRIVED here.
+NOT_INTERESTED_FILTER = 2
 
 _COLLECTION_TAB_RE = re.compile(r"/collection/[^/?#]+/([A-Za-z]+)")
 

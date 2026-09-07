@@ -33,19 +33,38 @@ def conn():
 
 
 class FakePage:
-    """Stands in for the authenticated Playwright page, recording PUTs."""
+    """Stands in for the authenticated Playwright page.
 
-    def __init__(self, status=200, raises=None):
+    Records PUTs, and answers the notInterested read with whatever the test
+    says Compass holds -- which is the whole point of the read-back, so it
+    has to be settable per test.
+    """
+
+    def __init__(self, status=200, raises=None, pile=(), pile_raises=None):
         self.request = self
         self.puts = []
         self._status = status
         self._raises = raises
+        self.pile = list(pile)
+        self._pile_raises = pile_raises
 
     def put(self, url, data=None, headers=None):
         self.puts.append({"url": url, "data": data, "headers": headers})
         if self._raises:
             raise self._raises
         return type("Response", (), {"status": self._status})()
+
+    def get(self, url):
+        if self._pile_raises:
+            raise self._pile_raises
+        items = [{"listingData": {"listingIdSHA": lid}} for lid in self.pile]
+        return type(
+            "Response", (), {
+                "json": lambda _self: {
+                    "totalListings": len(items), "currentPageListings": items,
+                }
+            },
+        )()
 
 
 def listing(lid):
@@ -98,8 +117,11 @@ def test_nothing_pending_makes_no_request(conn):
 
 def test_an_already_synced_rejection_is_not_sent_again(conn):
     rejected(conn, "131FZM", "L1")
-    scrape._sync_rejections_to_compass(conn, FakePage(), COLLECTION_URL)
-    scrape._confirm_rejection_sync(conn, {"131FZM": "L1"}, fetch_of("L2"))
+    page = FakePage(pile=["L1"])
+    scrape._sync_rejections_to_compass(conn, page, COLLECTION_URL)
+    scrape._confirm_rejection_sync(
+        conn, page, COLLECTION_URL, {"131FZM": "L1"}, fetch_of("L2")
+    )
 
     page = FakePage()
     assert scrape._sync_rejections_to_compass(conn, page, COLLECTION_URL) == {}
@@ -143,13 +165,25 @@ def test_a_transport_failure_does_not_stop_the_scrape(conn):
 # --- the read-back ------------------------------------------------------
 
 
-def test_a_listing_gone_from_the_next_fetch_is_recorded_as_synced(conn):
-    rejected(conn, "131FZM", "L1")
-    sent = scrape._sync_rejections_to_compass(conn, FakePage(), COLLECTION_URL)
+def sync_and_confirm(conn, page, fetch):
+    sent = scrape._sync_rejections_to_compass(conn, page, COLLECTION_URL)
+    scrape._confirm_rejection_sync(conn, page, COLLECTION_URL, sent, fetch)
 
-    scrape._confirm_rejection_sync(conn, sent, fetch_of("L2", "L3"))
+
+def note(conn, pid):
+    row = conn.execute(
+        "SELECT compass_sync_note FROM rejections WHERE property_id = ?", (pid,)
+    ).fetchone()
+    return row["compass_sync_note"]
+
+
+def test_a_listing_found_in_the_pile_is_recorded_as_confirmed(conn):
+    rejected(conn, "131FZM", "L1")
+
+    sync_and_confirm(conn, FakePage(pile=["L1"]), fetch_of("L2", "L3"))
 
     assert synced(conn, "131FZM")
+    assert note(conn, "131FZM") == "confirmed"
 
 
 def test_a_listing_still_in_the_next_fetch_stays_pending(conn):
@@ -157,11 +191,22 @@ def test_a_listing_still_in_the_next_fetch_stays_pending(conn):
     synced would lose the rejection permanently; leaving it pending costs one
     request next run."""
     rejected(conn, "131FZM", "L1")
-    sent = scrape._sync_rejections_to_compass(conn, FakePage(), COLLECTION_URL)
 
-    scrape._confirm_rejection_sync(conn, sent, fetch_of("L1", "L2"))
+    sync_and_confirm(conn, FakePage(pile=[]), fetch_of("L1", "L2"))
 
     assert not synced(conn, "131FZM")
+
+
+def test_a_listing_compass_does_not_hold_is_recorded_as_absent(conn):
+    """The 2026-09-07 regression. Gone from the fetched tabs AND not in the
+    pile is not a confirmation -- re-sending will never do anything, so the
+    retry stops, but it must not read as "Compass moved it"."""
+    rejected(conn, "131FZM", "L1")
+
+    sync_and_confirm(conn, FakePage(pile=["L9"]), fetch_of("L2"))
+
+    assert synced(conn, "131FZM")
+    assert note(conn, "131FZM") == "absent"
 
 
 def test_a_failed_tab_confirms_nothing(conn):
@@ -169,10 +214,9 @@ def test_a_failed_tab_confirms_nothing(conn):
     like every rejection succeeding at once. This is the same trap that
     collection_fetch_is_trustworthy exists for on the delisting side."""
     rejected(conn, "131FZM", "L1")
-    sent = scrape._sync_rejections_to_compass(conn, FakePage(), COLLECTION_URL)
 
-    scrape._confirm_rejection_sync(
-        conn, sent, fetch_of("L2", errors={"favorites": "timeout"})
+    sync_and_confirm(
+        conn, FakePage(pile=["L1"]), fetch_of("L2", errors={"favorites": "timeout"})
     )
 
     assert not synced(conn, "131FZM")
@@ -182,10 +226,23 @@ def test_an_empty_fetch_confirms_nothing(conn):
     """Zero listings back is a broken fetch, not a collection Compass emptied
     on our behalf."""
     rejected(conn, "131FZM", "L1")
-    sent = scrape._sync_rejections_to_compass(conn, FakePage(), COLLECTION_URL)
 
-    scrape._confirm_rejection_sync(
-        conn, sent, CollectionFetch(listings=[], counts={}, errors={}, tab_ids={})
+    sync_and_confirm(
+        conn, FakePage(pile=["L1"]),
+        CollectionFetch(listings=[], counts={}, errors={}, tab_ids={}),
+    )
+
+    assert not synced(conn, "131FZM")
+
+
+def test_an_unreadable_pile_confirms_nothing(conn):
+    """Without the pile there is only absence, and absence is what got this
+    wrong the first time. Retrying costs one request; a false confirmation
+    costs the rejection."""
+    rejected(conn, "131FZM", "L1")
+
+    sync_and_confirm(
+        conn, FakePage(pile_raises=RuntimeError("HTTP 500")), fetch_of("L2")
     )
 
     assert not synced(conn, "131FZM")

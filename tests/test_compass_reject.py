@@ -168,27 +168,56 @@ def test_nothing_pending_plans_nothing():
     assert plan_sync([]) == ({}, {})
 
 
-def test_a_listing_absent_from_the_next_fetch_is_confirmed():
-    """The whole verification. Marking a listing notInterested moves it out
-    of filters 0 and 1 -- the only two we fetch -- so a rejected listing that
-    is no longer in the fetch is one Compass has acted on."""
-    confirmed, unconfirmed = confirm_sync({"131FZM": "L1"}, fetched_ids={"L2", "L3"})
+def test_a_listing_found_in_the_discarded_pile_is_confirmed():
+    """Positive evidence: the id we sent is where we asked Compass to put
+    it. Not "it stopped appearing somewhere else"."""
+    confirmed, still_present, absent = confirm_sync(
+        {"131FZM": "L1"}, not_interested_ids={"L1"}, fetched_ids={"L2"}
+    )
+
+    assert (confirmed, still_present, absent) == (["131FZM"], [], [])
+
+
+def test_a_listing_still_in_the_collection_is_not_confirmed():
+    """A 200 with an empty body means accepted, not moved. This is the case
+    that separates the two, and it retries."""
+    confirmed, still_present, absent = confirm_sync(
+        {"131FZM": "L1"}, not_interested_ids=set(), fetched_ids={"L1", "L2"}
+    )
+
+    assert (confirmed, still_present, absent) == ([], ["131FZM"], [])
+
+
+def test_a_listing_compass_does_not_hold_is_absent_not_confirmed():
+    """The regression this rewrite exists for. 5012 West 77th Drive was
+    stamped synced on 2026-09-07 because the id we sent had left the fetched
+    tabs -- it was in NO filter at all, and the property only appeared in the
+    pile under an older Expired listing id. Absence was being read as proof
+    of a move.
+
+    Still stops the retry: re-sending an id Compass does not hold will never
+    do anything. But it is a different fact, and only one of the two is good
+    news."""
+    confirmed, still_present, absent = confirm_sync(
+        {"120OGZ": "2182020499641935857"},
+        not_interested_ids={"2145248178201897217"},
+        fetched_ids={"L2"},
+    )
+
+    assert (confirmed, still_present, absent) == ([], [], ["120OGZ"])
+
+
+def test_the_pile_wins_over_the_fetch():
+    """A listing in both is one Compass has moved; the fetch is allowed to be
+    a moment stale."""
+    confirmed, _, _ = confirm_sync(
+        {"131FZM": "L1"}, not_interested_ids={"L1"}, fetched_ids={"L1"}
+    )
 
     assert confirmed == ["131FZM"]
-    assert unconfirmed == []
 
 
-def test_a_listing_still_in_the_next_fetch_is_not_confirmed():
-    """A 200 with an empty body means "accepted", not "moved". This is the
-    case that separates the two, and it must not be recorded as synced --
-    leaving it pending costs one retry next run."""
-    confirmed, unconfirmed = confirm_sync({"131FZM": "L1"}, fetched_ids={"L1", "L2"})
-
-    assert confirmed == []
-    assert unconfirmed == ["131FZM"]
-
-
-def test_confirmation_reads_the_fetch_not_the_response():
-    """Nothing sent, nothing to confirm -- even against an empty fetch, which
-    would otherwise look like every rejection succeeding at once."""
-    assert confirm_sync({}, fetched_ids=set()) == ([], [])
+def test_nothing_sent_confirms_nothing():
+    """Even against an empty pile, which would otherwise look like every
+    rejection failing at once."""
+    assert confirm_sync({}, not_interested_ids=set(), fetched_ids=set()) == ([], [], [])

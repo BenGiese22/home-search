@@ -1019,20 +1019,29 @@ def rejections_pending_compass_sync(conn) -> list[dict]:
     ]
 
 
-def mark_rejections_synced(conn, property_ids) -> None:
-    """Stamp rejections as known to Compass.
+def mark_rejections_synced(conn, property_ids, note: str) -> None:
+    """Stop asking Compass about these rejections, and say why.
 
-    Only ever called for ids confirmed absent from the collection fetch that
-    followed the write, never on the strength of a 200 -- the response body
-    is `{}` and says nothing about whether the listing moved.
+    Never called on the strength of a 200 -- the response body is `{}` and
+    says nothing about whether the listing moved. Called for two different
+    outcomes, and `note` is what keeps them apart:
+
+    - "confirmed": the listing was found in Compass's discarded pile.
+    - "absent": Compass does not hold that listing id anywhere, so
+      re-sending it would never do anything.
+
+    Both stop the retry; only one is good news. They shared a bare timestamp
+    until 2026-09-07, which is how 5012 West 77th Drive read as confirmed
+    while the id we sent was in no filter at all.
     """
     ids = list(property_ids)
     if not ids:
         return
     with conn:
         conn.executemany(
-            "UPDATE rejections SET compass_synced_at = ? WHERE property_id = ?",
-            [(datetime.now(timezone.utc).isoformat(), pid) for pid in ids],
+            "UPDATE rejections SET compass_synced_at = ?, compass_sync_note = ?"
+            " WHERE property_id = ?",
+            [(datetime.now(timezone.utc).isoformat(), note, pid) for pid in ids],
         )
 
 

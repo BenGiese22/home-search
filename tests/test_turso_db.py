@@ -12,6 +12,8 @@ from src.turso_db import (
     BATCH_CHUNK,
     MAX_SQL_VARIABLES,
     BatchRowErrors,
+    _parse_columns,
+    _strip_sql_comments,
     chunk_size,
     ensure_schema,
     replace_listing_rows,
@@ -555,3 +557,53 @@ def test_every_column_added_to_commute_is_nullable_or_defaulted():
             f"commute.{name} is NOT NULL with no DEFAULT: "
             "ALTER TABLE cannot add it to the live table"
         )
+
+
+# --- comments in the schema ---------------------------------------------
+
+
+def test_a_comment_inside_a_table_body_is_not_a_column():
+    """A `-- ...` line between column definitions parses as a column named
+    `--`, which reaches sqlite as `ALTER TABLE t ADD COLUMN -- ...` and fails
+    with "incomplete input" -- an error that names neither comments nor the
+    column it choked on."""
+    sql = """
+    CREATE TABLE IF NOT EXISTS t (
+        a TEXT PRIMARY KEY,
+        -- why b exists, at length, with a comma in it
+        b TEXT
+    );
+    """
+    assert set(_parse_columns(sql)["t"]) == {"a", "b"}
+
+
+def test_a_semicolon_in_a_comment_does_not_truncate_the_statement():
+    """ensure_schema splits on `;`. One inside a comment cuts the CREATE
+    TABLE it documents in half, and the half that runs is a syntax error."""
+    conn = sqlite3.connect(":memory:")
+    schema = """
+    CREATE TABLE IF NOT EXISTS t (
+        a TEXT PRIMARY KEY,
+        -- one thing; and another
+        b TEXT
+    );
+    """
+    for statement in _strip_sql_comments(schema).split(";"):
+        if statement.strip():
+            conn.execute(statement)
+
+    assert {r[1] for r in conn.execute("PRAGMA table_info(t)")} == {"a", "b"}
+
+
+def test_the_real_schema_still_migrates_onto_an_older_table():
+    """The end-to-end version: an existing table missing the columns the
+    schema now declares gains them, comments and all."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE rejections (property_id TEXT PRIMARY KEY, rejected_at TEXT)"
+    )
+    ensure_schema(conn)
+
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(rejections)")}
+    assert {"listing_ref", "compass_synced_at", "compass_sync_note"} <= columns

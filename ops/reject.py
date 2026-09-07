@@ -110,18 +110,20 @@ def main() -> int:
         print(f"{len(pids)} rejected propert(ies):")
         for row in conn.execute(
             "SELECT property_id, address, city, reason, rejected_at,"
-            "       listing_ref, compass_synced_at"
+            "       listing_ref, compass_synced_at, compass_sync_note"
             " FROM rejections ORDER BY rejected_at"
         ):
             where = ", ".join(p for p in (row["address"], row["city"]) if p) or "(unknown)"
             # Whether Compass has been told is worth a column: ours and
             # theirs drifting silently is the thing #92 exists to prevent.
             if row["compass_synced_at"]:
-                compass = "compass:ok "
+                # "absent" is not "ok" -- it means Compass never held the
+                # listing we sent, so nothing was moved and nothing will be.
+                compass = f"compass:{(row['compass_sync_note'] or 'ok'):9}"
             elif row["listing_ref"]:
-                compass = "compass:due"
+                compass = "compass:due      "
             else:
-                compass = "compass:n/a"
+                compass = "compass:n/a      "
             print(f"  {row['rejected_at'][:10]}  {where:34} {row['property_id']:8} "
                   f"{compass}  {row['reason'] or ''}")
         return 0
