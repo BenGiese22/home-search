@@ -115,23 +115,70 @@ def test_a_corpus_where_nothing_geocodes_is_a_failed_run():
     """One address the geocoder does not know is a fact about that address.
     Every address failing is a fact about us -- and exiting 0 would hand the
     scorer a corpus with no commutes in it, looking like a good run."""
-    code, upserts, _ = run_stage(
-        [listing("a"), listing("b")], geocode_fn=lambda parts: None
-    )
+    listings = [listing(str(i)) for i in range(compute_commutes.NOTHING_ROUTED_FLOOR)]
+    code, upserts, _ = run_stage(listings, geocode_fn=lambda parts: None)
     assert code == 4
-    assert len(upserts) == 2
+    assert len(upserts) == compute_commutes.NOTHING_ROUTED_FLOOR
+
+
+def test_one_listing_that_will_not_geocode_is_not_a_failed_run():
+    """2026-09-19: a run needed to measure exactly one listing, whose address
+    (9233 North Lamar Street) would not geocode. 0/1 routed tripped
+    EXIT_NOTHING_ROUTED and failed the entire pipeline -- indistinguishable
+    from a real Mapbox outage. One bad address is not that."""
+    code, upserts, _ = run_stage(
+        [listing("a", address="9233 North Lamar Street")],
+        geocode_fn=lambda parts: None,
+    )
+    assert code == 0
+    assert len(upserts) == 1
+    assert upserts[0][1].geocode_failed is True
+
+
+def test_just_under_the_floor_all_failing_is_still_not_a_failed_run():
+    """Every row still lands -- that is what lets the selector retry each
+    one next run instead of the whole corpus being read as a Mapbox outage."""
+    listings = [
+        listing(str(i)) for i in range(compute_commutes.NOTHING_ROUTED_FLOOR - 1)
+    ]
+    code, upserts, _ = run_stage(listings, geocode_fn=lambda parts: None)
+    assert code == 0
+    assert len(upserts) == compute_commutes.NOTHING_ROUTED_FLOOR - 1
+    assert all(result.geocode_failed is True for _, result in upserts)
+
+
+def test_at_the_floor_nothing_routed_is_a_failed_run():
+    listings = [listing(str(i)) for i in range(compute_commutes.NOTHING_ROUTED_FLOOR)]
+    code, _, _ = run_stage(listings, geocode_fn=lambda parts: None)
+    assert code == 4
+
+
+def test_under_the_floor_says_so_in_the_log(capsys):
+    """The line a human reads in a sandbox log has to say "below the floor,
+    will retry" -- not just print nothing and exit 0 -- so "guard removed"
+    and "guard below floor" don't look identical from the outside."""
+    code, _, _ = run_stage([listing("a")], geocode_fn=lambda parts: None)
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "floor" in out
+    assert "retried" in out
 
 
 def test_a_route_that_raises_still_writes_a_row_naming_the_failure():
     """A transport error mid-listing used to `continue`, leaving no row at
     all. The listing then scored on the neutral fallback with nothing in the
-    data saying why."""
+    data saying why.
+
+    Only 1 listing here, which is under NOTHING_ROUTED_FLOOR, so this is not
+    read as a systemic failure -- code 0, not 4. The row/route_error content
+    is what this test is actually checking.
+    """
 
     def route_fn(origin, destination):
         raise RuntimeError("connection reset")
 
     code, upserts, _ = run_stage([listing("a")], route_fn=route_fn)
-    assert code == 4
+    assert code == 0
     assert len(upserts) == 1
     assert upserts[0][1].medtronic_minutes is None
     assert "connection reset" in upserts[0][1].route_error
@@ -163,7 +210,8 @@ def test_every_listing_failing_is_a_failed_run():
     def route_fn(origin, destination):
         raise RuntimeError("boom")
 
-    code, _, _ = run_stage([listing("a"), listing("b")], route_fn=route_fn)
+    listings = [listing(str(i)) for i in range(compute_commutes.NOTHING_ROUTED_FLOOR)]
+    code, _, _ = run_stage(listings, route_fn=route_fn)
     assert code == 4
 
 
@@ -204,6 +252,9 @@ def test_the_rate_limit_wait_is_capped():
 
 
 def test_a_rate_limit_gives_up_after_a_few_tries():
+    """1 listing is under NOTHING_ROUTED_FLOOR, so giving up here is code 0,
+    not a failed run -- the attempt count and the stored 429 are what this
+    test is actually checking."""
     attempts = {"n": 0}
 
     def route_fn(origin, destination):
@@ -211,7 +262,7 @@ def test_a_rate_limit_gives_up_after_a_few_tries():
         raise RetryableStatus(429, retry_after=1.0)
 
     code, upserts, _ = run_stage([listing("a")], route_fn=route_fn)
-    assert code == 4
+    assert code == 0
     assert attempts["n"] <= compute_commutes.MAX_RETRIES + 1
     assert "429" in upserts[0][1].route_error
 
