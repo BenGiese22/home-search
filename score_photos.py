@@ -55,6 +55,13 @@ MAX_BATCH_REQUEST_BYTES = 180_000_000
 # image bytes, but included so the size estimate isn't purely image-based.
 REQUEST_OVERHEAD_BYTES = 5_000
 
+# Exit codes. Mirrors compute_commutes.py's pattern: distinct from a bare 1
+# so a misconfigured key reads differently from any other failure. Before
+# this existed, main() had no return value at all and nothing called
+# sys.exit(main()), so this exact case -- ANTHROPIC_API_KEY missing -- exited
+# 0 and was reported as a successful run that scored nothing.
+EXIT_NO_API_KEY = 2
+
 # Checkpoints every already-submitted batch's id AND the garage_expected_by_id
 # mapping used to submit it, as a list -- one batch can no longer cover every
 # listing in one request (see MAX_BATCH_REQUEST_BYTES above), so a single-batch
@@ -349,13 +356,13 @@ def _process_batch_results(
         )
 
 
-def main() -> None:
+def main() -> int:
     conn = stage_connection()
     env = load_env()
     if not env.get("ANTHROPIC_API_KEY"):
         print("ANTHROPIC_API_KEY not set in .env -- add it before running this script.")
         conn.close()
-        return
+        return EXIT_NO_API_KEY
     client = anthropic.Anthropic(api_key=env["ANTHROPIC_API_KEY"])
 
     # Batches already submitted (this run or a prior, interrupted one) --
@@ -440,7 +447,7 @@ def main() -> None:
     if not submitted_batches:
         print("no listings had enough photos to score, and none already in flight")
         conn.close()
-        return
+        return 0
 
     # Round-robin across all in-flight batches rather than fully polling one
     # to completion before even checking the next -- batches don't finish in
@@ -474,7 +481,8 @@ def main() -> None:
             time.sleep(POLL_INTERVAL_SECONDS)
 
     conn.close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
