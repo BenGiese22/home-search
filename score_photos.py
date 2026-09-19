@@ -13,6 +13,7 @@ from anthropic.types.messages.batch_create_params import Request
 from src.config import load_env
 from src.turso_db import stage_connection
 from src.db import (
+    all_listing_ids,
     clear_vision_batch,
     load_vision_batches,
     record_vision_batch,
@@ -305,8 +306,22 @@ def _process_batch_results(
     batch_id: str,
     garage_expected_by_id: dict[str, bool],
 ) -> None:
+    # Read at the moment the results land, not when the run started: a
+    # batch can sit in flight for hours, and vision_batches is deliberately
+    # outside the delisting cascade (see load_vision_batches), so a result
+    # can name a listing that was rejected or delisted meanwhile. There is
+    # nothing to write for it -- visual_scores has a foreign key to
+    # listings and the INSERT would fail -- and, like a parse failure, one
+    # such result must not cost the rest of the batch its scores.
+    live = all_listing_ids(conn)
     for result in client.messages.batches.results(batch_id):
         listing_id = result.custom_id
+        if listing_id not in live:
+            print(
+                f"{listing_id}: no longer in listings (rejected or delisted "
+                f"while batch {batch_id} was in flight); result discarded"
+            )
+            continue
         try:
             garage_expected = garage_expected_by_id[listing_id]
             if result.result.type != "succeeded":

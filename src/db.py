@@ -621,6 +621,19 @@ def listings_from_rows(
     ]
 
 
+def all_listing_ids(conn) -> set[str]:
+    """Every listing_id currently in `listings`, in ONE statement.
+
+    For a consumer that has been waiting on something -- a vision batch --
+    long enough that the corpus has changed underneath it, and needs to know
+    which of the ids it is holding still have a row to write to.
+    """
+    return {
+        row["listing_id"]
+        for row in conn.execute("SELECT listing_id FROM listings")
+    }
+
+
 # The vision checkpoint. It lives in the database rather than a file because
 # both execution homes share one database and a file is invisible across
 # them: a desktop run that submits a batch and then has its lid closed leaves
@@ -632,6 +645,11 @@ def listings_from_rows(
 # being delisted must not delete the record of an in-flight batch the others
 # are still waiting on -- which is also why it is invisible to
 # tables_child_first and to delete_orphaned_rows.
+#
+# The consequence: a batch can outlive a listing it names, so the consumer
+# (score_photos._process_batch_results) checks each result against
+# `listings` before writing -- visual_scores has a foreign key, and there
+# is nothing to record for a house that is gone.
 
 
 def load_vision_batches(conn) -> list[dict]:
