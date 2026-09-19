@@ -421,12 +421,21 @@ def main() -> int:
         # listing's photo at this id, and sending it to the vision API
         # would score the wrong house and cost real money doing it.
         photo_paths = sorted((PHOTOS_DIR / listing_id).glob(PHOTO_GLOB))
-        amenities = get_amenities(conn, listing_id)
-        garage_expected = row["parking_spaces"] > 0
-        request = build_batch_request(listing_id, row, amenities, photo_paths)
-        size_estimate = (
-            sum(p.stat().st_size for p in photo_paths) * 4 // 3 + REQUEST_OVERHEAD_BYTES
-        )
+        try:
+            amenities = get_amenities(conn, listing_id)
+            garage_expected = row["parking_spaces"] > 0
+            request = build_batch_request(listing_id, row, amenities, photo_paths)
+            size_estimate = (
+                sum(p.stat().st_size for p in photo_paths) * 4 // 3 + REQUEST_OVERHEAD_BYTES
+            )
+        except Exception as exc:  # noqa: BLE001
+            # A corrupt or unreadable photo file for this listing must not
+            # crash the stage before any batch is even submitted. Same shape
+            # as the too-few-photos skip just above: this listing can't be
+            # scored this run, so record that and move on to the rest.
+            upsert_visual_score(conn, listing_id, None)
+            print(f"{listing_id}: failed to build request ({exc}); skipped")
+            continue
         pending_entries.append((listing_id, request, garage_expected, size_estimate))
 
     if pending_entries:
@@ -434,7 +443,20 @@ def main() -> int:
             chunk_requests = [entry[1] for entry in chunk]
             chunk_garage_expected = {entry[0]: entry[2] for entry in chunk}
             chunk_bytes = sum(entry[3] for entry in chunk)
-            batch = client.messages.batches.create(requests=chunk_requests)
+            try:
+                batch = client.messages.batches.create(requests=chunk_requests)
+            except Exception as exc:  # noqa: BLE001
+                # One chunk's API error must not cost every chunk after it
+                # its submission -- especially since earlier chunks in this
+                # same loop may already have succeeded and been recorded.
+                # Nothing was submitted, so nothing to record; name which
+                # listings were in it so they can be diagnosed or resubmitted
+                # (they stay unscored and get picked up again next run).
+                print(
+                    f"failed to submit batch of {len(chunk_requests)} listing(s) "
+                    f"({exc}): {sorted(chunk_garage_expected)}"
+                )
+                continue
             record_vision_batch(conn, batch.id, chunk_garage_expected, _this_home())
             submitted_batches.append(
                 {"batch_id": batch.id, "garage_expected_by_id": chunk_garage_expected}
