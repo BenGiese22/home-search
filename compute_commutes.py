@@ -22,6 +22,11 @@ apart:
   429       we are going too fast. Wait for the reset and retry.
   anything  record it in route_error and carry on; one bad address should
             else      not cost the other hundred their numbers.
+
+The `anything else` class has one more rule: if *every* listing fails and
+there were at least `NOTHING_ROUTED_FLOOR` of them, the run is failed --
+below that, N bad addresses and one bad token look the same, and the retry
+on the next run tells them apart for free.
 """
 
 import sys
@@ -74,6 +79,17 @@ TIMEOUT_SECONDS = 30
 EXIT_NO_TOKEN = 2
 EXIT_AUTH_FAILED = 3
 EXIT_NOTHING_ROUTED = 4
+
+# How many listings have to fail, with none succeeding, before "nothing
+# routed" is read as a systemic failure rather than as N bad addresses.
+# Below this, a run that routes nothing exits 0 and the listings are simply
+# retried next run -- the selector re-picks every failed row by default, so
+# a fault that persists accumulates failures run over run and crosses this
+# floor on its own. Set from one incident: a run with exactly one listing
+# to measure, whose address would not geocode, failed the entire pipeline
+# over it. One is a fact about an address; three with zero successes is a
+# fact about us.
+NOTHING_ROUTED_FLOOR = 3
 
 
 class StopTheRun(RuntimeError):
@@ -241,12 +257,18 @@ def run(
 
     print(f"commutes: {routed}/{attempted} routed, arrive_by={arrive_by}")
 
-    if attempted and routed == 0:
+    if routed == 0 and attempted >= NOTHING_ROUTED_FLOOR:
         # Every listing failing is not a hundred bad addresses. It is one
         # bad assumption of ours, and exiting 0 here is how a corpus of
         # empty commutes reaches the scorer looking like a successful run.
         print("commutes: nothing routed at all -- treating the run as failed")
         return EXIT_NOTHING_ROUTED
+    if routed == 0 and attempted:
+        print(
+            f"commutes: nothing routed, but only {attempted} attempted "
+            f"(floor for calling that systemic is {NOTHING_ROUTED_FLOOR}); "
+            f"the row(s) are recorded and will be retried next run"
+        )
     return 0
 
 
