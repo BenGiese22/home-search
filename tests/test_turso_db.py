@@ -541,6 +541,69 @@ def test_stage_connection_ensures_the_schema_and_sets_the_row_factory():
             "visual_scores", "hosted_photos"} <= tables
 
 
+def test_stage_connection_retries_a_transient_failure_during_schema_check():
+    """connect() itself does no network I/O -- ensure_schema()'s first
+    statement is a stage's real first round-trip, and that is where a
+    transient blip actually shows up. A failure there must retry the whole
+    attempt, connection included, not just the statement."""
+    import sqlite3
+
+    backing = sqlite3.connect(":memory:")
+    backing.row_factory = sqlite3.Row
+
+    connect_calls = []
+
+    class _FlakyConn:
+        def __init__(self):
+            self.row_factory = None
+
+        def execute(self, *a, **k):
+            if len(connect_calls) < 3:
+                raise ConnectionError("temporary failure in name resolution")
+            return backing.execute(*a, **k)
+
+        def commit(self):
+            return backing.commit()
+
+    def flaky_connect_fn(url, auth_token=None):
+        connect_calls.append(url)
+        return _FlakyConn()
+
+    slept = []
+    conn = turso_db.stage_connection(
+        {"TURSO_DATABASE_URL": "libsql://db", "TURSO_AUTH_TOKEN": "t"},
+        connect_fn=flaky_connect_fn,
+        sleep=slept.append,
+    )
+
+    assert conn.row_factory is TursoRow
+    # A fresh connection each attempt: the broken one from a failed attempt
+    # is never reused.
+    assert len(connect_calls) == 3
+    assert slept == [1, 2]
+
+
+def test_stage_connection_gives_up_after_max_attempts():
+    """A schema check that never succeeds is a real outage, not something to
+    retry forever."""
+
+    class _AlwaysFailsConn:
+        row_factory = None
+
+        def execute(self, *a, **k):
+            raise ConnectionError("still down")
+
+    slept = []
+    with pytest.raises(ConnectionError, match="still down"):
+        turso_db.stage_connection(
+            {"TURSO_DATABASE_URL": "libsql://db", "TURSO_AUTH_TOKEN": "t"},
+            connect_fn=lambda url, auth_token=None: _AlwaysFailsConn(),
+            sleep=slept.append,
+        )
+
+    assert slept == [1, 2]
+
+
 def test_ensure_schema_migrates_a_commute_table_from_before_the_provenance_columns():
     """The production `commute` table predates commute_source, arrive_by and
     route_error. The stage writes all three on its very first statement, so

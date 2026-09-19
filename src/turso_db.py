@@ -35,14 +35,35 @@ ROW_FACTORY = turso_serverless.Row
 
 REQUIRED_ENV_VARS = ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN")
 
-# Every one of the pipeline's 6 stages calls connect() at startup, and none of
-# them had any retry: a transient DNS blip or a dropped connection crashed
-# the stage before it did anything else. 3 attempts, not compute_commutes'
-# open-ended rate-limit wait -- there is no Retry-After to read here, and a
-# genuinely dead credential should still fail in a few seconds rather than
-# have its failure notification delayed by minutes of backoff.
+# Every one of the pipeline's 6 stages calls stage_connection() at startup,
+# and none of them had any retry: a transient DNS blip or a dropped
+# connection crashed the stage before it did anything else. 3 attempts, not
+# compute_commutes' open-ended rate-limit wait -- there is no Retry-After to
+# read here, and a genuinely dead credential should still fail in a few
+# seconds rather than have its failure notification delayed by minutes of
+# backoff.
 CONNECT_MAX_ATTEMPTS = 3
 CONNECT_BACKOFF_SECONDS = (1, 2, 4)
+
+
+def _retry_with_backoff(attempt_fn: Callable, sleep: Callable[[float], None]):
+    """Retries `attempt_fn` up to CONNECT_MAX_ATTEMPTS times with a short
+    backoff. Shared by connect() and stage_connection() -- the two places a
+    stage's startup can hit a transient Turso failure.
+
+    connect() itself does no network I/O: turso_serverless.connect() only
+    builds a Session/Connection object. The retry there is cheap insurance
+    against a future driver version that connects eagerly, but the real
+    first round-trip happens in stage_connection()'s ensure_schema() call,
+    which is what this decorates a second time around.
+    """
+    for attempt in range(CONNECT_MAX_ATTEMPTS):
+        try:
+            return attempt_fn()
+        except Exception:
+            if attempt == CONNECT_MAX_ATTEMPTS - 1:
+                raise
+            sleep(CONNECT_BACKOFF_SECONDS[attempt])
 
 
 def connect(
@@ -84,13 +105,9 @@ def _connect_with_retries(connect_fn: Callable, url: str, auth_token: str, sleep
     just fails the same way three times in as many seconds instead of one,
     which is cheap next to a transient blip going unretried.
     """
-    for attempt in range(CONNECT_MAX_ATTEMPTS):
-        try:
-            return connect_fn(url, auth_token=auth_token)
-        except Exception:
-            if attempt == CONNECT_MAX_ATTEMPTS - 1:
-                raise
-            sleep(CONNECT_BACKOFF_SECONDS[attempt])
+    return _retry_with_backoff(
+        lambda: connect_fn(url, auth_token=auth_token), sleep
+    )
 
 # source_url is what a hosted photo actually IS. (listing_id, position) is
 # only where it sits: a listing can relist under the same id with entirely
@@ -405,6 +422,8 @@ def with_stream_recovery(conn):
 def stage_connection(
     env: Mapping[str, str] | None = None,
     connect_fn: Callable = turso_serverless.connect,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
 ):
     """The database every stage reads and writes.
 
@@ -418,10 +437,20 @@ def stage_connection(
     database there is. The visual_scores orphan incident is what schema drift
     looks like when it goes unnoticed; three seconds a stage to make that
     structurally impossible is the right trade.
+
+    This is also where a transient Turso failure actually surfaces in
+    practice: connect() builds a Session/Connection object with no network
+    call, so ensure_schema()'s first statement is every stage's real first
+    round-trip. A blip there retries the whole thing -- fresh connection
+    included, not just the schema check -- since a connection that failed
+    partway through is not one worth reusing.
     """
-    conn = with_stream_recovery(connect(env, connect_fn))
-    ensure_schema(conn)
-    return conn
+    def _attempt():
+        conn = with_stream_recovery(connect(env, connect_fn, sleep=sleep))
+        ensure_schema(conn)
+        return conn
+
+    return _retry_with_backoff(_attempt, sleep)
 
 
 def upsert_row(conn, table: str, row: sqlite3.Row) -> None:
