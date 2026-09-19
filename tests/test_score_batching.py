@@ -377,3 +377,39 @@ def test_a_row_from_before_the_source_column_scores_as_missing(
     row = _score_one(tmp_path, monkeypatch, None)
     assert row["commute_score"] == 50.0
     assert row["has_incomplete_data"] == 1
+
+
+# --- one listing's bad data must not cost the others their scores --------
+
+
+def test_one_listing_crashing_does_not_stop_the_others_being_scored(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """A listing with a field score_listing can't make sense of must not take
+    the whole run down -- the other listings still get scored and written."""
+    db_path = tmp_path / "one-bad-listing.sqlite"
+    conn = get_connection(db_path)
+    _seed(conn, 3)
+    boom_id = "L0001"
+
+    real_score_listing = score.score_listing
+
+    def flaky_score_listing(listing, **kwargs):
+        if listing.listing_id == boom_id:
+            raise ValueError("boom")
+        return real_score_listing(listing, **kwargs)
+
+    monkeypatch.setattr(score, "score_listing", flaky_score_listing)
+    monkeypatch.setattr(score, "stage_connection", lambda c=conn: c)
+    monkeypatch.setattr(score, "RANKED_CSV_PATH", tmp_path / "ranked.csv")
+    monkeypatch.setattr(score.sys, "argv", ["score.py"])
+
+    score.main()
+
+    out = capsys.readouterr().out
+    assert f"{boom_id}: failed to score" in out
+
+    conn = get_connection(db_path)
+    scored_ids = {row["listing_id"] for row in get_scores(conn)}
+    assert scored_ids == {"L0000", "L0002"}
+    assert boom_id not in scored_ids
