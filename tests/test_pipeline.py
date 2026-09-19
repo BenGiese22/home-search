@@ -36,6 +36,23 @@ class Runner:
         return [argv[1] for argv in self.calls]
 
 
+class LoggingRunner(Runner):
+    """Like Runner, but also writes into the shared log file the way a real
+    subprocess would -- so a test can control what a "failed stage's own
+    captured output" actually contains."""
+
+    def __init__(self, exit_codes=None, outputs=None):
+        super().__init__(exit_codes)
+        self.outputs = outputs or {}
+
+    def __call__(self, argv, log_handle=None, **kwargs):
+        script = argv[1]
+        if log_handle is not None and script in self.outputs:
+            log_handle.write(self.outputs[script])
+            log_handle.flush()
+        return super().__call__(argv, log_handle=log_handle, **kwargs)
+
+
 @pytest.fixture(autouse=True)
 def never_revalidate_for_real(monkeypatch):
     """run_pipeline ends with a POST to the live viewer. No test may make it.
@@ -346,3 +363,118 @@ def test_no_channel_configured_reports_nothing_delivered(monkeypatch):
     monkeypatch.setattr(pipeline, "send_email", lambda *a, **k: False)
     monkeypatch.setattr(pipeline, "notify", lambda *a, **k: False)
     assert pipeline._default_notify("t", "m") is False
+
+
+# --- the failure alert carries a reason and a verdict --------------------
+#
+# A generic "score failed, exit 1" told a human nothing about whether to get
+# up and look at it. The log file every stage's subprocess already writes
+# into is the mechanism: no new IPC, just reading back the slice a failed
+# stage wrote between the offset recorded before it ran and EOF.
+
+
+def _run_with_alert(tmp_path, runner):
+    """run_pipeline against a real log file, with the alert captured instead
+    of actually sent."""
+    alerts = []
+    log_path = tmp_path / "pipeline.log"
+    with log_path.open("w+") as log_handle:
+        run_pipeline(
+            build_plan(),
+            runner=runner,
+            log_handle=log_handle,
+            notify_fn=lambda title, message: alerts.append((title, message)) or True,
+        )
+    return alerts
+
+
+def test_a_failed_stages_captured_output_reaches_the_alert(tmp_path: Path):
+    runner = LoggingRunner(
+        exit_codes={"score.py": 1},
+        outputs={"score.py": "scoring L1\nValueError: bad amenity value\n"},
+    )
+    _, message = _run_with_alert(tmp_path, runner)[0]
+    assert "ValueError: bad amenity value" in message
+
+
+def test_a_transient_looking_failure_says_no_action_needed(tmp_path: Path):
+    runner = LoggingRunner(
+        exit_codes={"score.py": 1},
+        outputs={"score.py": "requests.exceptions.ConnectionError: timed out\n"},
+    )
+    _, message = _run_with_alert(tmp_path, runner)[0]
+    assert "no action needed" in message.lower()
+
+
+def test_a_non_transient_failure_says_action_needed(tmp_path: Path):
+    runner = LoggingRunner(
+        exit_codes={"score.py": 1},
+        outputs={"score.py": "ValueError: bad amenity value\n"},
+    )
+    _, message = _run_with_alert(tmp_path, runner)[0]
+    assert "action needed" in message.lower()
+    assert "no action needed" not in message.lower()
+
+
+def test_no_captured_output_falls_back_to_action_needed(tmp_path: Path):
+    """A stage that fails without writing anything (or a log seam that
+    captured nothing) must not be misread as a transient failure by
+    default -- the safer of the two guesses is "go look at it"."""
+    runner = LoggingRunner(exit_codes={"score.py": 1})
+    _, message = _run_with_alert(tmp_path, runner)[0]
+    assert "action needed" in message.lower()
+
+
+def test_existing_failure_details_survive_alongside_the_reason(tmp_path: Path):
+    """The reason and verdict are additions, not replacements -- stage name,
+    exit code, elapsed time, and the later-stages-skipped line must still
+    all be there."""
+    runner = LoggingRunner(
+        exit_codes={"score.py": 3},
+        outputs={"score.py": "ValueError: bad amenity value\n"},
+    )
+    title, message = _run_with_alert(tmp_path, runner)[0]
+    assert "score" in title
+    assert "score" in message and "exited 3" in message
+    assert "Later stages were skipped" in message
+
+
+def test_no_log_handle_falls_back_to_the_generic_message():
+    """--dry-run and any other log_handle=None caller must not crash trying
+    to read a reason that was never captured."""
+    alerts = []
+    runner = Runner(exit_codes={"score.py": 1})
+    run_pipeline(
+        build_plan(),
+        runner=runner,
+        notify_fn=lambda title, message: alerts.append((title, message)) or True,
+    )
+    _, message = alerts[0]
+    assert "exited 1" in message
+    assert "Action needed" in message
+
+
+def test_the_captured_reason_is_only_this_stages_own_output(tmp_path: Path):
+    """The log file is shared across every stage in the run. An earlier
+    stage's chatter must not bleed into a later stage's alert."""
+    runner = LoggingRunner(
+        exit_codes={"score.py": 1},
+        outputs={
+            "scrape.py": "scrape: 12 listings fetched\n",
+            "compute_commutes.py": "commutes: 12/12 routed\n",
+            "score.py": "ValueError: bad amenity value\n",
+        },
+    )
+    _, message = _run_with_alert(tmp_path, runner)[0]
+    assert "ValueError: bad amenity value" in message
+    assert "12 listings fetched" not in message
+    assert "12/12 routed" not in message
+
+
+def test_a_long_captured_reason_is_truncated_for_the_email(tmp_path: Path):
+    huge = "\n".join(f"line {n}" for n in range(500))
+    runner = LoggingRunner(exit_codes={"score.py": 1}, outputs={"score.py": huge})
+    _, message = _run_with_alert(tmp_path, runner)[0]
+    assert len(message) < len(huge)
+    assert "line 499" in message
+    assert "line 0" not in message
