@@ -460,6 +460,51 @@ def test_missing_config_fails_before_any_connection_is_attempted():
     assert attempts == []
 
 
+def test_connect_retries_a_failing_connection_and_succeeds():
+    """A transient blip on the first attempt(s) must not crash the stage --
+    it should look identical to a connection that just worked."""
+    attempts = []
+
+    def flaky_connect(url, auth_token=None):
+        attempts.append(url)
+        if len(attempts) < 3:
+            raise ConnectionError("temporary failure in name resolution")
+        return _FakeTursoConnection()
+
+    slept = []
+    conn = turso_db.connect(
+        {"TURSO_DATABASE_URL": "libsql://db", "TURSO_AUTH_TOKEN": "t"},
+        connect_fn=flaky_connect,
+        sleep=slept.append,
+    )
+
+    assert conn.row_factory is TursoRow
+    assert len(attempts) == 3
+    assert slept == [1, 2]
+
+
+def test_connect_gives_up_after_max_attempts():
+    """A connection that never comes back is a real outage, not something to
+    retry forever -- it must still surface, just after a short, bounded
+    delay rather than immediately."""
+    attempts = []
+
+    def always_fails(url, auth_token=None):
+        attempts.append(url)
+        raise ConnectionError("still down")
+
+    slept = []
+    with pytest.raises(ConnectionError, match="still down"):
+        turso_db.connect(
+            {"TURSO_DATABASE_URL": "libsql://db", "TURSO_AUTH_TOKEN": "t"},
+            connect_fn=always_fails,
+            sleep=slept.append,
+        )
+
+    assert len(attempts) == turso_db.CONNECT_MAX_ATTEMPTS
+    assert slept == [1, 2]
+
+
 def test_stage_connection_ensures_the_schema_and_sets_the_row_factory():
     """The cutover in one function: stages get a Turso connection whose rows
     behave like sqlite3.Row, on a database guaranteed to have the current

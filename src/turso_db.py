@@ -14,6 +14,7 @@ upload started.
 """
 import re
 import sqlite3
+import time
 from collections.abc import Mapping
 from typing import Callable
 
@@ -34,16 +35,28 @@ ROW_FACTORY = turso_serverless.Row
 
 REQUIRED_ENV_VARS = ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN")
 
+# Every one of the pipeline's 6 stages calls connect() at startup, and none of
+# them had any retry: a transient DNS blip or a dropped connection crashed
+# the stage before it did anything else. 3 attempts, not compute_commutes'
+# open-ended rate-limit wait -- there is no Retry-After to read here, and a
+# genuinely dead credential should still fail in a few seconds rather than
+# have its failure notification delayed by minutes of backoff.
+CONNECT_MAX_ATTEMPTS = 3
+CONNECT_BACKOFF_SECONDS = (1, 2, 4)
+
 
 def connect(
     env: Mapping[str, str] | None = None,
     connect_fn: Callable = turso_serverless.connect,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
 ):
     """Opens the hosted Turso connection the stages read and write.
 
     One place remembers to set the row factory, so no stage has to. `env`
     defaults to the merged .env/process-environment lookup; `connect_fn` is
-    injected so tests never open a real session.
+    injected so tests never open a real session, and `sleep` so a test never
+    waits out a real backoff.
     """
     env = load_env() if env is None else env
     missing = [key for key in REQUIRED_ENV_VARS if not env.get(key)]
@@ -53,9 +66,31 @@ def connect(
             + ", ".join(missing)
             + " (set them in .env -- see .env.example)"
         )
-    conn = connect_fn(env["TURSO_DATABASE_URL"], auth_token=env["TURSO_AUTH_TOKEN"])
+    conn = _connect_with_retries(
+        connect_fn, env["TURSO_DATABASE_URL"], env["TURSO_AUTH_TOKEN"], sleep
+    )
     conn.row_factory = ROW_FACTORY
     return conn
+
+
+def _connect_with_retries(connect_fn: Callable, url: str, auth_token: str, sleep):
+    """Retries a failed connection attempt with a short exponential backoff.
+
+    turso_serverless's own exceptions (dbapi.py) do not distinguish "the
+    network is down" from "the credential is wrong" at this call -- both
+    would surface the same way from a driver that has not tried to reach the
+    server yet. Retrying broadly rather than picking out a connection-class
+    exception is the deliberate trade-off that follows: a real auth failure
+    just fails the same way three times in as many seconds instead of one,
+    which is cheap next to a transient blip going unretried.
+    """
+    for attempt in range(CONNECT_MAX_ATTEMPTS):
+        try:
+            return connect_fn(url, auth_token=auth_token)
+        except Exception:
+            if attempt == CONNECT_MAX_ATTEMPTS - 1:
+                raise
+            sleep(CONNECT_BACKOFF_SECONDS[attempt])
 
 # source_url is what a hosted photo actually IS. (listing_id, position) is
 # only where it sits: a listing can relist under the same id with entirely
