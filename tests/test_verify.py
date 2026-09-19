@@ -218,6 +218,25 @@ def test_checks_report_each_result_by_name(conn, capsys):
         assert check.__name__ in out
 
 
+def test_a_check_that_raises_is_reported_and_the_rest_still_run(conn, capsys):
+    """One check's bug must not crash the whole verify run before the checks
+    after it get a chance to prove or disprove anything."""
+    add_listing(conn, "L1", urls=1, hosted=1)
+
+    def check_boom(conn):
+        raise ValueError("boom")
+
+    checks = (check_corpus_is_not_empty, check_boom, check_addresses_are_unique)
+    violations = run_checks(conn, checks)
+
+    assert [v.check for v in violations] == ["check_boom"]
+    assert "raised ValueError: boom" in violations[0].detail
+    out = capsys.readouterr().out
+    assert "ERROR check_boom: raised ValueError: boom" in out
+    assert "ok    check_corpus_is_not_empty" in out
+    assert "ok    check_addresses_are_unique" in out
+
+
 def test_two_listings_at_one_address_is_a_violation(conn):
     """Two rows for one address means Compass reissued the listing under a
     new id -- a relist. The cost is not cosmetic: the duplicate is scored

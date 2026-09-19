@@ -211,6 +211,53 @@ def _default_notify(title: str, message: str) -> bool:
     return emailed or pushed
 
 
+# How much of a failed stage's own log to carry into the alert. Both caps
+# apply -- last 30 lines, then last 3000 chars of what remains -- so neither
+# one giant unwrapped line nor hundreds of short ones produces an unreadable
+# email.
+ALERT_LOG_MAX_LINES = 30
+ALERT_LOG_MAX_CHARS = 3000
+
+# Narrow and explicit on purpose: this decides whether an operator gets
+# woken up or told to ignore it, so a guess in either direction costs
+# someone real time. Missing an unlisted transient exception just means it
+# reads as "action needed" -- the safer failure mode of the two.
+TRANSIENT_MARKERS = (
+    "ConnectionError",
+    "ConnectionResetError",
+    "TimeoutError",
+    "socket.timeout",
+    "requests.exceptions.ConnectionError",
+    "requests.exceptions.Timeout",
+)
+
+
+def _looks_transient(text: str) -> bool:
+    return any(marker in text for marker in TRANSIENT_MARKERS)
+
+
+def _stage_log_tail(log_handle, offset) -> str:
+    """The failed stage's own captured stdout/stderr, sliced out of the log
+    file every stage's subprocess already writes into -- no new IPC needed,
+    since `offset` (recorded before the stage ran) to EOF is exactly that
+    stage's output and nothing before it.
+
+    Empty when there is no log (e.g. --dry-run, where log_handle is None)
+    or nothing was captured at `offset`, which is what tells the caller to
+    fall back to the old generic message with no reason text.
+    """
+    if log_handle is None or offset is None:
+        return ""
+    try:
+        log_handle.flush()
+        log_handle.seek(offset)
+        text = log_handle.read()
+    except (OSError, ValueError):
+        return ""
+    tail = "\n".join(text.splitlines()[-ALERT_LOG_MAX_LINES:]).strip()
+    return tail[-ALERT_LOG_MAX_CHARS:]
+
+
 def _lease_connection():
     """The database the cross-home lease lives in.
 
@@ -305,6 +352,13 @@ def run_pipeline(
         argv += _forwarded(stage, forwarded)
         started = time.monotonic()
         print(f"[{stage.name}] {' '.join(argv)}", flush=True)
+        # Recorded before the stage runs, not after: this is what makes the
+        # slice from here to EOF exactly this stage's own output, out of a
+        # log file every stage in the run shares.
+        log_offset = None
+        if log_handle is not None:
+            log_handle.flush()
+            log_offset = log_handle.tell()
         code = runner(argv, log_handle=log_handle)
         elapsed = time.monotonic() - started
         if code != 0:
@@ -314,11 +368,24 @@ def run_pipeline(
             # failed; this knows where. Both stay: the reaper's exists for
             # the case this process was killed before it could say anything,
             # and a duplicate push about a real failure beats a missed one.
-            alert(
-                f"home-search: {stage.name} failed",
+            reason = _stage_log_tail(log_handle, log_offset)
+            message = (
                 f"The {stage.name} stage exited {code} after {elapsed:.0f}s "
-                f"on {this_home()}. Later stages were skipped.",
+                f"on {this_home()}. Later stages were skipped."
             )
+            if reason:
+                message += f"\n\n{reason}"
+            if reason and _looks_transient(reason):
+                message += (
+                    "\n\nThis looks like a transient network issue -- no "
+                    "action needed, the pipeline retries this automatically "
+                    "on its next scheduled run."
+                )
+            else:
+                message += "\n\nAction needed -- this will keep failing until you investigate."
+                if reason:
+                    message += " See the reason above."
+            alert(f"home-search: {stage.name} failed", message)
             # Later stages read what earlier stages write, so continuing would
             # publish results computed from half-updated data.
             return code
@@ -418,7 +485,10 @@ def main() -> int:
     started = time.monotonic()
     print(f"pipeline: logging to {log_path}")
     try:
-        with log_path.open("w") as log_handle:
+        # "w+", not "w": a failed stage's alert reads its own output back out
+        # of this same handle (see _stage_log_tail), which a write-only file
+        # cannot do.
+        with log_path.open("w+") as log_handle:
             code = run_pipeline(
                 stages,
                 scrape_flags=scrape_flags,

@@ -55,6 +55,13 @@ MAX_BATCH_REQUEST_BYTES = 180_000_000
 # image bytes, but included so the size estimate isn't purely image-based.
 REQUEST_OVERHEAD_BYTES = 5_000
 
+# Exit codes. Mirrors compute_commutes.py's pattern: distinct from a bare 1
+# so a misconfigured key reads differently from any other failure. Before
+# this existed, main() had no return value at all and nothing called
+# sys.exit(main()), so this exact case -- ANTHROPIC_API_KEY missing -- exited
+# 0 and was reported as a successful run that scored nothing.
+EXIT_NO_API_KEY = 2
+
 # Checkpoints every already-submitted batch's id AND the garage_expected_by_id
 # mapping used to submit it, as a list -- one batch can no longer cover every
 # listing in one request (see MAX_BATCH_REQUEST_BYTES above), so a single-batch
@@ -349,13 +356,13 @@ def _process_batch_results(
         )
 
 
-def main() -> None:
+def main() -> int:
     conn = stage_connection()
     env = load_env()
     if not env.get("ANTHROPIC_API_KEY"):
         print("ANTHROPIC_API_KEY not set in .env -- add it before running this script.")
         conn.close()
-        return
+        return EXIT_NO_API_KEY
     client = anthropic.Anthropic(api_key=env["ANTHROPIC_API_KEY"])
 
     # Batches already submitted (this run or a prior, interrupted one) --
@@ -414,12 +421,21 @@ def main() -> None:
         # listing's photo at this id, and sending it to the vision API
         # would score the wrong house and cost real money doing it.
         photo_paths = sorted((PHOTOS_DIR / listing_id).glob(PHOTO_GLOB))
-        amenities = get_amenities(conn, listing_id)
-        garage_expected = row["parking_spaces"] > 0
-        request = build_batch_request(listing_id, row, amenities, photo_paths)
-        size_estimate = (
-            sum(p.stat().st_size for p in photo_paths) * 4 // 3 + REQUEST_OVERHEAD_BYTES
-        )
+        try:
+            amenities = get_amenities(conn, listing_id)
+            garage_expected = row["parking_spaces"] > 0
+            request = build_batch_request(listing_id, row, amenities, photo_paths)
+            size_estimate = (
+                sum(p.stat().st_size for p in photo_paths) * 4 // 3 + REQUEST_OVERHEAD_BYTES
+            )
+        except Exception as exc:  # noqa: BLE001
+            # A corrupt or unreadable photo file for this listing must not
+            # crash the stage before any batch is even submitted. Same shape
+            # as the too-few-photos skip just above: this listing can't be
+            # scored this run, so record that and move on to the rest.
+            upsert_visual_score(conn, listing_id, None)
+            print(f"{listing_id}: failed to build request ({exc}); skipped")
+            continue
         pending_entries.append((listing_id, request, garage_expected, size_estimate))
 
     if pending_entries:
@@ -427,7 +443,20 @@ def main() -> None:
             chunk_requests = [entry[1] for entry in chunk]
             chunk_garage_expected = {entry[0]: entry[2] for entry in chunk}
             chunk_bytes = sum(entry[3] for entry in chunk)
-            batch = client.messages.batches.create(requests=chunk_requests)
+            try:
+                batch = client.messages.batches.create(requests=chunk_requests)
+            except Exception as exc:  # noqa: BLE001
+                # One chunk's API error must not cost every chunk after it
+                # its submission -- especially since earlier chunks in this
+                # same loop may already have succeeded and been recorded.
+                # Nothing was submitted, so nothing to record; name which
+                # listings were in it so they can be diagnosed or resubmitted
+                # (they stay unscored and get picked up again next run).
+                print(
+                    f"failed to submit batch of {len(chunk_requests)} listing(s) "
+                    f"({exc}): {sorted(chunk_garage_expected)}"
+                )
+                continue
             record_vision_batch(conn, batch.id, chunk_garage_expected, _this_home())
             submitted_batches.append(
                 {"batch_id": batch.id, "garage_expected_by_id": chunk_garage_expected}
@@ -440,7 +469,7 @@ def main() -> None:
     if not submitted_batches:
         print("no listings had enough photos to score, and none already in flight")
         conn.close()
-        return
+        return 0
 
     # Round-robin across all in-flight batches rather than fully polling one
     # to completion before even checking the next -- batches don't finish in
@@ -474,7 +503,8 @@ def main() -> None:
             time.sleep(POLL_INTERVAL_SECONDS)
 
     conn.close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

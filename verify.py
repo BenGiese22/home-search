@@ -292,8 +292,18 @@ CHECKS: tuple[Callable, ...] = (
 def run_checks(conn, checks: tuple[Callable, ...] = CHECKS) -> list[Violation]:
     found = []
     for check in checks:
-        violation = check(conn)
         name = getattr(check, "__name__", str(check))
+        try:
+            violation = check(conn)
+        except Exception as exc:  # noqa: BLE001
+            # One check's bug (a schema assumption gone stale, a query typo)
+            # must not cost every check after it its chance to run -- this is
+            # the last stage of the pipeline, and a bare traceback here reads
+            # to the reaper exactly like every other unhandled crash, instead
+            # of as a report naming which invariant it could not even check.
+            print(f"  ERROR {name}: raised {type(exc).__name__}: {exc}")
+            found.append(Violation(name, f"raised {type(exc).__name__}: {exc}", []))
+            continue
         if violation is None:
             print(f"  ok    {name}")
         else:

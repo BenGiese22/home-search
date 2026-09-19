@@ -96,38 +96,50 @@ def main() -> None:
     ranked = []
     score_rows = []
     for listing in listings:
-        commute = commute_by_id.get(listing.listing_id)
-        # A row measured a different way is not scored. It is not a number
-        # for the same question -- a free-flow duration against a curve drawn
-        # for rush hour scores every listing 100 -- so scoring it would rank
-        # the un-recomputed half of the corpus above the recomputed half and
-        # look entirely normal doing it. Treating it as absent puts the
-        # listing on the neutral fallback AND raises has_incomplete_data,
-        # which is loud: if the commutes stage ever lands after the scorer,
-        # the whole corpus is flagged rather than quietly mis-ranked.
-        medtronic_minutes = (
-            commute["medtronic_minutes"]
-            if commute is not None and commute["commute_source"] == COMMUTE_SOURCE
-            else None
-        )
+        try:
+            commute = commute_by_id.get(listing.listing_id)
+            # A row measured a different way is not scored. It is not a
+            # number for the same question -- a free-flow duration against a
+            # curve drawn for rush hour scores every listing 100 -- so
+            # scoring it would rank the un-recomputed half of the corpus
+            # above the recomputed half and look entirely normal doing it.
+            # Treating it as absent puts the listing on the neutral fallback
+            # AND raises has_incomplete_data, which is loud: if the commutes
+            # stage ever lands after the scorer, the whole corpus is flagged
+            # rather than quietly mis-ranked.
+            medtronic_minutes = (
+                commute["medtronic_minutes"]
+                if commute is not None and commute["commute_source"] == COMMUTE_SOURCE
+                else None
+            )
 
-        visual_row = visual_by_id.get(listing.listing_id)
-        visual_condition_score = None
-        visual_outdoor_score = None
-        if visual_row is not None and not visual_row["photo_score_unavailable"]:
-            visual_condition_score = visual_row["condition_photo_score"]
-            visual_outdoor_score = visual_row["outdoor_photo_score"]
+            visual_row = visual_by_id.get(listing.listing_id)
+            visual_condition_score = None
+            visual_outdoor_score = None
+            if visual_row is not None and not visual_row["photo_score_unavailable"]:
+                visual_condition_score = visual_row["condition_photo_score"]
+                visual_outdoor_score = visual_row["outdoor_photo_score"]
 
-        result = score_listing(
-            listing,
-            medtronic_minutes=medtronic_minutes,
-            stats=stats,
-            visual_condition_score=visual_condition_score,
-            visual_outdoor_score=visual_outdoor_score,
-        )
-        score_rows.append((listing.listing_id, result))
-        value = value_score(result.composite, price_numeric_by_id[listing.listing_id])
-        ranked.append((listing, result, value))
+            result = score_listing(
+                listing,
+                medtronic_minutes=medtronic_minutes,
+                stats=stats,
+                visual_condition_score=visual_condition_score,
+                visual_outdoor_score=visual_outdoor_score,
+            )
+            score_rows.append((listing.listing_id, result))
+            value = value_score(result.composite, price_numeric_by_id[listing.listing_id])
+            ranked.append((listing, result, value))
+        except Exception as exc:  # noqa: BLE001
+            # One listing's bad or missing field data (a malformed amenity,
+            # a commute row scoring can't make sense of) must not cost every
+            # other listing its score -- the same reasoning as
+            # compute_commutes.py's per-listing catch and score_photos.py's
+            # per-result catch. The listing is simply absent from this run's
+            # scores rather than written with a fabricated result: it keeps
+            # whatever score it already had (or none) and is picked up again
+            # next run once whatever is wrong with its data is fixed.
+            print(f"{listing.listing_id}: failed to score ({exc}); skipped")
 
     # One batched write rather than one INSERT per listing, for the same
     # round-trip reason as the reads above.
