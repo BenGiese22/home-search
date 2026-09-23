@@ -62,12 +62,13 @@ def good_route(origin, destination):
     return (9.0, 22.0)
 
 
-def run_once(conn, *, geocode_fn=None, route_fn=good_route):
+def run_once(conn, *, geocode_fn=None, route_fn=good_route, force=False):
     return measure(
         conn,
         geocode_fn=geocode_fn or geocoder(),
         route_fn=route_fn,
         arrive_by=ARRIVE,
+        force=force,
         sleep=lambda seconds: None,
     )
 
@@ -176,7 +177,7 @@ def test_a_stale_row_is_not_a_canary(conn):
     assert run_once(conn) == 0
     conn.execute("UPDATE commute SET commute_source = 'something-older'")
     conn.commit()
-    assert compute_commutes.pick_canary(conn) is None
+    assert compute_commutes.pick_canaries(conn) == []
 
 
 def test_a_fresh_corpus_that_has_never_routed_falls_back_to_the_floor(conn):
@@ -189,3 +190,110 @@ def test_a_fresh_corpus_that_has_never_routed_falls_back_to_the_floor(conn):
 
     add(conn, f"bad{floor - 1}", ordered[floor - 1])
     assert run_once(conn, geocode_fn=geocoder(bad)) == EXIT_NOTHING_ROUTED
+
+
+# --- choosing canaries ---------------------------------------------------
+
+
+def computed(conn, lid, when):
+    conn.execute("UPDATE commute SET computed_at = ? WHERE listing_id = ?", (when, lid))
+    conn.commit()
+
+
+@pytest.fixture
+def several_routed(conn):
+    """Four listings that have routed, computed oldest-first in the reverse
+    of their listing_id order."""
+    for i in range(4):
+        add(conn, f"good{i}", f"{i} {GOOD}")
+    assert run_once(conn) == 0
+    for i in range(4):
+        computed(conn, f"good{i}", f"2026-09-0{9 - i}T00:00:00")
+    return conn
+
+
+def test_canaries_are_the_least_recently_computed_few(several_routed):
+    """A capped handful, oldest first -- not the lowest listing_id every
+    time, which made one listing the canary forever."""
+    ids = [row["listing_id"] for row in compute_commutes.pick_canaries(several_routed)]
+    assert ids == ["good3", "good2", "good1"][: compute_commutes.CANARY_COUNT]
+
+
+def test_canaries_leave_out_the_listings_this_run_attempts(several_routed):
+    ids = [
+        row["listing_id"]
+        for row in compute_commutes.pick_canaries(
+            several_routed, exclude={"good3", "good1"}
+        )
+    ]
+    assert ids == ["good2", "good0"]
+
+
+def test_one_canary_that_stopped_routing_does_not_fail_quiet_runs(conn):
+    """The oldest (and lowest-id) canary's own address stops geocoding. Its
+    failed probe is never written, so it stays first in line forever -- and
+    alone it used to fail every quiet run. A second canary routing says the
+    service is fine."""
+    add(conn, "a-canary", "1 Drifted Road")
+    add(conn, "b-canary", GOOD)
+    assert run_once(conn) == 0
+    computed(conn, "a-canary", "2026-09-01T00:00:00")
+    computed(conn, "b-canary", "2026-09-02T00:00:00")
+
+    add(conn, "lamar", BAD)
+    broken = geocoder({BAD, "1 Drifted Road"})
+    assert runs(conn, 3, geocode_fn=broken) == [0, 0, 0]
+
+
+def test_every_canary_failing_is_a_failed_run(several_routed):
+    add(several_routed, "new", "5 New Street")
+    assert run_once(several_routed, geocode_fn=lambda parts: None) == EXIT_NOTHING_ROUTED
+
+
+def test_a_forced_run_never_probes_a_listing_it_just_attempted(routed_before):
+    """Under --force the only listing that has routed is also being
+    re-measured. As the canary it would already carry this run's empty
+    row, and probing it just repeats the same request. With it excluded
+    there is no canary, and one attempt is under the floor."""
+    geocoded = []
+
+    def geocode_fn(parts):
+        geocoded.append(parts.address)
+        return None
+
+    assert run_once(routed_before, geocode_fn=geocode_fn, force=True) == 0
+    assert geocoded == [GOOD]
+
+
+def test_a_whole_corpus_forced_failure_falls_back_to_the_floor(several_routed):
+    """--force over everything, nothing routing: every listing was
+    attempted, so none is left to probe with, and FLOOR failures in a row
+    is systemic."""
+    assert (
+        run_once(several_routed, geocode_fn=lambda parts: None, force=True)
+        == EXIT_NOTHING_ROUTED
+    )
+
+
+def test_a_dead_token_on_any_canary_exits_as_an_auth_failure(
+    several_routed, monkeypatch
+):
+    """The first canary fails like an address; the second answers 401. That
+    is a dead token, not an outage, and main() says so with exit 3."""
+    add(several_routed, "new", BAD)
+    second = compute_commutes.pick_canaries(several_routed)[1]["address"]
+
+    def geocode_address(parts, token, http_get):
+        if parts.address == second:
+            raise compute_commutes.StopTheRun("HTTP 401")
+        return None
+
+    monkeypatch.setattr(
+        compute_commutes, "load_env", lambda: {"MAPBOX_ACCESS_TOKEN": "t"}
+    )
+    # Module-global; left set, it would redact "t" from every later test.
+    monkeypatch.setattr(compute_commutes, "set_redaction_token", lambda value: None)
+    monkeypatch.setattr(compute_commutes, "stage_connection", lambda: several_routed)
+    monkeypatch.setattr(compute_commutes, "geocode_address", geocode_address)
+    monkeypatch.setattr(compute_commutes.sys, "argv", ["compute_commutes.py"])
+    assert compute_commutes.main() == compute_commutes.EXIT_AUTH_FAILED

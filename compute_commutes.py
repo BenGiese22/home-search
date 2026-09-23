@@ -27,12 +27,13 @@ apart:
 The `anything else` class has one more rule, for a run that routes nothing
 at all. The listings a quiet run attempts are the failed rows the selector
 re-picks every run, so "nothing routed" alone cannot tell a handful of
-permanently bad addresses from a Mapbox outage. The canary can: one listing
-that has routed before under the current COMMUTE_SOURCE, measured again
-through the same path and never written. It routes -- the service works,
-the failures are facts about those addresses, exit 0. It fails too, in any
-way -- the run fails. A corpus where nothing has ever routed has no canary,
-and falls back to `NOTHING_ROUTED_FLOOR`.
+permanently bad addresses from a Mapbox outage. The canaries can: up to
+CANARY_COUNT listings that have routed before under the current
+COMMUTE_SOURCE and that this run did not attempt, measured again through the
+same path and never written. One routes -- the service works, the failures
+are facts about those addresses, exit 0. Every one fails too, in any way --
+the run fails. With no canary (nothing has ever routed, or --force attempted
+every listing that had), the run falls back to `NOTHING_ROUTED_FLOOR`.
 """
 
 import sys
@@ -106,6 +107,14 @@ EXIT_NOTHING_ROUTED = 4
 # rows on every run with no cap, so any count of this run's failures is a
 # count of accumulated bad addresses as much as of anything systemic.
 NOTHING_ROUTED_FLOOR = 3
+
+# How many known-good listings to probe before calling a run that routed
+# nothing systemic. More than one because a canary's failed probe is never
+# written: a canary whose own address stops routing (a Mapbox data change,
+# one bad leg) would otherwise stay the canary, and fail every quiet run,
+# forever. Probing stops at the first that routes, so a healthy run pays for
+# one probe and an outage for three.
+CANARY_COUNT = 3
 
 
 class StopTheRun(RuntimeError):
@@ -279,7 +288,7 @@ def run(
     arrive_by: str,
     sleep=time.sleep,
     upsert_fn=upsert_commute,
-    canary=None,
+    canaries=(),
 ) -> int:
     """Measure each listing and write its row. Returns the exit code.
 
@@ -287,9 +296,10 @@ def run(
     Turso and reads the environment, neither of which belongs in a test of
     "what happens when the second of three listings rate-limits".
 
-    `canary` is a listing row that has routed before (see `pick_canary`),
-    or None if nothing has. It is only measured if this run routes nothing,
-    and its result is never written.
+    `canaries` are listing rows that have routed before and are not in
+    `listings` (see `pick_canaries`), possibly none. They are only measured
+    if this run routes nothing, in order until one routes, and their results
+    are never written.
     """
     measure_kwargs = dict(
         geocode_fn=geocode_fn, route_fn=route_fn, arrive_by=arrive_by, sleep=sleep
@@ -320,60 +330,73 @@ def run(
         # fails the same way every run would alert on every run.
         return 0
 
-    if canary is None:
+    if not canaries:
         if attempted >= NOTHING_ROUTED_FLOOR:
             # Exiting 0 here is how a corpus of empty commutes reaches the
             # scorer looking like a successful run.
             print(
-                f"commutes: nothing routed, no listing has ever routed to probe "
-                f"with, and {attempted} attempted (floor is "
+                f"commutes: nothing routed, no canary to probe with, "
+                f"and {attempted} attempted (floor is "
                 f"{NOTHING_ROUTED_FLOOR}) -- treating the run as failed"
             )
             return EXIT_NOTHING_ROUTED
         print(
-            f"commutes: nothing routed, no listing has ever routed to probe "
-            f"with, and only {attempted} attempted (floor for calling that "
+            f"commutes: nothing routed, no canary to probe with, "
+            f"and only {attempted} attempted (floor for calling that "
             f"systemic is {NOTHING_ROUTED_FLOOR}); the row(s) are recorded and "
             f"will be retried next run"
         )
         return 0
 
-    # Not written: the canary's row is a good measurement from an earlier
-    # run, and a failed probe must not replace it with an empty one.
-    probe = _measure_one(canary, **measure_kwargs)
-    if probe.medtronic_minutes is not None:
-        print(
-            f"commutes: nothing routed, but canary {canary['listing_id']} routed "
-            f"fine; not systemic -- the failed row(s) are recorded and will be "
-            f"retried next run: {', '.join(failed)}"
-        )
-        return 0
+    # Not written: a canary's row is a good measurement from an earlier run,
+    # and a failed probe must not replace it with an empty one. A 401/403
+    # here raises StopTheRun like anywhere else.
+    for canary in canaries:
+        probe = _measure_one(canary, **measure_kwargs)
+        if probe.medtronic_minutes is not None:
+            print(
+                f"commutes: nothing routed, but canary {canary['listing_id']} "
+                f"routed fine; not systemic -- the failed row(s) are recorded "
+                f"and will be retried next run: {', '.join(failed)}"
+            )
+            return 0
+        print(f"commutes: canary {canary['listing_id']} failed ({_failure(probe)})")
+        sleep(PACE_SECONDS)
     print(
-        f"commutes: nothing routed, and canary {canary['listing_id']} failed too "
-        f"({_failure(probe)}) -- treating the run as failed"
+        f"commutes: nothing routed, and every canary failed too "
+        f"({', '.join(c['listing_id'] for c in canaries)}) "
+        f"-- treating the run as failed"
     )
     return EXIT_NOTHING_ROUTED
 
 
-def pick_canary(conn):
-    """A listing that has routed under the current COMMUTE_SOURCE, or None.
+def pick_canaries(conn, exclude=()):
+    """Up to CANARY_COUNT listings that have routed under the current
+    COMMUTE_SOURCE and are not in `exclude`, least recently computed first.
 
-    Lowest listing_id, so the same one is probed run after run and a flaky
-    canary shows up as one flaky listing rather than as noise. Must be
-    picked *before* the run writes anything, or a run that overwrites the
-    corpus (--force) could pick from rows it just emptied.
+    Least recently computed rather than lowest listing_id: a fixed order
+    put the same listing first on every run, and since a probe is never
+    written, one bad canary stayed first forever. Ties break on listing_id,
+    so the choice is deterministic.
+
+    Must be picked *before* the run writes anything, and `exclude` must name
+    every listing the run attempts: a listing the run re-measures (--force)
+    already carries this run's result, so probing it only repeats the same
+    request. Filtered here rather than in SQL because --force can exclude
+    the whole corpus, more ids than a statement takes parameters.
     """
-    return conn.execute(
+    exclude = set(exclude)
+    rows = conn.execute(
         """
         SELECT l.* FROM listings l
         JOIN commute c ON c.listing_id = l.listing_id
         WHERE c.medtronic_minutes IS NOT NULL
           AND c.commute_source = ?
-        ORDER BY l.listing_id
-        LIMIT 1
+        ORDER BY c.computed_at, l.listing_id
         """,
         (COMMUTE_SOURCE,),
-    ).fetchone()
+    ).fetchall()
+    return [row for row in rows if row["listing_id"] not in exclude][:CANARY_COUNT]
 
 
 def measure(
@@ -402,7 +425,7 @@ def measure(
 
     listings_by_id = {row["listing_id"]: row for row in query_listings(conn)}
     listings = [listings_by_id[lid] for lid in missing_ids if lid in listings_by_id]
-    canary = pick_canary(conn)
+    canaries = pick_canaries(conn, exclude={row["listing_id"] for row in listings})
 
     print(f"commutes: {len(listings)} listing(s), arrive_by={arrive_by}")
     return run(
@@ -412,7 +435,7 @@ def measure(
         route_fn=route_fn,
         arrive_by=arrive_by,
         sleep=sleep,
-        canary=canary,
+        canaries=canaries,
     )
 
 

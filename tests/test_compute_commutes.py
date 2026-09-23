@@ -40,7 +40,7 @@ def run_stage(
     route_fn=None,
     sleeps=None,
     upserts=None,
-    canary=None,
+    canaries=(),
 ):
     conn = FakeConn()
     recorded = [] if upserts is None else upserts
@@ -54,7 +54,7 @@ def run_stage(
             arrive_by=ARRIVE,
             sleep=slept.append,
             upsert_fn=lambda c, lid, result: recorded.append((lid, result)),
-            canary=canary,
+            canaries=canaries,
         ),
         recorded,
         slept,
@@ -138,7 +138,7 @@ def test_one_listing_that_will_not_geocode_is_not_a_failed_run(capsys):
     code, upserts, _ = run_stage(
         [listing("a", address="9233 North Lamar Street")],
         geocode_fn=geocode_all_but_canary_fails,
-        canary=canary(),
+        canaries=[canary()],
     )
     assert code == 0
     assert len(upserts) == 1
@@ -158,7 +158,7 @@ def test_the_canary_is_measured_but_never_written():
     code, upserts, _ = run_stage(
         [listing("a", address="9233 North Lamar Street")],
         geocode_fn=geocode_all_but_canary_fails,
-        canary=canary(),
+        canaries=[canary()],
     )
     assert code == 0
     assert [lid for lid, _ in upserts] == ["a"]
@@ -168,14 +168,16 @@ def test_a_canary_that_fails_too_fails_the_run(capsys):
     """Any failure counts, a no-match included: a geocode-parse regression
     answers "no match" for every address, the canary's among them."""
     code, upserts, _ = run_stage(
-        [listing("a")], geocode_fn=lambda parts: None, canary=canary()
+        [listing("a")], geocode_fn=lambda parts: None, canaries=[canary()]
     )
     assert code == compute_commutes.EXIT_NOTHING_ROUTED
     assert [lid for lid, _ in upserts] == ["a"]
+    lines = capsys.readouterr().out.splitlines()
+    assert "commutes: canary canary failed (no coordinates)" in lines
     assert (
-        "commutes: nothing routed, and canary canary failed too (no coordinates) "
+        "commutes: nothing routed, and every canary failed too (canary) "
         "-- treating the run as failed"
-    ) in capsys.readouterr().out.splitlines()
+    ) in lines
 
 
 def test_the_canary_is_not_probed_when_something_routed():
@@ -185,7 +187,7 @@ def test_the_canary_is_not_probed_when_something_routed():
         geocoded.append(parts.address)
         return (39.86, -105.08, "rooftop")
 
-    code, _, _ = run_stage([listing("a")], geocode_fn=geocode_fn, canary=canary())
+    code, _, _ = run_stage([listing("a")], geocode_fn=geocode_fn, canaries=[canary()])
     assert code == 0
     assert CANARY_ADDRESS not in geocoded
 
@@ -197,7 +199,67 @@ def test_a_dead_token_during_the_canary_still_stops_the_run():
         return None
 
     with pytest.raises(StopTheRun):
-        run_stage([listing("a")], geocode_fn=geocode_fn, canary=canary())
+        run_stage([listing("a")], geocode_fn=geocode_fn, canaries=[canary()])
+
+
+# --- more than one canary -----------------------------------------------
+
+BROKEN_CANARY_ADDRESS = "1 Broken Canary Row"
+
+
+def test_a_bad_first_canary_is_rescued_by_a_good_second(capsys):
+    """One canary whose own address has stopped routing (a Mapbox data
+    change, a single 5xx blip) must not fail every quiet run by itself.
+    The next canary routes, so the service works."""
+    geocoded = []
+
+    def geocode_fn(parts):
+        geocoded.append(parts.address)
+        return geocode_all_but_canary_fails(parts)
+
+    third = listing("third", address="3 Unused Canary Way")
+    code, upserts, _ = run_stage(
+        [listing("a", address="9233 North Lamar Street")],
+        geocode_fn=geocode_fn,
+        canaries=[listing("broken", address=BROKEN_CANARY_ADDRESS), canary(), third],
+    )
+    assert code == 0
+    assert [lid for lid, _ in upserts] == ["a"]
+    # Stops at the first canary that routes.
+    assert "3 Unused Canary Way" not in geocoded
+    lines = capsys.readouterr().out.splitlines()
+    assert "commutes: canary broken failed (no coordinates)" in lines
+    assert (
+        "commutes: nothing routed, but canary canary routed fine; not systemic "
+        "-- the failed row(s) are recorded and will be retried next run: a"
+    ) in lines
+
+
+def test_every_canary_failing_fails_the_run(capsys):
+    canaries = [listing(f"c{i}", address=f"{i} Canary Court") for i in range(3)]
+    code, upserts, _ = run_stage(
+        [listing("a")], geocode_fn=lambda parts: None, canaries=canaries
+    )
+    assert code == compute_commutes.EXIT_NOTHING_ROUTED
+    assert [lid for lid, _ in upserts] == ["a"]
+    assert (
+        "commutes: nothing routed, and every canary failed too (c0, c1, c2) "
+        "-- treating the run as failed"
+    ) in capsys.readouterr().out.splitlines()
+
+
+def test_a_dead_token_on_a_later_canary_still_stops_the_run():
+    def geocode_fn(parts):
+        if parts.address == CANARY_ADDRESS:
+            raise StopTheRun("HTTP 401")
+        return None
+
+    with pytest.raises(StopTheRun):
+        run_stage(
+            [listing("a")],
+            geocode_fn=geocode_fn,
+            canaries=[listing("broken", address=BROKEN_CANARY_ADDRESS), canary()],
+        )
 
 
 # --- a run that routes nothing, on a corpus that has never routed -------
@@ -245,7 +307,7 @@ def test_with_no_canary_under_the_floor_says_so_in_the_log(capsys):
     assert code == 0
     floor = compute_commutes.NOTHING_ROUTED_FLOOR
     assert (
-        f"commutes: nothing routed, no listing has ever routed to probe with, "
+        f"commutes: nothing routed, no canary to probe with, "
         f"and only 1 attempted (floor for calling that systemic is {floor}); "
         f"the row(s) are recorded and will be retried next run"
     ) in capsys.readouterr().out.splitlines()
@@ -264,7 +326,7 @@ def test_a_route_that_raises_still_writes_a_row_naming_the_failure():
     def route_fn(origin, destination):
         raise RuntimeError("connection reset")
 
-    code, upserts, _ = run_stage([listing("a")], route_fn=route_fn, canary=canary())
+    code, upserts, _ = run_stage([listing("a")], route_fn=route_fn, canaries=[canary()])
     assert code == compute_commutes.EXIT_NOTHING_ROUTED
     assert len(upserts) == 1
     assert upserts[0][1].medtronic_minutes is None
@@ -347,7 +409,7 @@ def test_a_rate_limit_gives_up_after_a_few_tries():
         attempts["n"] += 1
         raise RetryableStatus(429, retry_after=1.0)
 
-    code, upserts, _ = run_stage([listing("a")], route_fn=route_fn, canary=canary())
+    code, upserts, _ = run_stage([listing("a")], route_fn=route_fn, canaries=[canary()])
     assert code == compute_commutes.EXIT_NOTHING_ROUTED
     # The listing and then the canary, each through the full retry budget.
     assert attempts["n"] == 2 * (compute_commutes.MAX_RETRIES + 1)
