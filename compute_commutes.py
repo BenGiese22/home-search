@@ -25,35 +25,25 @@ apart:
             else      not cost the other hundred their numbers.
 
 The `anything else` class has one more rule, for a run that routes nothing
-at all. It splits "anything else" in two:
-
-  answered no     the service worked and said no: a geocode miss, or "no
-                  route" for a coordinate. A fact about the address.
-  did not answer  an exception after the retries: 5xx, timeout, a 429 that
-                  never cleared, a bug of ours. A fact about us.
-
-One "did not answer" with nothing routed fails the run. "Answered no" only
-does at `NOTHING_ROUTED_FLOOR` of them, and a listing whose previous row
-was *also* answered-no is known-bad and not counted at all: the selector
-re-picks it every run, forever, and it would otherwise trip the floor on
-its own the day there are enough of them.
+at all. The listings a quiet run attempts are the failed rows the selector
+re-picks every run, so "nothing routed" alone cannot tell a handful of
+permanently bad addresses from a Mapbox outage. The canary can: one listing
+that has routed before under the current COMMUTE_SOURCE, measured again
+through the same path and never written. It routes -- the service works,
+the failures are facts about those addresses, exit 0. It fails too, in any
+way -- the run fails. A corpus where nothing has ever routed has no canary,
+and falls back to `NOTHING_ROUTED_FLOOR`.
 """
 
 import sys
 import time
-from collections.abc import Collection
 from pathlib import Path
 
 import requests
 
-from src.commute import COMMUTE_SOURCE, compute_commute, next_arrival
+from src.commute import COMMUTE_SOURCE, CommuteResult, compute_commute, next_arrival
 from src.config import load_env
-from src.db import (
-    get_commutes_by_listing,
-    get_listing_ids_missing_commute,
-    query_listings,
-    upsert_commute,
-)
+from src.db import get_listing_ids_missing_commute, query_listings, upsert_commute
 from src.routing_mapbox import AddressParts, RoutingError, geocode_address, route
 from src.turso_db import stage_connection
 
@@ -104,19 +94,17 @@ EXIT_NO_TOKEN = 2
 EXIT_AUTH_FAILED = 3
 EXIT_NOTHING_ROUTED = 4
 
-# How many *new* answered-no failures (a geocode miss, or "no route" for a
-# coordinate) it takes, with nothing routed, before the run is read as
-# systemic rather than as N bad addresses. Set from one incident: a run
-# with exactly one listing to measure, whose address would not geocode,
-# failed the entire pipeline over it.
+# The fallback for a run that routes nothing when there is no canary --
+# no listing has ever routed under the current COMMUTE_SOURCE, so on a fresh
+# corpus or the first run after a source bump. Below this many attempts the
+# run exits 0 and the rows are retried next run; at or above it, the run
+# fails. Set from one incident: a run with exactly one listing to measure,
+# whose address would not geocode, failed the entire pipeline over it.
 #
-# This floor does not accumulate across runs, and is not meant to. Only new
-# answered-no failures count toward it -- a listing that answered no last
-# run too is known-bad and excluded, because the selector re-picks failed
-# rows on every run with no cap and three permanent bad addresses would
-# otherwise fail every quiet run forever. So the floor is crossed only by
-# FLOOR fresh no-answers arriving in the same run. Outages are not what it
-# is for: those surface as exceptions, and one of those is enough.
+# Once anything has routed, this is not consulted: the canary answers the
+# question directly, where a count cannot. The selector re-picks failed
+# rows on every run with no cap, so any count of this run's failures is a
+# count of accumulated bad addresses as much as of anything systemic.
 NOTHING_ROUTED_FLOOR = 3
 
 
@@ -231,6 +219,57 @@ def _with_retries(call, sleep):
     raise AssertionError("unreachable")
 
 
+def _parts(row) -> AddressParts:
+    return AddressParts(
+        address=row["address"],
+        city=row["city"],
+        state=row["state"],
+        zip_code=row["zip_code"],
+    )
+
+
+def _label(row) -> str:
+    return f"{row['listing_id']} ({row['address']}, {row['city']})"
+
+
+def _measure_one(row, *, geocode_fn, route_fn, arrive_by, sleep) -> CommuteResult:
+    """One listing, through the retries, as a row. Never raises but for
+    StopTheRun: any other failure is recorded in route_error."""
+    try:
+        result = compute_commute(
+            _parts(row),
+            DENVER_COWORKING,
+            MEDTRONIC_LAFAYETTE,
+            arrive_by,
+            lambda p: _with_retries(lambda: geocode_fn(p), sleep),
+            lambda o, d: _with_retries(lambda: route_fn(o, d), sleep),
+        )
+    except StopTheRun:
+        # Deliberately before any upsert: the row still holds the previous
+        # measurement, and overwriting it with nothing would destroy data
+        # to record a failure of ours.
+        raise
+    except Exception as exc:  # noqa: BLE001
+        result = CommuteResult(
+            lat=None,
+            lon=None,
+            denver_miles=None,
+            denver_minutes=None,
+            medtronic_miles=None,
+            medtronic_minutes=None,
+            geocode_failed=False,
+            arrive_by=arrive_by,
+            route_error=f"{type(exc).__name__}: {exc}",
+        )
+    if result.route_error:
+        result.route_error = redact(result.route_error)[:200]
+    return result
+
+
+def _failure(result: CommuteResult) -> str:
+    return "no coordinates" if result.geocode_failed else str(result.route_error)
+
+
 def run(
     conn,
     listings,
@@ -240,7 +279,7 @@ def run(
     arrive_by: str,
     sleep=time.sleep,
     upsert_fn=upsert_commute,
-    known_bad: Collection[str] = frozenset(),
+    canary=None,
 ) -> int:
     """Measure each listing and write its row. Returns the exit code.
 
@@ -248,75 +287,27 @@ def run(
     Turso and reads the environment, neither of which belongs in a test of
     "what happens when the second of three listings rate-limits".
 
-    `known_bad` is the listing_ids whose previous row was already an
-    answered-no failure (see `known_bad_ids`).
+    `canary` is a listing row that has routed before (see `pick_canary`),
+    or None if nothing has. It is only measured if this run routes nothing,
+    and its result is never written.
     """
-    attempted = routed = fresh_no = old_no = service_errors = 0
+    measure_kwargs = dict(
+        geocode_fn=geocode_fn, route_fn=route_fn, arrive_by=arrive_by, sleep=sleep
+    )
+    attempted = routed = 0
+    failed = []
 
     for row in listings:
         attempted += 1
-        parts = AddressParts(
-            address=row["address"],
-            city=row["city"],
-            state=row["state"],
-            zip_code=row["zip_code"],
-        )
-        label = f"{row['listing_id']} ({parts.address}, {parts.city})"
-        raised = False
-
-        try:
-            result = compute_commute(
-                parts,
-                DENVER_COWORKING,
-                MEDTRONIC_LAFAYETTE,
-                arrive_by,
-                lambda p: _with_retries(lambda: geocode_fn(p), sleep),
-                lambda o, d: _with_retries(lambda: route_fn(o, d), sleep),
-            )
-        except StopTheRun:
-            # Deliberately before the upsert: the row still holds the
-            # previous measurement, and overwriting it with nothing would
-            # destroy data to record a failure of ours.
-            raise
-        except Exception as exc:  # noqa: BLE001
-            from src.commute import CommuteResult
-
-            raised = True
-            reason = redact(f"{type(exc).__name__}: {exc}")[:200]
-            result = CommuteResult(
-                lat=None,
-                lon=None,
-                denver_miles=None,
-                denver_minutes=None,
-                medtronic_miles=None,
-                medtronic_minutes=None,
-                geocode_failed=False,
-                arrive_by=arrive_by,
-                route_error=reason,
-            )
-
-        if result.route_error:
-            result.route_error = redact(result.route_error)[:200]
-
+        result = _measure_one(row, **measure_kwargs)
         upsert_fn(conn, row["listing_id"], result)
 
         if result.medtronic_minutes is not None:
             routed += 1
-            print(f"{label}: {result.medtronic_minutes:.1f} min", flush=True)
+            print(f"{_label(row)}: {result.medtronic_minutes:.1f} min", flush=True)
         else:
-            what = (
-                "no coordinates"
-                if result.geocode_failed
-                else redact(str(result.route_error))
-            )
-            if raised:
-                service_errors += 1
-            elif row["listing_id"] in known_bad:
-                old_no += 1
-                what += " (known-bad: failed last run too; not counted as systemic)"
-            else:
-                fresh_no += 1
-            print(f"{label}: {what}", flush=True)
+            failed.append(row["listing_id"])
+            print(f"{_label(row)}: {_failure(result)}", flush=True)
 
         sleep(PACE_SECONDS)
 
@@ -328,41 +319,61 @@ def run(
         # on the next listing is not worth an alert, and a listing that
         # fails the same way every run would alert on every run.
         return 0
-    if service_errors or fresh_no >= NOTHING_ROUTED_FLOOR:
-        # Exiting 0 here is how a corpus of empty commutes reaches the
-        # scorer looking like a successful run.
+
+    if canary is None:
+        if attempted >= NOTHING_ROUTED_FLOOR:
+            # Exiting 0 here is how a corpus of empty commutes reaches the
+            # scorer looking like a successful run.
+            print(
+                f"commutes: nothing routed, no listing has ever routed to probe "
+                f"with, and {attempted} attempted (floor is "
+                f"{NOTHING_ROUTED_FLOOR}) -- treating the run as failed"
+            )
+            return EXIT_NOTHING_ROUTED
         print(
-            f"commutes: nothing routed at all -- {service_errors} service "
-            f"error(s), {fresh_no} new no-match answer(s), {old_no} known-bad; "
-            f"treating the run as failed"
+            f"commutes: nothing routed, no listing has ever routed to probe "
+            f"with, and only {attempted} attempted (floor for calling that "
+            f"systemic is {NOTHING_ROUTED_FLOOR}); the row(s) are recorded and "
+            f"will be retried next run"
         )
-        return EXIT_NOTHING_ROUTED
+        return 0
+
+    # Not written: the canary's row is a good measurement from an earlier
+    # run, and a failed probe must not replace it with an empty one.
+    probe = _measure_one(canary, **measure_kwargs)
+    if probe.medtronic_minutes is not None:
+        print(
+            f"commutes: nothing routed, but canary {canary['listing_id']} routed "
+            f"fine; not systemic -- the failed row(s) are recorded and will be "
+            f"retried next run: {', '.join(failed)}"
+        )
+        return 0
     print(
-        f"commutes: nothing routed, but only {fresh_no} new no-match answer(s) "
-        f"(floor for calling that systemic is {NOTHING_ROUTED_FLOOR}) and no "
-        f"service errors; the row(s) are recorded and will be retried next run"
+        f"commutes: nothing routed, and canary {canary['listing_id']} failed too "
+        f"({_failure(probe)}) -- treating the run as failed"
     )
-    return 0
+    return EXIT_NOTHING_ROUTED
 
 
-def answered_no(row) -> bool:
-    """Whether a stored commute row records the service answering no -- a
-    geocode miss or "no route" -- as opposed to a success or an exception."""
-    if row["geocode_failed"]:
-        return True
-    return row["medtronic_minutes"] is None and str(row["route_error"] or "").startswith(
-        "no route"
-    )
+def pick_canary(conn):
+    """A listing that has routed under the current COMMUTE_SOURCE, or None.
 
-
-def known_bad_ids(conn, listing_ids: Collection[str]) -> frozenset[str]:
-    """The listings, among those about to be attempted, whose last row was
-    already an answered-no failure. One read of the whole commute table
-    rather than one per listing: against Turso a statement is a round-trip."""
-    previous = get_commutes_by_listing(conn)
-    return frozenset(
-        lid for lid in listing_ids if lid in previous and answered_no(previous[lid])
-    )
+    Lowest listing_id, so the same one is probed run after run and a flaky
+    canary shows up as one flaky listing rather than as noise. Must be
+    picked *before* the run writes anything, or a run that overwrites the
+    corpus (--force) could pick from rows it just emptied.
+    """
+    return conn.execute(
+        """
+        SELECT l.* FROM listings l
+        JOIN commute c ON c.listing_id = l.listing_id
+        WHERE c.medtronic_minutes IS NOT NULL
+          AND c.commute_source = ?
+        ORDER BY l.listing_id
+        LIMIT 1
+        """,
+        (COMMUTE_SOURCE,),
+    ).fetchone()
 
 
 def measure(
@@ -391,7 +402,7 @@ def measure(
 
     listings_by_id = {row["listing_id"]: row for row in query_listings(conn)}
     listings = [listings_by_id[lid] for lid in missing_ids if lid in listings_by_id]
-    known_bad = known_bad_ids(conn, missing_ids)
+    canary = pick_canary(conn)
 
     print(f"commutes: {len(listings)} listing(s), arrive_by={arrive_by}")
     return run(
@@ -401,7 +412,7 @@ def measure(
         route_fn=route_fn,
         arrive_by=arrive_by,
         sleep=sleep,
-        known_bad=known_bad,
+        canary=canary,
     )
 
 
