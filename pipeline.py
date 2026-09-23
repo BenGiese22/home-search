@@ -281,7 +281,19 @@ TRANSIENT_MARKERS = (
     "socket.timeout",
     "requests.exceptions.ConnectionError",
     "requests.exceptions.Timeout",
+    # The Anthropic SDK's own names for "try again later". Each one reaches
+    # a traceback only after the SDK's retries gave up.
+    "OverloadedError",
+    "InternalServerError",
+    "APIConnectionError",
+    "APITimeoutError",
 )
+
+# A server-side HTTP failure the driver reports in its message rather than
+# its type: turso_serverless raises "HTTP status 502" (or 503, 504...) as a
+# plain ProtocolError/OperationalError. A 4xx stays "action needed" -- a
+# rejected token or a bad statement fails the same way every time.
+_SERVER_ERROR_STATUS = re.compile(r"\bHTTP status 5\d\d\b")
 
 
 # Spelled like a transient error, but it is not one. A Playwright selector
@@ -320,6 +332,8 @@ def _looks_transient(text: str) -> bool:
     exc_type = _EXCEPTION_LINE.match(line).group("type")
     if exc_type in NEVER_TRANSIENT:
         return False
+    if _SERVER_ERROR_STATUS.search(line):
+        return True
     return exc_type in TRANSIENT_MARKERS or exc_type.rsplit(".", 1)[-1] in TRANSIENT_MARKERS
 
 

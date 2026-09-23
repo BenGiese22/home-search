@@ -774,3 +774,42 @@ def test_a_long_id_list_still_parses_past_the_alert_cap(tmp_path: Path):
     _run_partial(tmp_path, _partial_score(ids), partial_state=state)
     _, alerts = _run_partial(tmp_path, _partial_score(ids), partial_state=state)
     assert alerts == []
+
+
+# --- server-side 5xx and Anthropic overloads are transient -----------------
+
+
+@pytest.mark.parametrize("line", [
+    # A Turso 502 that outlasted the connect retry. Seen live.
+    "turso_serverless.OperationalError: HTTP status 502",
+    "OperationalError: HTTP status 503: Service Unavailable",
+    "OperationalError: HTTP status 504",
+    "anthropic.OverloadedError: Error code: 529 - {'type': 'overloaded_error'}",
+    "anthropic.InternalServerError: Error code: 500",
+    "anthropic.APIConnectionError: Connection error.",
+    "anthropic.APITimeoutError: Request timed out.",
+])
+def test_server_side_errors_are_transient(line):
+    tail = "Traceback (most recent call last):\n  File \"x.py\", line 1\n" + line + "\n"
+    assert pipeline._looks_transient(tail) is True
+
+
+@pytest.mark.parametrize("line", [
+    # A rejected token retries its way nowhere.
+    "OperationalError: HTTP status 401",
+    "OperationalError: HTTP status 403",
+    "OperationalError: no such table: listings",
+    "anthropic.AuthenticationError: Error code: 401",
+])
+def test_client_side_errors_are_not_transient(line):
+    tail = "Traceback (most recent call last):\n" + line + "\n"
+    assert pipeline._looks_transient(tail) is False
+
+
+def test_an_earlier_5xx_does_not_excuse_a_final_crash():
+    tail = (
+        "L1: OperationalError: HTTP status 502, skipped\n"
+        "Traceback (most recent call last):\n"
+        "KeyError: 'listing_id'\n"
+    )
+    assert pipeline._looks_transient(tail) is False
