@@ -40,6 +40,7 @@ def run_stage(
     route_fn=None,
     sleeps=None,
     upserts=None,
+    known_bad=frozenset(),
 ):
     conn = FakeConn()
     recorded = [] if upserts is None else upserts
@@ -53,6 +54,7 @@ def run_stage(
             arrive_by=ARRIVE,
             sleep=slept.append,
             upsert_fn=lambda c, lid, result: recorded.append((lid, result)),
+            known_bad=known_bad,
         ),
         recorded,
         slept,
@@ -111,16 +113,6 @@ def test_a_geocode_miss_still_writes_a_row():
     assert upserts[1][1].geocode_failed is False
 
 
-def test_a_corpus_where_nothing_geocodes_is_a_failed_run():
-    """One address the geocoder does not know is a fact about that address.
-    Every address failing is a fact about us -- and exiting 0 would hand the
-    scorer a corpus with no commutes in it, looking like a good run."""
-    listings = [listing(str(i)) for i in range(compute_commutes.NOTHING_ROUTED_FLOOR)]
-    code, upserts, _ = run_stage(listings, geocode_fn=lambda parts: None)
-    assert code == 4
-    assert len(upserts) == compute_commutes.NOTHING_ROUTED_FLOOR
-
-
 def test_one_listing_that_will_not_geocode_is_not_a_failed_run():
     """2026-09-19: a run needed to measure exactly one listing, whose address
     (9233 North Lamar Street) would not geocode. 0/1 routed tripped
@@ -147,10 +139,28 @@ def test_just_under_the_floor_all_failing_is_still_not_a_failed_run():
     assert all(result.geocode_failed is True for _, result in upserts)
 
 
-def test_at_the_floor_nothing_routed_is_a_failed_run():
+def test_a_corpus_where_nothing_new_geocodes_is_a_failed_run():
+    """One address the geocoder does not know is a fact about that address.
+    FLOOR fresh addresses all failing, with nothing succeeding, is a fact
+    about us -- and exiting 0 would hand the scorer a corpus with no
+    commutes in it, looking like a good run."""
     listings = [listing(str(i)) for i in range(compute_commutes.NOTHING_ROUTED_FLOOR)]
-    code, _, _ = run_stage(listings, geocode_fn=lambda parts: None)
-    assert code == 4
+    code, upserts, _ = run_stage(listings, geocode_fn=lambda parts: None)
+    assert code == compute_commutes.EXIT_NOTHING_ROUTED
+    assert len(upserts) == compute_commutes.NOTHING_ROUTED_FLOOR
+
+
+def test_fresh_no_route_answers_count_toward_the_floor_like_geocode_misses():
+    """Mapbox answering "no route" for a coordinate is the service working
+    and saying no -- an address fact, same as a geocode miss."""
+    under = [listing(str(i)) for i in range(compute_commutes.NOTHING_ROUTED_FLOOR - 1)]
+    code, upserts, _ = run_stage(under, route_fn=lambda o, d: None)
+    assert code == 0
+    assert all("no route" in r.route_error for _, r in upserts)
+
+    at = [listing(str(i)) for i in range(compute_commutes.NOTHING_ROUTED_FLOOR)]
+    code, _, _ = run_stage(at, route_fn=lambda o, d: None)
+    assert code == compute_commutes.EXIT_NOTHING_ROUTED
 
 
 def test_under_the_floor_says_so_in_the_log(capsys):
@@ -160,8 +170,72 @@ def test_under_the_floor_says_so_in_the_log(capsys):
     code, _, _ = run_stage([listing("a")], geocode_fn=lambda parts: None)
     assert code == 0
     out = capsys.readouterr().out
-    assert "floor" in out
-    assert "retried" in out
+    floor = compute_commutes.NOTHING_ROUTED_FLOOR
+    assert (
+        f"commutes: nothing routed, but only 1 new no-match answer(s) "
+        f"(floor for calling that systemic is {floor}) and no service errors; "
+        f"the row(s) are recorded and will be retried next run"
+    ) in out
+
+
+# --- known-bad addresses ------------------------------------------------
+
+
+def test_known_bad_addresses_at_the_floor_with_nothing_new_is_not_a_failed_run():
+    """The selector re-picks every failed row on every run, with no cap. Once
+    FLOOR addresses that will never geocode exist, a run with nothing new
+    attempts exactly those. Counting them would fail the pipeline 4x a day
+    forever over three facts we already recorded."""
+    n = compute_commutes.NOTHING_ROUTED_FLOOR + 2
+    listings = [listing(str(i)) for i in range(n)]
+    code, upserts, _ = run_stage(
+        listings,
+        geocode_fn=lambda parts: None,
+        known_bad=frozenset(str(i) for i in range(n)),
+    )
+    assert code == 0
+    assert len(upserts) == n
+
+
+def test_each_known_bad_address_is_named_as_known_bad_in_the_log(capsys):
+    """The alert tail is what a human reads first; "no coordinates" on the
+    same address every run should say it is old news, not a new failure."""
+    run_stage(
+        [listing("a", address="9233 North Lamar Street"), listing("b", address="1 New St")],
+        geocode_fn=lambda parts: None,
+        known_bad=frozenset({"a"}),
+    )
+    lines = capsys.readouterr().out.splitlines()
+    assert "a (9233 North Lamar Street, Westminster): no coordinates (known-bad: failed last run too; not counted as systemic)" in lines
+    assert "b (1 New St, Westminster): no coordinates" in lines
+
+
+def test_known_bad_do_not_help_new_misses_reach_the_floor():
+    known = [listing(f"k{i}") for i in range(compute_commutes.NOTHING_ROUTED_FLOOR)]
+    fresh = [listing(f"n{i}") for i in range(compute_commutes.NOTHING_ROUTED_FLOOR - 1)]
+    code, _, _ = run_stage(
+        known + fresh,
+        geocode_fn=lambda parts: None,
+        known_bad=frozenset(l["listing_id"] for l in known),
+    )
+    assert code == 0
+
+
+def test_a_service_error_on_a_known_bad_listing_still_fails_the_run():
+    """known-bad covers the service *answering* no. A geocoder that raises
+    (5xx, timeout) has not answered anything, whatever the address's
+    history -- that is a fact about the service."""
+
+    def geocode_fn(parts):
+        raise RuntimeError("HTTP 503")
+
+    code, _, _ = run_stage(
+        [listing("a")], geocode_fn=geocode_fn, known_bad=frozenset({"a"})
+    )
+    assert code == compute_commutes.EXIT_NOTHING_ROUTED
+
+
+# --- the service failing to answer --------------------------------------
 
 
 def test_a_route_that_raises_still_writes_a_row_naming_the_failure():
@@ -169,16 +243,16 @@ def test_a_route_that_raises_still_writes_a_row_naming_the_failure():
     all. The listing then scored on the neutral fallback with nothing in the
     data saying why.
 
-    Only 1 listing here, which is under NOTHING_ROUTED_FLOOR, so this is not
-    read as a systemic failure -- code 0, not 4. The row/route_error content
-    is what this test is actually checking.
-    """
+    And one is enough to fail the run when nothing routed: the listing
+    geocoded, so after the retries a routing error is a fact about the
+    service, not the address. Waiting for FLOOR of them would wait on
+    listing arrivals, not on runs -- days, on a quiet week."""
 
     def route_fn(origin, destination):
         raise RuntimeError("connection reset")
 
     code, upserts, _ = run_stage([listing("a")], route_fn=route_fn)
-    assert code == 0
+    assert code == compute_commutes.EXIT_NOTHING_ROUTED
     assert len(upserts) == 1
     assert upserts[0][1].medtronic_minutes is None
     assert "connection reset" in upserts[0][1].route_error
@@ -252,9 +326,9 @@ def test_the_rate_limit_wait_is_capped():
 
 
 def test_a_rate_limit_gives_up_after_a_few_tries():
-    """1 listing is under NOTHING_ROUTED_FLOOR, so giving up here is code 0,
-    not a failed run -- the attempt count and the stored 429 are what this
-    test is actually checking."""
+    """Giving up on a 429 is the service failing to answer, so a run that
+    routed nothing else fails even at one listing -- a quota that is still
+    exhausted after the retries is exhausted for the next listing too."""
     attempts = {"n": 0}
 
     def route_fn(origin, destination):
@@ -262,7 +336,7 @@ def test_a_rate_limit_gives_up_after_a_few_tries():
         raise RetryableStatus(429, retry_after=1.0)
 
     code, upserts, _ = run_stage([listing("a")], route_fn=route_fn)
-    assert code == 0
+    assert code == compute_commutes.EXIT_NOTHING_ROUTED
     assert attempts["n"] <= compute_commutes.MAX_RETRIES + 1
     assert "429" in upserts[0][1].route_error
 

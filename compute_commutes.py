@@ -23,21 +23,36 @@ apart:
   anything  record it in route_error and carry on; one bad address should
             else      not cost the other hundred their numbers.
 
-The `anything else` class has one more rule: if *every* listing fails and
-there were at least `NOTHING_ROUTED_FLOOR` of them, the run is failed --
-below that, N bad addresses and one bad token look the same, and the retry
-on the next run tells them apart for free.
+The `anything else` class has one more rule, for a run that routes nothing
+at all. It splits "anything else" in two:
+
+  answered no     the service worked and said no: a geocode miss, or "no
+                  route" for a coordinate. A fact about the address.
+  did not answer  an exception after the retries: 5xx, timeout, a 429 that
+                  never cleared, a bug of ours. A fact about us.
+
+One "did not answer" with nothing routed fails the run. "Answered no" only
+does at `NOTHING_ROUTED_FLOOR` of them, and a listing whose previous row
+was *also* answered-no is known-bad and not counted at all: the selector
+re-picks it every run, forever, and it would otherwise trip the floor on
+its own the day there are enough of them.
 """
 
 import sys
 import time
+from collections.abc import Collection
 from pathlib import Path
 
 import requests
 
 from src.commute import COMMUTE_SOURCE, compute_commute, next_arrival
 from src.config import load_env
-from src.db import get_listing_ids_missing_commute, query_listings, upsert_commute
+from src.db import (
+    get_commutes_by_listing,
+    get_listing_ids_missing_commute,
+    query_listings,
+    upsert_commute,
+)
 from src.routing_mapbox import AddressParts, RoutingError, geocode_address, route
 from src.turso_db import stage_connection
 
@@ -80,15 +95,19 @@ EXIT_NO_TOKEN = 2
 EXIT_AUTH_FAILED = 3
 EXIT_NOTHING_ROUTED = 4
 
-# How many listings have to fail, with none succeeding, before "nothing
-# routed" is read as a systemic failure rather than as N bad addresses.
-# Below this, a run that routes nothing exits 0 and the listings are simply
-# retried next run -- the selector re-picks every failed row by default, so
-# a fault that persists accumulates failures run over run and crosses this
-# floor on its own. Set from one incident: a run with exactly one listing
-# to measure, whose address would not geocode, failed the entire pipeline
-# over it. One is a fact about an address; three with zero successes is a
-# fact about us.
+# How many *new* answered-no failures (a geocode miss, or "no route" for a
+# coordinate) it takes, with nothing routed, before the run is read as
+# systemic rather than as N bad addresses. Set from one incident: a run
+# with exactly one listing to measure, whose address would not geocode,
+# failed the entire pipeline over it.
+#
+# This floor does not accumulate across runs, and is not meant to. Only new
+# answered-no failures count toward it -- a listing that answered no last
+# run too is known-bad and excluded, because the selector re-picks failed
+# rows on every run with no cap and three permanent bad addresses would
+# otherwise fail every quiet run forever. So the floor is crossed only by
+# FLOOR fresh no-answers arriving in the same run. Outages are not what it
+# is for: those surface as exceptions, and one of those is enough.
 NOTHING_ROUTED_FLOOR = 3
 
 
@@ -191,14 +210,18 @@ def run(
     arrive_by: str,
     sleep=time.sleep,
     upsert_fn=upsert_commute,
+    known_bad: Collection[str] = frozenset(),
 ) -> int:
     """Measure each listing and write its row. Returns the exit code.
 
     Split out of main() so the loop can be tested with fakes: main() opens
     Turso and reads the environment, neither of which belongs in a test of
     "what happens when the second of three listings rate-limits".
+
+    `known_bad` is the listing_ids whose previous row was already an
+    answered-no failure (see `known_bad_ids`).
     """
-    attempted = routed = 0
+    attempted = routed = fresh_no = old_no = service_errors = 0
 
     for row in listings:
         attempted += 1
@@ -209,6 +232,7 @@ def run(
             zip_code=row["zip_code"],
         )
         label = f"{row['listing_id']} ({parts.address}, {parts.city})"
+        raised = False
 
         try:
             result = compute_commute(
@@ -227,6 +251,7 @@ def run(
         except Exception as exc:  # noqa: BLE001
             from src.commute import CommuteResult
 
+            raised = True
             reason = redact(f"{type(exc).__name__}: {exc}")[:200]
             result = CommuteResult(
                 lat=None,
@@ -248,28 +273,106 @@ def run(
         if result.medtronic_minutes is not None:
             routed += 1
             print(f"{label}: {result.medtronic_minutes:.1f} min", flush=True)
-        elif result.geocode_failed:
-            print(f"{label}: no coordinates", flush=True)
         else:
-            print(f"{label}: {redact(str(result.route_error))}", flush=True)
+            what = (
+                "no coordinates"
+                if result.geocode_failed
+                else redact(str(result.route_error))
+            )
+            if raised:
+                service_errors += 1
+            elif row["listing_id"] in known_bad:
+                old_no += 1
+                what += " (known-bad: failed last run too; not counted as systemic)"
+            else:
+                fresh_no += 1
+            print(f"{label}: {what}", flush=True)
 
         sleep(PACE_SECONDS)
 
     print(f"commutes: {routed}/{attempted} routed, arrive_by={arrive_by}")
 
-    if routed == 0 and attempted >= NOTHING_ROUTED_FLOOR:
-        # Every listing failing is not a hundred bad addresses. It is one
-        # bad assumption of ours, and exiting 0 here is how a corpus of
-        # empty commutes reaches the scorer looking like a successful run.
-        print("commutes: nothing routed at all -- treating the run as failed")
-        return EXIT_NOTHING_ROUTED
-    if routed == 0 and attempted:
+    if routed or not attempted:
+        # Some routed and some did not: the service works, and every failed
+        # row is re-picked next run. Not EXIT_PARTIAL -- a blip that cleared
+        # on the next listing is not worth an alert, and a listing that
+        # fails the same way every run would alert on every run.
+        return 0
+    if service_errors or fresh_no >= NOTHING_ROUTED_FLOOR:
+        # Exiting 0 here is how a corpus of empty commutes reaches the
+        # scorer looking like a successful run.
         print(
-            f"commutes: nothing routed, but only {attempted} attempted "
-            f"(floor for calling that systemic is {NOTHING_ROUTED_FLOOR}); "
-            f"the row(s) are recorded and will be retried next run"
+            f"commutes: nothing routed at all -- {service_errors} service "
+            f"error(s), {fresh_no} new no-match answer(s), {old_no} known-bad; "
+            f"treating the run as failed"
         )
+        return EXIT_NOTHING_ROUTED
+    print(
+        f"commutes: nothing routed, but only {fresh_no} new no-match answer(s) "
+        f"(floor for calling that systemic is {NOTHING_ROUTED_FLOOR}) and no "
+        f"service errors; the row(s) are recorded and will be retried next run"
+    )
     return 0
+
+
+def answered_no(row) -> bool:
+    """Whether a stored commute row records the service answering no -- a
+    geocode miss or "no route" -- as opposed to a success or an exception."""
+    if row["geocode_failed"]:
+        return True
+    return row["medtronic_minutes"] is None and str(row["route_error"] or "").startswith(
+        "no route"
+    )
+
+
+def known_bad_ids(conn, listing_ids: Collection[str]) -> frozenset[str]:
+    """The listings, among those about to be attempted, whose last row was
+    already an answered-no failure. One read of the whole commute table
+    rather than one per listing: against Turso a statement is a round-trip."""
+    previous = get_commutes_by_listing(conn)
+    return frozenset(
+        lid for lid in listing_ids if lid in previous and answered_no(previous[lid])
+    )
+
+
+def measure(
+    conn,
+    *,
+    geocode_fn,
+    route_fn,
+    arrive_by: str,
+    retry_failed: bool = True,
+    force: bool = False,
+    sleep=time.sleep,
+) -> int:
+    """Select the outstanding listings, then run() them. Returns the exit code.
+
+    Everything main() does after it has a connection and a token, so that
+    several runs can be exercised back to back against one database.
+    """
+    missing_ids = get_listing_ids_missing_commute(
+        conn, retry_failed=retry_failed, force=force
+    )
+    if force:
+        print(f"--force: recomputing all {len(missing_ids)} listing(s)")
+    if not missing_ids:
+        print(f"commute table already covers every listing ({COMMUTE_SOURCE})")
+        return 0
+
+    listings_by_id = {row["listing_id"]: row for row in query_listings(conn)}
+    listings = [listings_by_id[lid] for lid in missing_ids if lid in listings_by_id]
+    known_bad = known_bad_ids(conn, missing_ids)
+
+    print(f"commutes: {len(listings)} listing(s), arrive_by={arrive_by}")
+    return run(
+        conn,
+        listings,
+        geocode_fn=geocode_fn,
+        route_fn=route_fn,
+        arrive_by=arrive_by,
+        sleep=sleep,
+        known_bad=known_bad,
+    )
 
 
 def main() -> int:
@@ -293,31 +396,18 @@ def main() -> int:
     # source string that did not.
     force = "--force" in sys.argv
 
-    missing_ids = get_listing_ids_missing_commute(
-        conn, retry_failed=retry_failed, force=force
-    )
-    if force:
-        print(f"--force: recomputing all {len(missing_ids)} listing(s)")
-    if not missing_ids:
-        print(f"commute table already covers every listing ({COMMUTE_SOURCE})")
-        conn.close()
-        return 0
-
-    listings_by_id = {row["listing_id"]: row for row in query_listings(conn)}
-    listings = [listings_by_id[lid] for lid in missing_ids if lid in listings_by_id]
-
     arrive_by = next_arrival(datetime.now())
-    print(f"commutes: {len(listings)} listing(s), arrive_by={arrive_by}")
 
     try:
-        code = run(
+        code = measure(
             conn,
-            listings,
             geocode_fn=lambda parts: geocode_address(parts, token, mapbox_get),
             route_fn=lambda origin, dest: route(
                 origin, dest, arrive_by, token, mapbox_get
             ),
             arrive_by=arrive_by,
+            retry_failed=retry_failed,
+            force=force,
         )
     except StopTheRun as exc:
         print(f"compute_commutes: {redact(str(exc))}", file=sys.stderr)
