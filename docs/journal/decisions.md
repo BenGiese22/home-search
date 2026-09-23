@@ -1216,3 +1216,168 @@ objects, and a paid vision score — and the digest will report it as
 
 So #90 stopped being a hypothetical the moment the spike ran. The spike
 demonstrated the defect it was scheduled behind.
+
+## 2026-09-19 — Back from an 11-day outage: small failures stop sinking a run
+
+The pipeline did not complete a run between 2026-09-08 18:00Z and
+2026-09-19 06:00Z. The cause was in short-list's reaper, not here. It was
+worked out on 2026-09-23 from Vercel runtime logs and metrics, together with
+the short-list session.
+
+### Why it stopped: seconds against milliseconds
+
+`ops/sandbox/run.py` stamps `started_at` / `finished_at` with `time.time()`,
+which is epoch **seconds**. short-list's reaper (`reap-decision.ts`) compares
+them with `Date.now()`, which is **milliseconds**. That comparison has been
+there since the reaper landed on 2026-09-04. Every marker therefore looks
+about 56 years old, and any run still going at the reaper's first 10-minute
+tick is stopped as "hung".
+
+It stayed hidden because every run until then finished in under 10 minutes.
+On 2026-09-08, the 00:00, 06:00 and 12:00 runs all got `collect-and-stop` at
+the first tick. The 18:00:35Z run was the first that did not finish in time,
+and at 18:10:28Z it was stopped as `stop-hung`. Stopping a persistent sandbox
+does not clear its disk, so `started` stayed with no `done` beside it. The
+launcher of the time skipped on "`started` without `done`", with no age
+check. Every cron from then on returned `skipped: in-progress`, and resumed
+the sandbox to do it. The next reap tick stopped it as hung again. That is
+the "reaper stuck forever" loop, and it could not heal itself.
+
+short-list #27 (2026-09-18) broke the loop by clearing `started` on
+stop-hung. #28 (2026-09-19) replaced that with an age check in the launcher.
+**The unit bug itself is still live**: it killed a run at 2026-09-23 00:10Z,
+and because the age check is always true, the launcher's in-progress guard
+never fires.
+
+The notification design missed this, and it is the kind of failure
+2026-09-05 warned about. Each stop-hung sent a "hung" alert, but a run that
+is skipped sends nothing, so the alerts looked like occasional hangs rather
+than a pipeline that had stopped.
+
+### Two crashes on the first run back
+
+The first run back hit two bugs of its own, which produced #106 and #107.
+
+### Two crashes on the first run back
+
+**One bad address failed the whole pipeline.** The run had exactly one
+listing to measure, 9233 North Lamar Street, and Mapbox could not geocode
+it. 0/1 routed tripped `EXIT_NOTHING_ROUTED`, which was added on 2026-09-05
+so that a corpus of empty commutes could not reach the scorer looking like a
+success. The guard was right in spirit and wrong at n=1. `compute_commutes.py`
+now fails on "nothing routed" only once `NOTHING_ROUTED_FLOOR` (3) listings
+were attempted. Below that it exits 0, and the failed rows are retried on the
+next run. A dead token is unaffected: 401/403 still exits
+`EXIT_AUTH_FAILED` whatever the count.
+
+**A stale vision batch crashed on a deleted listing.** A batch submitted
+before the outage was resumed. One of its results named a listing that had
+since been rejected and deleted, and writing it hit `visual_scores`' foreign
+key. This will recur by construction: `vision_batches` is deliberately left
+out of the delisting cascade, so any listing rejected while its batch is in
+flight hits this. `_process_batch_results` now reads the live ids once
+(`all_listing_ids`) and skips results for listings that no longer exist.
+
+### Per-item isolation everywhere else (#107)
+
+The same "one item kills the stage" shape existed in several other places,
+and #107 closed it in each:
+
+- `score.py`: each listing is scored in its own try/except. A listing that
+  fails is skipped and keeps whatever score it had.
+- `score_photos.py`: each listing's `build_batch_request` and each chunk's
+  `batches.create` are isolated. `main()` finally returns an exit code, so a
+  missing `ANTHROPIC_API_KEY` exits `EXIT_NO_API_KEY` instead of 0.
+- `verify.py`: a check that raises is recorded as an `ERROR` violation, the
+  other checks still run, and the exit is nonzero.
+- `src/turso_db.py`: `stage_connection()` retries `connect()` +
+  `ensure_schema()` as one unit, 3 attempts with 1s/2s backoff. The retry
+  wraps `ensure_schema()` because `turso_serverless.connect()` does no I/O,
+  so the first real round-trip is inside it. Every `CREATE` is `IF NOT
+  EXISTS`, which makes the retry safe.
+
+### A failure alert says why, and whether to act
+
+The alert used to be "score failed, exit 1, 43s". Every stage already writes
+into one shared log file, so `run_pipeline` now records the log's offset
+before each stage, reads that stage's own output back on failure (last 30
+lines, 3000 chars), and puts it in the alert. `_looks_transient()` then ends
+the alert with either "looks transient, no action needed" or "action needed".
+This covers, from inside the runner, most of the backlog item "Forward the
+sandbox's failure tail".
+
+### What the post-merge review found, and how it was fixed
+
+Two reviews of #106 and #107 on 2026-09-23 found gaps. All of them were
+fixed the same day on `bgiese/post-outage-fixes`:
+
+1. **The alert tail could miss the error.** Stages were block-buffered into
+   the shared log. A stage that caught its own error and printed it to
+   stderr (as `compute_commutes.py` does) had its buffered progress flushed
+   *after* the error, so the tail ended in chatter. Stages now run with
+   `PYTHONUNBUFFERED=1`. For an uncaught exception this was not a problem:
+   CPython flushes stdout before it prints the traceback.
+2. **`_looks_transient` matched anywhere in the tail.** It now judges only
+   the exception line the stage died on. Playwright's `TimeoutError` is
+   explicitly not transient, and a tail with no exception line reads as
+   "action needed".
+3. **Partial failure needed its own exit code.** `src/exit_codes.py` defines
+   `EXIT_PARTIAL = 10`: the stage wrote everything it could and some items
+   failed. `pipeline.py` alerts on it and carries on. Any other nonzero code
+   still stops the run. `score.py` and `score_photos.py` return it when
+   items fail. `score.py` returns 1 if *every* listing fails (a code bug),
+   and keeps the last `ranked.csv`. A permanently broken listing would
+   otherwise alert four times a day forever. So each partial stage ends with
+   a line `PARTIAL: <stage>: <kind>: <ids>`, where the kind is
+   `items-failed`, `submit-failed` or `key-rejected`, and `pipeline.py`
+   alerts once per distinct (kind, ids). It re-alerts after 24 h, so a
+   persistent condition is not mentioned once and then forgotten. Partial
+   alerts go out at normal priority, not high. What has been alerted is
+   tracked in `data/.run/partial-alerts.json`, per execution home. An entry
+   is recorded only after delivery succeeds, so a failed notification is
+   retried. A partial run still records success: the data is consistent,
+   and skipping the marker would disable `--max-age` for as long as any
+   listing stays broken.
+4. **`score_photos` exited 0 when every submission failed.** That is how an
+   expired Anthropic key would have looked after #107. A first fix made it a
+   hard failure, but that blocked the digest over a photo-scoring problem.
+   It now returns `EXIT_PARTIAL` and says plainly that no photos were
+   submitted and why. A 401/403 stops at once and prints
+   `ANTHROPIC_API_KEY was rejected (401) -- replace it`.
+5. **Failed vision items overwrote good scores under `--rescore-all`.** Build
+   failures, too-few-photos, errored results and unparseable results now
+   keep an existing good score. Only a listing with no good score is marked
+   unavailable.
+6. **The commute floor judged by count, not by cause.** The first fix
+   classified each failure by its own history. The integration review broke
+   that twice. A listing whose request raised the same error every run (a
+   deterministic Mapbox 422) failed the pipeline on every quiet run. And a
+   systemic no-match regression alerted once, then went silent: the
+   failing run's own rows made every address "known-bad" for the next run.
+   The rule now asks the service instead of the history. When a run routes
+   nothing, it re-measures a **canary** (a listing that routed
+   before under the current source, never written back). If the canary
+   routes, the failures belong to those addresses and the run exits 0. Up
+   to three canaries are tried, least recently measured first, never one
+   this run already attempted. Only if all of them fail does the run exit
+   `EXIT_NOTHING_ROUTED`. With no canary (a corpus
+   that has never routed), `NOTHING_ROUTED_FLOOR` still applies. While in
+   there we found a bug older than all of this: `src/routing_mapbox.py`
+   wrapped every exception in `RoutingError`, so a dead Mapbox token never
+   reached `EXIT_AUTH_FAILED` and a 429 was never retried. Both work now,
+   and 502/503/504 get one retry.
+7. **The Turso retry was too broad.** A missing URL or token fails at once.
+   Auth errors (`HTTP status 401/403` in the driver's message, which is why
+   `turso_serverless` is now pinned) are not retried. Server 5xx errors
+   that outlast the retry read as transient in the alert. Connections from failed attempts are closed, and the 3x3
+   nested retry is gone.
+8. **Bootstrap could reset a live run's checkout.** `ops/sandbox/bootstrap.sh`
+   now takes `data/.run/lock`, the same flock `run.py` holds, before any git
+   or pip command. It exits 75 if the lock is held, and short-list's
+   launcher reads 75 as `skipped: locked`. Child processes do not inherit
+   the lock's fd, so a killed bootstrap cannot leave it held. With neither
+   `flock` nor `python3` available, it exits 69.
+
+The seconds-vs-milliseconds bug itself is fixed on short-list's side
+(`markers.ts` converts at the parse boundary), with a contract test that runs
+real `run.py` bytes through both the reaper and the launcher.
