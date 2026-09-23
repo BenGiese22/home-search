@@ -22,6 +22,45 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
 echo "== bootstrap: $REVISION =="
 
+# --- run lock -------------------------------------------------------------
+# Everything below rewrites the checkout (`git reset --hard`, `pip install`)
+# that a running pipeline is executing from. The launcher's in-progress
+# guard is supposed to keep bootstrap away from a live run, and Sep 8-19 it
+# did not: a seconds-vs-milliseconds bug in reading `started` let the 03:30
+# canary launch bootstrap straight into the checkout of a run still going.
+# So bootstrap checks run.py's own lock itself, before any git or pip.
+#
+# Same file, same exit code as run.py (data/.run/lock, EX_TEMPFAIL 75), so
+# the launcher can treat both as "skipped, a run is in progress".
+#
+# The lock is held for all of bootstrap, so a run cannot start mid-reset
+# either, and released explicitly on exit -- the launcher runs run.py as a
+# separate command right after, and it must be able to take the lock. The
+# explicit unlock matters: flock locks belong to the open file, which every
+# child inherits, so a background process git leaves behind (auto gc) would
+# otherwise keep holding it after bootstrap is gone.
+#
+# `flock` is util-linux, present on the sandbox image, but the python3
+# fallback costs nothing and fcntl.flock is the same lock run.py takes.
+EXIT_LOCKED=75
+LOCK_PATH="data/.run/lock"
+
+lock_fd() {  # lock_fd lock|unlock -- operates on fd 9
+    if command -v flock >/dev/null 2>&1; then
+        if [ "$1" = lock ]; then flock -n 9; else flock -u 9; fi
+    else
+        python3 -c "import fcntl, sys; fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB if sys.argv[1] == 'lock' else fcntl.LOCK_UN)" "$1"
+    fi
+}
+
+mkdir -p "$(dirname "$LOCK_PATH")"
+exec 9>>"$LOCK_PATH"
+if ! lock_fd lock 2>/dev/null; then
+    echo "bootstrap: a run holds $LOCK_PATH; not touching its checkout (exit $EXIT_LOCKED)" >&2
+    exit "$EXIT_LOCKED"
+fi
+trap 'lock_fd unlock || true; exec 9>&-' EXIT
+
 # --- source ---------------------------------------------------------------
 # The clone is shallow (depth 1), so fetch the revision by name rather than
 # assuming any history is present.
