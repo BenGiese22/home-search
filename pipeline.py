@@ -32,6 +32,7 @@ does not reset the clock, since it did not refresh everything.
 import fcntl
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -239,8 +240,43 @@ TRANSIENT_MARKERS = (
 )
 
 
+# Spelled like a transient error, but it is not one. A Playwright selector
+# timeout is what a Compass redesign looks like, and that fails every run
+# until someone fixes the selector -- the opposite of "retries on its own".
+NEVER_TRANSIENT = ("playwright._impl._errors.TimeoutError",)
+
+# The line a traceback ends on: `KeyError: 'x'`, `module.Type: message`, or
+# a bare `SomeError`. The type has to look like an exception class, so a log
+# prefix such as `compute_commutes: 0/5 routed` is not mistaken for one.
+_EXCEPTION_LINE = re.compile(
+    r"^(?P<type>(?:[A-Za-z_]\w*\.)*\w*(?:Error|Exception|Timeout|timeout))(?::\s|$)"
+)
+
+
+def _final_exception_line(text: str) -> str | None:
+    """The last `Type: message` line in the tail, or None with no traceback."""
+    for line in reversed(text.splitlines()):
+        if _EXCEPTION_LINE.match(line.strip()):
+            return line.strip()
+    return None
+
+
 def _looks_transient(text: str) -> bool:
-    return any(marker in text for marker in TRANSIENT_MARKERS)
+    """Judge only the exception the stage died on.
+
+    Not "any marker anywhere": the tail is also the stage's own chatter, and
+    a per-listing ConnectionError it logged and skipped past earlier says
+    nothing about the KeyError that actually ended it. No traceback at all
+    (a stage that returned its own exit code) is not evidence of a network
+    blip either, so that reads as "action needed" too.
+    """
+    line = _final_exception_line(text)
+    if line is None:
+        return False
+    exc_type = _EXCEPTION_LINE.match(line).group("type")
+    if exc_type in NEVER_TRANSIENT:
+        return False
+    return exc_type in TRANSIENT_MARKERS or exc_type.rsplit(".", 1)[-1] in TRANSIENT_MARKERS
 
 
 def _stage_log_tail(log_handle, offset) -> str:

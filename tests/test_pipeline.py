@@ -512,3 +512,72 @@ def test_a_real_stages_traceback_is_the_end_of_its_log_tail(tmp_path: Path, monk
         tail = pipeline._stage_log_tail(log_handle, 0)
     assert code == 1
     assert tail.splitlines()[-1] == "KeyError: 'listing_id'"
+
+
+# --- the verdict reads the final exception, not the whole tail -------------
+#
+# A marker anywhere in the tail used to be enough. The tail is a stage's own
+# chatter too, so one earlier per-listing ConnectionError log line turned a
+# later real crash into "no action needed".
+
+_TRACEBACK_KEYERROR = (
+    "Traceback (most recent call last):\n"
+    '  File "score.py", line 40, in main\n'
+    "    row['listing_id']\n"
+    "KeyError: 'listing_id'\n"
+)
+
+
+def _verdict(tmp_path, output):
+    runner = LoggingRunner(exit_codes={"score.py": 1}, outputs={"score.py": output})
+    _, message = _run_with_alert(tmp_path, runner)[0]
+    return message.lower()
+
+
+def test_an_earlier_logged_connection_error_does_not_excuse_a_later_crash(tmp_path: Path):
+    output = (
+        "listing L7: requests.exceptions.ConnectionError: reset by peer, skipping\n"
+        "scored 41 listings\n" + _TRACEBACK_KEYERROR
+    )
+    message = _verdict(tmp_path, output)
+    assert "no action needed" not in message
+    assert "action needed" in message
+
+
+def test_a_final_transient_exception_still_says_no_action_needed(tmp_path: Path):
+    output = (
+        "scored 41 listings\n"
+        "Traceback (most recent call last):\n"
+        '  File "score.py", line 40, in main\n'
+        "requests.exceptions.ConnectionError: HTTPSConnectionPool: Max retries exceeded\n"
+    )
+    assert "no action needed" in _verdict(tmp_path, output)
+
+
+def test_a_playwright_timeout_is_not_transient(tmp_path: Path):
+    """A selector timeout after a Compass redesign fails every single run.
+    It is spelled TimeoutError, but nothing about it retries its way out."""
+    output = (
+        "Traceback (most recent call last):\n"
+        '  File "scrape.py", line 90, in main\n'
+        "playwright._impl._errors.TimeoutError: Locator.click: Timeout 30000ms exceeded.\n"
+    )
+    message = _verdict(tmp_path, output)
+    assert "no action needed" not in message
+    assert "action needed" in message
+
+
+def test_a_deliberate_exit_code_with_no_traceback_says_action_needed(tmp_path: Path):
+    """A stage that chose its own nonzero exit left no exception to read. A
+    network word in its last log line is not evidence the failure was one."""
+    output = "listing L3: ConnectionError from mapbox\ncommutes: 0/5 routed\n"
+    message = _verdict(tmp_path, output)
+    assert "no action needed" not in message
+    assert "action needed" in message
+
+
+def test_final_exception_line_is_the_last_one_in_the_tail():
+    tail = "requests.exceptions.ConnectionError: earlier\n" + _TRACEBACK_KEYERROR + "\n"
+    assert pipeline._final_exception_line(tail) == "KeyError: 'listing_id'"
+    # A log prefix is not an exception type.
+    assert pipeline._final_exception_line("compute_commutes: 0/5 routed\n") is None
