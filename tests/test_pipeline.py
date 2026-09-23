@@ -478,3 +478,37 @@ def test_a_long_captured_reason_is_truncated_for_the_email(tmp_path: Path):
     assert len(message) < len(huge)
     assert "line 499" in message
     assert "line 0" not in message
+
+
+def test_a_real_stages_traceback_is_the_end_of_its_log_tail(tmp_path: Path, monkeypatch):
+    """A real subprocess, not a fake runner, because the bug lived in the
+    process boundary. With stdout redirected to a file, a child Python
+    block-buffers it. A stage that catches its error, reports it on stderr,
+    and exits nonzero (compute_commutes.py's shape) wrote that report first,
+    and the buffered progress lines landed after it at exit -- so the tail
+    ended in chatter and the KeyError was nowhere in the alert.
+
+    An uncaught exception alone does not show it: CPython flushes stdout
+    before printing that traceback. The report-then-exit path is the one
+    that needs the child run unbuffered.
+    """
+    monkeypatch.delenv("PYTHONUNBUFFERED", raising=False)
+    script = tmp_path / "stage.py"
+    script.write_text(
+        "import sys, traceback\n"
+        "for n in range(100):\n"
+        "    print(f'progress {n}')\n"
+        "try:\n"
+        "    {}['listing_id']\n"
+        "except KeyError:\n"
+        "    traceback.print_exc()\n"
+        "    sys.exit(1)\n"
+    )
+    log_path = tmp_path / "pipeline.log"
+    with log_path.open("w+") as log_handle:
+        code = pipeline._default_runner(
+            [pipeline.sys.executable, str(script)], log_handle=log_handle
+        )
+        tail = pipeline._stage_log_tail(log_handle, 0)
+    assert code == 1
+    assert tail.splitlines()[-1] == "KeyError: 'listing_id'"

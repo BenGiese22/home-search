@@ -154,7 +154,14 @@ def record_success(marker: Path) -> None:
 
 
 def _default_runner(argv, log_handle=None):
-    process = subprocess.run(argv, stdout=log_handle, stderr=subprocess.STDOUT)
+    # Unbuffered, or the alert reads the wrong end of the log. With stdout
+    # redirected to a file a child block-buffers it, so a stage that reports
+    # its error on stderr and exits nonzero has that report land *before*
+    # its buffered progress lines -- and the tail _stage_log_tail reads back
+    # ends in chatter instead of the error. Set in the env rather than as
+    # `-u` in argv so the printed command (and --dry-run) stay unchanged.
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    process = subprocess.run(argv, stdout=log_handle, stderr=subprocess.STDOUT, env=env)
     return process.returncode
 
 
