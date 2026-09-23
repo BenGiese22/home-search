@@ -44,6 +44,7 @@ from pathlib import Path
 from src.config import load_env, this_home
 from src.mailer import send_email
 from src.notify import notify
+from src.exit_codes import EXIT_PARTIAL
 from src.db import (
     acquire_pipeline_lease,
     release_pipeline_lease,
@@ -404,6 +405,23 @@ def run_pipeline(
             log_offset = log_handle.tell()
         code = runner(argv, log_handle=log_handle)
         elapsed = time.monotonic() - started
+        if code == EXIT_PARTIAL:
+            # The stage finished and wrote everything it could; only some
+            # items failed. Later stages read a consistent database -- the
+            # failed items are just not in it yet -- so stopping here would
+            # discard every item that succeeded to protect nothing.
+            print(f"[{stage.name}] ok with item failures (exit {code}) "
+                  f"in {elapsed:.0f}s", flush=True)
+            message = (
+                f"The {stage.name} stage finished after {elapsed:.0f}s on "
+                f"{this_home()}, but some items failed. Later stages still "
+                f"ran, and the failed items are retried on the next run."
+            )
+            reason = _stage_log_tail(log_handle, log_offset)
+            if reason:
+                message += f"\n\n{reason}"
+            alert(f"home-search: {stage.name} partially failed", message)
+            continue
         if code != 0:
             print(f"[{stage.name}] FAILED (exit {code}) after {elapsed:.0f}s", flush=True)
             # Which stage, because that is the whole diagnostic. The sandbox

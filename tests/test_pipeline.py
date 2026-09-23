@@ -18,6 +18,7 @@ from pipeline import (
     record_success,
     run_pipeline,
 )
+from src.exit_codes import EXIT_PARTIAL
 
 
 class Runner:
@@ -581,3 +582,74 @@ def test_final_exception_line_is_the_last_one_in_the_tail():
     assert pipeline._final_exception_line(tail) == "KeyError: 'listing_id'"
     # A log prefix is not an exception type.
     assert pipeline._final_exception_line("compute_commutes: 0/5 routed\n") is None
+
+
+# --- EXIT_PARTIAL: some items failed, the stage's work still landed --------
+#
+# Stopping the run over it would throw away every item that succeeded and
+# gain nothing -- the failed ones are retried next run either way.
+
+
+def _run_partial(tmp_path, runner, marker=None):
+    alerts = []
+    log_path = tmp_path / "pipeline.log"
+    with log_path.open("w+") as log_handle:
+        code = run_pipeline(
+            build_plan(),
+            runner=runner,
+            log_handle=log_handle,
+            marker=marker,
+            notify_fn=lambda title, message: alerts.append((title, message)) or True,
+        )
+    return code, alerts
+
+
+def test_a_partial_stage_does_not_stop_later_stages(tmp_path: Path):
+    runner = LoggingRunner(exit_codes={"compute_commutes.py": EXIT_PARTIAL})
+    code, _ = _run_partial(tmp_path, runner)
+    assert code == 0
+    assert len(runner.calls) == len(STAGE_NAMES)
+
+
+def test_a_partial_stage_alerts_once_with_its_log_tail(tmp_path: Path, capsys):
+    runner = LoggingRunner(
+        exit_codes={"compute_commutes.py": EXIT_PARTIAL},
+        outputs={
+            "scrape.py": "scrape: 12 listings fetched\n",
+            "compute_commutes.py": "commutes: 11/12 routed; L9 would not geocode\n",
+        },
+    )
+    _, alerts = _run_partial(tmp_path, runner)
+    assert len(alerts) == 1
+    title, message = alerts[0]
+    assert title == "home-search: commutes partially failed"
+    assert "L9 would not geocode" in message
+    assert "12 listings fetched" not in message
+    assert "later stages still ran" in message.lower()
+    assert "retried" in message.lower()
+    assert f"[commutes] ok with item failures (exit {EXIT_PARTIAL})" in capsys.readouterr().out
+
+
+def test_a_partial_run_still_counts_as_a_success(tmp_path: Path, never_revalidate_for_real):
+    """The data is consistent -- the failed items just are not in it yet --
+    so the run revalidates and resets the freshness clock like any other."""
+    marker = tmp_path / "last.json"
+    runner = LoggingRunner(exit_codes={"score_photos.py": EXIT_PARTIAL})
+    _run_partial(tmp_path, runner, marker=marker)
+    assert is_fresh(marker, max_age_hours=6) is True
+    assert never_revalidate_for_real == [True]
+
+
+def test_a_real_failure_after_a_partial_one_still_stops_the_run(tmp_path: Path):
+    runner = LoggingRunner(
+        exit_codes={"compute_commutes.py": EXIT_PARTIAL, "score.py": 1},
+    )
+    code, alerts = _run_partial(tmp_path, runner)
+    assert code == 1
+    assert runner.scripts == [
+        "scrape.py", "compute_commutes.py", "score_photos.py", "score.py"
+    ]
+    assert [title for title, _ in alerts] == [
+        "home-search: commutes partially failed",
+        "home-search: score failed",
+    ]
