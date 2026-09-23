@@ -750,6 +750,51 @@ def test_a_notifier_that_returns_nothing_counts_as_delivered(tmp_path: Path):
     assert alerts == []
 
 
+def _aged(state: Path, stage: str, seconds: float) -> None:
+    record = json.loads(state.read_text())
+    record[stage]["alerted_at"] -= seconds
+    state.write_text(json.dumps(record))
+
+
+def test_the_record_says_when_it_alerted(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    before = time.time()
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert before <= json.loads(state.read_text())["score"]["alerted_at"] <= time.time()
+
+
+def test_the_same_set_alerts_again_after_the_window(tmp_path: Path):
+    """A dead key alerted once and then never again is easy to miss. Once
+    a day it stays in view without drowning anything."""
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    _aged(state, "score", pipeline.PARTIAL_REALERT_SECONDS + 60)
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert len(alerts) == 1
+    # And the window restarts from that alert.
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert alerts == []
+
+
+def test_the_same_set_stays_quiet_inside_the_window(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    _aged(state, "score", pipeline.PARTIAL_REALERT_SECONDS - 60)
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert alerts == []
+
+
+def test_a_record_with_no_time_does_not_suppress(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    state.write_text(json.dumps({"score": {"kind": "items-failed", "ids": ["L1"]}}))
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert len(alerts) == 1
+
+
+def test_the_realert_window_is_a_day():
+    assert pipeline.PARTIAL_REALERT_SECONDS == 24 * 3600
+
+
 def test_a_clean_run_of_the_stage_clears_it(tmp_path: Path):
     """Fixed, then broken the same way again, is a new failure."""
     state = tmp_path / "partial-alerts.json"

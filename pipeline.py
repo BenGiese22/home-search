@@ -60,10 +60,15 @@ DATA_DIR = Path("data")
 LOG_DIR = DATA_DIR / "logs"
 LOCK_PATH = DATA_DIR / ".pipeline.lock"
 MARKER_PATH = DATA_DIR / ".pipeline-last-success.json"
-# Which items each stage last reported as failed on a partial run. Per
+# Which items each stage last alerted on for a partial run, and when. Per
 # execution home, like everything else under data/, which is fine: each home
-# alerts once for a set it has not seen, and then goes quiet.
+# alerts for a set it has not seen, then at most once a window while the
+# same set keeps failing.
 PARTIAL_ALERTS_PATH = DATA_DIR / ".run" / "partial-alerts.json"
+# How long an alert for a (kind, ids) keeps the same one quiet. Once and
+# never again is easy to miss -- a dead API key would get one alert, ever --
+# while one every run is four a day that bury the real ones.
+PARTIAL_REALERT_SECONDS = 24 * 3600
 
 DEFAULT_MAX_AGE_HOURS = 6.0
 
@@ -164,7 +169,8 @@ def record_success(marker: Path) -> None:
 
 
 def _load_partial_alerts(path: Path) -> dict[str, dict]:
-    """Each stage's last-alerted cause and failed ids, as {"kind", "ids"}.
+    """Each stage's last-alerted cause and failed ids, and when, as
+    {"kind", "ids", "alerted_at"} (epoch seconds).
     Any doubt reads as empty: a lost record costs one repeated alert, a
     wrong one hides a new failure."""
     try:
@@ -187,13 +193,19 @@ def _save_partial_alerts(path: Path, state: dict[str, dict]) -> None:
         print(f"pipeline: could not save {path} ({exc})", flush=True)
 
 
-def _same_partial(previous, current: dict) -> bool:
-    """Whether a stored record is the (kind, ids) just reported. A record
-    in any other shape -- a bare id list from before kinds -- is not."""
+def _already_alerted(previous, current: dict, now: float) -> bool:
+    """Whether a stored record is the (kind, ids) just reported, alerted on
+    within the last PARTIAL_REALERT_SECONDS. A record in any other shape --
+    a bare id list from before kinds, or one with no time -- is not."""
+    if not isinstance(previous, dict):
+        return False
+    alerted_at = previous.get("alerted_at")
+    if not isinstance(alerted_at, (int, float)):
+        return False
     return (
-        isinstance(previous, dict)
-        and previous.get("kind") == current["kind"]
+        previous.get("kind") == current["kind"]
         and previous.get("ids") == current["ids"]
+        and now - alerted_at < PARTIAL_REALERT_SECONDS
     )
 
 
@@ -508,11 +520,12 @@ def run_pipeline(
                 # the record goes and the next partial run alerts again.
                 partial_alerts.pop(stage.name, None)
                 _save_partial_alerts(partial_state, partial_alerts)
-            if current is not None and _same_partial(previous, current):
-                # A listing that is broken for good fails every run. One
-                # alert for it is news; four a day forever is noise that
-                # buries the next real one.
-                print(f"[{stage.name}] same items as last time; not alerting again",
+            if current is not None and _already_alerted(previous, current, time.time()):
+                # A listing that is broken for good fails every run. An
+                # alert a day for it keeps it in view; four a day forever
+                # is noise that buries the next real one.
+                print(f"[{stage.name}] same items as last time; not alerting again "
+                      f"until {PARTIAL_REALERT_SECONDS // 3600}h after the last alert",
                       flush=True)
                 continue
             message = (
@@ -533,7 +546,7 @@ def run_pipeline(
             # a record saved first would call the set reported, and every
             # later run would stay quiet about an alert nobody ever got.
             if partial_state is not None and current is not None and delivered:
-                partial_alerts[stage.name] = current
+                partial_alerts[stage.name] = {**current, "alerted_at": time.time()}
                 _save_partial_alerts(partial_state, partial_alerts)
             continue
         if code != 0:
