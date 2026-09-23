@@ -590,14 +590,18 @@ def test_final_exception_line_is_the_last_one_in_the_tail():
 # gain nothing -- the failed ones are retried next run either way.
 
 
-def _run_partial(tmp_path, runner, marker=None, partial_state=None, kwargs_out=None):
+def _run_partial(
+    tmp_path, runner, marker=None, partial_state=None, kwargs_out=None, delivered=True
+):
     alerts = []
 
     def notify_fn(title, message, **kwargs):
         if kwargs_out is not None:
             kwargs_out.append(kwargs)
         alerts.append((title, message))
-        return True
+        if isinstance(delivered, Exception):
+            raise delivered
+        return delivered
 
     log_path = tmp_path / "pipeline.log"
     with log_path.open("w+") as log_handle:
@@ -725,6 +729,23 @@ def test_a_record_from_before_kinds_does_not_suppress(tmp_path: Path):
     state.write_text(json.dumps({"score": ["L1"]}))
     _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
     assert len(alerts) == 1
+
+
+@pytest.mark.parametrize("delivered", [False, RuntimeError("malformed .env")])
+def test_an_undelivered_alert_is_not_recorded(tmp_path: Path, delivered):
+    """ntfy and email both down: the alert never arrived, so the next run
+    has to try again rather than treat the set as already reported."""
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state, delivered=delivered)
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert len(alerts) == 1
+
+
+def test_a_notifier_that_returns_nothing_counts_as_delivered(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state, delivered=None)
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert alerts == []
 
 
 def test_a_clean_run_of_the_stage_clears_it(tmp_path: Path):

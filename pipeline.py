@@ -411,8 +411,9 @@ def run_pipeline(
     if notify_fn is None:
         notify_fn = _default_notify
 
-    def alert(title: str, message: str, **kwargs) -> None:
-        """Notify without ever becoming the failure.
+    def alert(title: str, message: str, **kwargs) -> bool:
+        """Notify without ever becoming the failure. Returns whether it was
+        delivered; a notifier that returns nothing counts as delivered.
 
         src/notify.py already swallows delivery errors, but the call reaches
         it through load_env(), and a malformed .env raising here would kill
@@ -421,10 +422,12 @@ def run_pipeline(
         sent; it is not a reason to lose the exit code that says what broke.
         """
         try:
-            notify_fn(title, message, **kwargs)
+            delivered = notify_fn(title, message, **kwargs)
         except Exception as exc:  # noqa: BLE001 -- the whole point
             print(f"pipeline: notification failed ({type(exc).__name__}: {exc})",
                   flush=True)
+            return False
+        return delivered is not False
 
     if marker is not None and is_fresh(marker, max_age_hours):
         raise Skipped(f"last successful run was under {max_age_hours}h ago")
@@ -500,13 +503,10 @@ def run_pipeline(
                 else {"kind": report.kind, "ids": sorted(report.ids)}
             )
             previous = partial_alerts.get(stage.name)
-            if partial_state is not None:
+            if partial_state is not None and current is None:
                 # No PARTIAL line means nothing to compare next time, so
                 # the record goes and the next partial run alerts again.
-                if current is None:
-                    partial_alerts.pop(stage.name, None)
-                else:
-                    partial_alerts[stage.name] = current
+                partial_alerts.pop(stage.name, None)
                 _save_partial_alerts(partial_state, partial_alerts)
             if current is not None and _same_partial(previous, current):
                 # A listing that is broken for good fails every run. One
@@ -522,12 +522,18 @@ def run_pipeline(
             )
             if reason:
                 message += f"\n\n{reason}"
-            alert(
+            delivered = alert(
                 f"home-search: {stage.name} partially failed",
                 message,
                 priority=PARTIAL_PRIORITY,
                 tags=PARTIAL_TAGS,
             )
+            # Recorded only once it arrived. With ntfy and email both down,
+            # a record saved first would call the set reported, and every
+            # later run would stay quiet about an alert nobody ever got.
+            if partial_state is not None and current is not None and delivered:
+                partial_alerts[stage.name] = current
+                _save_partial_alerts(partial_state, partial_alerts)
             continue
         if code != 0:
             print(f"[{stage.name}] FAILED (exit {code}) after {elapsed:.0f}s", flush=True)
