@@ -161,9 +161,10 @@ def record_success(marker: Path) -> None:
     }))
 
 
-def _load_partial_alerts(path: Path) -> dict[str, list[str]]:
-    """Each stage's last-alerted failed ids. Any doubt reads as empty: a
-    lost record costs one repeated alert, a wrong one hides a new failure."""
+def _load_partial_alerts(path: Path) -> dict[str, dict]:
+    """Each stage's last-alerted cause and failed ids, as {"kind", "ids"}.
+    Any doubt reads as empty: a lost record costs one repeated alert, a
+    wrong one hides a new failure."""
     try:
         state = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
@@ -171,7 +172,7 @@ def _load_partial_alerts(path: Path) -> dict[str, list[str]]:
     return state if isinstance(state, dict) else {}
 
 
-def _save_partial_alerts(path: Path, state: dict[str, list[str]]) -> None:
+def _save_partial_alerts(path: Path, state: dict[str, dict]) -> None:
     """Atomic, so a run killed mid-write leaves the old record rather than a
     truncated one."""
     try:
@@ -182,6 +183,16 @@ def _save_partial_alerts(path: Path, state: dict[str, list[str]]) -> None:
     except OSError as exc:
         # Bookkeeping for alert noise; never a reason to fail the run.
         print(f"pipeline: could not save {path} ({exc})", flush=True)
+
+
+def _same_partial(previous, current: dict) -> bool:
+    """Whether a stored record is the (kind, ids) just reported. A record
+    in any other shape -- a bare id list from before kinds -- is not."""
+    return (
+        isinstance(previous, dict)
+        and previous.get("kind") == current["kind"]
+        and previous.get("ids") == current["ids"]
+    )
 
 
 def _default_runner(argv, log_handle=None):
@@ -481,17 +492,23 @@ def run_pipeline(
             reason = _stage_log_tail(log_handle, log_offset)
             # From the whole output, not the capped tail: a long enough id
             # list would lose the line's prefix to the character cap.
-            failed = parse_partial_line(_stage_output(log_handle, log_offset), stage.name)
+            report = parse_partial_line(_stage_output(log_handle, log_offset), stage.name)
+            # The cause is part of the key: the same ids failing for a new
+            # reason (a revoked key, after their results errored) is news.
+            current = (
+                None if report is None
+                else {"kind": report.kind, "ids": sorted(report.ids)}
+            )
             previous = partial_alerts.get(stage.name)
             if partial_state is not None:
                 # No PARTIAL line means nothing to compare next time, so
                 # the record goes and the next partial run alerts again.
-                if failed is None:
+                if current is None:
                     partial_alerts.pop(stage.name, None)
                 else:
-                    partial_alerts[stage.name] = sorted(failed)
+                    partial_alerts[stage.name] = current
                 _save_partial_alerts(partial_state, partial_alerts)
-            if failed is not None and previous is not None and sorted(failed) == previous:
+            if current is not None and _same_partial(previous, current):
                 # A listing that is broken for good fails every run. One
                 # alert for it is news; four a day forever is noise that
                 # buries the next real one.

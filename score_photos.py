@@ -11,7 +11,13 @@ from anthropic.types.message_create_params import MessageCreateParamsNonStreamin
 from anthropic.types.messages.batch_create_params import Request
 
 from src.config import load_env
-from src.exit_codes import EXIT_PARTIAL, format_partial_line
+from src.exit_codes import (
+    EXIT_PARTIAL,
+    KIND_ITEMS_FAILED,
+    KIND_KEY_REJECTED,
+    KIND_SUBMIT_FAILED,
+    format_partial_line,
+)
 from src.turso_db import stage_connection
 from src.db import (
     all_listing_ids,
@@ -575,7 +581,9 @@ def main() -> int:
 
     if key_rejected:
         conn.close()
-        return _exit_code(unscored_ids + unsubmitted_ids, failed_submissions)
+        return _exit_code(
+            unscored_ids + unsubmitted_ids, failed_submissions, key_rejected=True
+        )
 
     if not submitted_batches:
         conn.close()
@@ -624,7 +632,9 @@ def main() -> int:
     return _exit_code(unscored_ids + unsubmitted_ids, failed_submissions)
 
 
-def _exit_code(unscored_ids: list[str], failed_submissions: int) -> int:
+def _exit_code(
+    unscored_ids: list[str], failed_submissions: int, key_rejected: bool = False
+) -> int:
     """EXIT_PARTIAL, with a closing summary for the alert, when anything this
     run attempted was left unscored; 0 otherwise."""
     if not unscored_ids and not failed_submissions:
@@ -638,7 +648,16 @@ def _exit_code(unscored_ids: list[str], failed_submissions: int) -> int:
         parts.append(f"{failed_submissions} batch submission(s) failed")
     print(f"partial run: {'; '.join(parts)}")
     # Last, for pipeline.py -- see src/exit_codes.py.
-    print(format_partial_line("score-photos", unscored_ids))
+    # The kind names the worst cause, since that is what the alert has to
+    # get across: a rejected key stops everything, a failed submission
+    # skipped whole batches, and only then did individual results fail.
+    if key_rejected:
+        kind = KIND_KEY_REJECTED
+    elif failed_submissions:
+        kind = KIND_SUBMIT_FAILED
+    else:
+        kind = KIND_ITEMS_FAILED
+    print(format_partial_line("score-photos", kind, unscored_ids))
     return EXIT_PARTIAL
 
 

@@ -12,7 +12,7 @@ from src.db import (
     upsert_scores,
 )
 from src.commute import COMMUTE_SOURCE
-from src.exit_codes import EXIT_PARTIAL, format_partial_line
+from src.exit_codes import EXIT_PARTIAL, KIND_ITEMS_FAILED, format_partial_line
 from src.scoring import compute_collection_stats, finished_sqft, score_listing
 
 DATA_DIR = Path("data")
@@ -195,7 +195,7 @@ def main() -> int:
             f"{len(skipped_ids)} of {len(listings)} listing(s) failed to score "
             f"and kept their old score: {', '.join(skipped_ids)}"
         )
-        print(format_partial_line("score", skipped_ids))
+        print(format_partial_line("score", KIND_ITEMS_FAILED, skipped_ids))
         return EXIT_PARTIAL
     return 0
 

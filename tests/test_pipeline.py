@@ -672,10 +672,10 @@ def test_a_real_failure_after_a_partial_one_still_stops_the_run(tmp_path: Path):
 # alert for each is four a day forever, and the real ones drown in them.
 
 
-def _partial_score(ids):
+def _partial_score(ids, kind="items-failed"):
     return LoggingRunner(
         exit_codes={"score.py": EXIT_PARTIAL},
-        outputs={"score.py": f"L1: failed to score\nPARTIAL: score: {ids}\n"},
+        outputs={"score.py": f"L1: failed to score\nPARTIAL: score: {kind}: {ids}\n"},
     )
 
 
@@ -695,6 +695,38 @@ def test_a_changed_failed_set_alerts_again(tmp_path: Path):
     assert [t for t, _ in alerts] == ["home-search: score partially failed"]
 
 
+def test_the_same_ids_for_a_new_reason_alert_again(tmp_path: Path):
+    """Results errored for L1 and L2 last run; this run the key is revoked
+    and the same two were never submitted. That is a new problem with a
+    different fix, not the one already alerted on."""
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1,L2"), partial_state=state)
+    _, alerts = _run_partial(
+        tmp_path, _partial_score("L1,L2", kind="key-rejected"), partial_state=state
+    )
+    assert [t for t, _ in alerts] == ["home-search: score partially failed"]
+
+
+def test_an_old_format_line_matches_an_items_failed_record(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    old_style = LoggingRunner(
+        exit_codes={"score.py": EXIT_PARTIAL},
+        outputs={"score.py": "PARTIAL: score: L1\n"},
+    )
+    _, alerts = _run_partial(tmp_path, old_style, partial_state=state)
+    assert alerts == []
+
+
+def test_a_record_from_before_kinds_does_not_suppress(tmp_path: Path):
+    """A bare id list says nothing about why; one extra alert is cheaper
+    than guessing."""
+    state = tmp_path / "partial-alerts.json"
+    state.write_text(json.dumps({"score": ["L1"]}))
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert len(alerts) == 1
+
+
 def test_a_clean_run_of_the_stage_clears_it(tmp_path: Path):
     """Fixed, then broken the same way again, is a new failure."""
     state = tmp_path / "partial-alerts.json"
@@ -710,7 +742,7 @@ def test_one_stages_set_does_not_suppress_anothers(tmp_path: Path):
     _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
     runner = LoggingRunner(
         exit_codes={"score_photos.py": EXIT_PARTIAL},
-        outputs={"score_photos.py": "PARTIAL: score-photos: L1\n"},
+        outputs={"score_photos.py": "PARTIAL: score-photos: items-failed: L1\n"},
     )
     _, alerts = _run_partial(tmp_path, runner, partial_state=state)
     assert [t for t, _ in alerts] == ["home-search: score-photos partially failed"]
@@ -731,7 +763,7 @@ def test_a_corrupt_state_file_alerts_rather_than_suppressing(tmp_path: Path):
     state.write_text("{not json")
     _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
     assert len(alerts) == 1
-    assert json.loads(state.read_text()) == {"score": ["L1"]}
+    assert json.loads(state.read_text())["score"]["ids"] == ["L1"]
 
 
 def test_a_suppressed_partial_run_is_still_not_fresh(tmp_path: Path):

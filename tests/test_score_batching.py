@@ -460,7 +460,7 @@ def test_some_listings_skipped_exits_partial_and_names_them(
     *_, summary, machine_line = capsys.readouterr().out.splitlines()
     assert summary == "1 of 3 listing(s) failed to score and kept their old score: L0001"
     # Last, so pipeline.py can tell this failure from a new one.
-    assert machine_line == "PARTIAL: score: L0001"
+    assert machine_line == "PARTIAL: score: items-failed: L0001"
 
 
 def test_every_listing_skipped_is_a_real_failure_and_keeps_the_old_report(

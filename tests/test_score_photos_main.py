@@ -337,13 +337,32 @@ def test_a_result_that_failed_at_the_api_makes_the_run_partial(conn, monkeypatch
 
 
 def test_a_partial_run_ends_with_the_machine_readable_line(conn, monkeypatch, capsys):
-    """pipeline.py reads the failed ids off the last line to tell a new
-    failure from the same one it already alerted on."""
+    """pipeline.py reads the cause and failed ids off the last line to tell
+    a new failure from the same one it already alerted on."""
     batches = _AlwaysFailingBatches(RuntimeError("batch API is down"))
     _two_single_listing_chunks(conn, monkeypatch, batches)
 
     assert score_photos.main() == EXIT_PARTIAL
-    assert capsys.readouterr().out.splitlines()[-1] == "PARTIAL: score-photos: L1,L2"
+    last = capsys.readouterr().out.splitlines()[-1]
+    assert last == "PARTIAL: score-photos: submit-failed: L1,L2"
+
+
+def test_errored_results_end_with_the_items_failed_line(conn, monkeypatch, capsys):
+    add_listing(conn, "L1")
+
+    class _ErroredResultBatches(_FakeBatches):
+        def results(self, batch_id):
+            return iter([SimpleNamespace(
+                custom_id="L1", result=SimpleNamespace(type="errored"))])
+
+    _prepare_main(conn, monkeypatch, _ErroredResultBatches())
+    monkeypatch.setattr(
+        score_photos, "build_batch_request", lambda lid, *a: SimpleNamespace(custom_id=lid)
+    )
+
+    assert score_photos.main() == EXIT_PARTIAL
+    last = capsys.readouterr().out.splitlines()[-1]
+    assert last == "PARTIAL: score-photos: items-failed: L1"
 
 
 def test_a_rejected_key_ends_with_the_machine_readable_line(conn, monkeypatch, capsys):
@@ -353,4 +372,5 @@ def test_a_rejected_key_ends_with_the_machine_readable_line(conn, monkeypatch, c
     _two_single_listing_chunks(conn, monkeypatch, batches)
 
     assert score_photos.main() == EXIT_PARTIAL
-    assert capsys.readouterr().out.splitlines()[-1] == "PARTIAL: score-photos: L1,L2"
+    last = capsys.readouterr().out.splitlines()[-1]
+    assert last == "PARTIAL: score-photos: key-rejected: L1,L2"
