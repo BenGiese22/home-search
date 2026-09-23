@@ -192,36 +192,55 @@ def _two_single_listing_chunks(conn, monkeypatch, batches):
     monkeypatch.setattr(score_photos, "MAX_BATCH_REQUEST_BYTES", 1)
 
 
-def test_every_chunk_failing_to_submit_is_a_real_failure(conn, monkeypatch, capsys):
-    """The API is down and nothing is already in flight: nothing was scored
-    and nothing will be. That used to exit 0 with "no listings had enough
-    photos to score", which was false on both counts."""
+def test_every_chunk_failing_to_submit_is_partial_not_a_halt(conn, monkeypatch, capsys):
+    """The API is down (say a 529 overload that outlasts the SDK's retries)
+    and nothing is already in flight. No photo got scored, but score,
+    notify and verify only need the database as it already is, and a
+    halted run also loses the digest. So the rest of the run still goes,
+    and the summary says plainly that nothing was submitted."""
     batches = _AlwaysFailingBatches(RuntimeError("batch API is down"))
     _two_single_listing_chunks(conn, monkeypatch, batches)
 
-    assert score_photos.main() == score_photos.EXIT_SUBMIT_FAILED
+    assert score_photos.main() == EXIT_PARTIAL
 
     out = capsys.readouterr().out
     assert batches.calls == 2
     assert "no listings had enough photos" not in out
+    assert "NO photos were submitted" in out
     assert "all 2 batch submission(s) failed" in out
+    assert "batch API is down" in out
 
 
-def test_a_rejected_api_key_stops_at_the_first_chunk(conn, monkeypatch, capsys):
-    """An expired key fails every chunk identically. Trying each one just
-    repeats the same 401 N times in the alert."""
+def test_the_submit_failed_exit_code_is_gone():
+    """Nothing returns it any more; a stale constant invites a caller to."""
+    assert not hasattr(score_photos, "EXIT_SUBMIT_FAILED")
+
+
+def _api_status_error(cls, status):
     request = httpx.Request("POST", "https://api.anthropic.com/v1/messages/batches")
-    auth_error = anthropic.AuthenticationError(
-        "invalid x-api-key", response=httpx.Response(401, request=request), body=None
+    return cls(
+        "invalid x-api-key", response=httpx.Response(status, request=request), body=None
     )
-    batches = _AlwaysFailingBatches(auth_error)
+
+
+@pytest.mark.parametrize(
+    "cls,status",
+    [(anthropic.AuthenticationError, 401), (anthropic.PermissionDeniedError, 403)],
+)
+def test_a_rejected_api_key_stops_at_the_first_chunk(conn, monkeypatch, capsys, cls, status):
+    """An expired or revoked key fails every chunk identically. Trying each
+    one just repeats the same error N times in the alert. It is still only
+    this stage's problem, so the run carries on, and the alert has to say
+    what to do about it."""
+    batches = _AlwaysFailingBatches(_api_status_error(cls, status))
     _two_single_listing_chunks(conn, monkeypatch, batches)
 
-    assert score_photos.main() == score_photos.EXIT_SUBMIT_FAILED
+    assert score_photos.main() == EXIT_PARTIAL
 
     out = capsys.readouterr().out
     assert batches.calls == 1
-    assert "ANTHROPIC_API_KEY was rejected" in out
+    assert f"ANTHROPIC_API_KEY was rejected ({status}) -- replace it" in out
+    assert "NO photos were submitted" in out
 
 
 def test_nothing_to_score_still_exits_zero(conn, monkeypatch, capsys):

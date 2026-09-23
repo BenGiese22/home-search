@@ -63,12 +63,6 @@ REQUEST_OVERHEAD_BYTES = 5_000
 # sys.exit(main()), so this exact case -- ANTHROPIC_API_KEY missing -- exited
 # 0 and was reported as a successful run that scored nothing.
 EXIT_NO_API_KEY = 2
-# Nothing was submitted and nothing was already in flight, because every
-# batch-create call failed (or the key was rejected outright). Distinct from
-# EXIT_PARTIAL: no listing got anywhere, so there is nothing for the rest of
-# the run to build on. Before this existed, that case fell through to the
-# "no listings had enough photos" message and exited 0.
-EXIT_SUBMIT_FAILED = 3
 
 # Checkpoints every already-submitted batch's id AND the garage_expected_by_id
 # mapping used to submit it, as a list -- one batch can no longer cover every
@@ -505,26 +499,39 @@ def main() -> int:
         pending_entries.append((listing_id, request, garage_expected, size_estimate))
 
     failed_submissions = 0
+    # Listings in a chunk that never reached the API. They stay unscored and
+    # are picked up again next run, but the alert has to name them.
+    unsubmitted_ids: list[str] = []
+    last_submit_error = None
+    key_rejected = False
+    submitted_this_run = 0
     if pending_entries:
-        for chunk in _chunk_by_size(pending_entries, MAX_BATCH_REQUEST_BYTES):
+        chunks = _chunk_by_size(pending_entries, MAX_BATCH_REQUEST_BYTES)
+        for index, chunk in enumerate(chunks):
             chunk_requests = [entry[1] for entry in chunk]
             chunk_garage_expected = {entry[0]: entry[2] for entry in chunk}
             chunk_bytes = sum(entry[3] for entry in chunk)
             try:
                 batch = client.messages.batches.create(requests=chunk_requests)
-            except anthropic.AuthenticationError as exc:
+            except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
                 # A rejected key fails every chunk the same way, so trying
-                # the rest only repeats the same 401 in the alert. Stopping
+                # the rest only repeats the same error in the alert. Stopping
                 # also skips polling anything already in flight -- retrieve()
                 # would be rejected too -- but every batch submitted so far
                 # is checkpointed in vision_batches, so the next run with a
                 # working key resumes them rather than paying again.
+                #
+                # Partial, not a halt: score, notify and verify work from the
+                # database as it already is, and the digest is worth more
+                # than a stopped run. The alert carries the fix instead.
                 print(
-                    f"ANTHROPIC_API_KEY was rejected ({exc}); not submitting "
-                    f"the remaining batch(es)"
+                    f"ANTHROPIC_API_KEY was rejected ({exc.status_code}) -- replace it. "
+                    f"Not submitting the remaining batch(es) ({exc})"
                 )
-                conn.close()
-                return EXIT_SUBMIT_FAILED
+                key_rejected = True
+                for rest in chunks[index:]:
+                    unsubmitted_ids += [entry[0] for entry in rest]
+                break
             except Exception as exc:  # noqa: BLE001
                 # One chunk's API error must not cost every chunk after it
                 # its submission -- especially since earlier chunks in this
@@ -537,24 +544,43 @@ def main() -> int:
                     f"({exc}): {sorted(chunk_garage_expected)}"
                 )
                 failed_submissions += 1
+                last_submit_error = exc
+                unsubmitted_ids += list(chunk_garage_expected)
                 continue
             record_vision_batch(conn, batch.id, chunk_garage_expected, _this_home())
             submitted_batches.append(
                 {"batch_id": batch.id, "garage_expected_by_id": chunk_garage_expected}
             )
+            submitted_this_run += 1
             print(
                 f"submitted batch {batch.id} with {len(chunk_requests)} listings "
                 f"(~{chunk_bytes / 1e6:.0f}MB estimated)"
             )
 
+    if pending_entries and not submitted_this_run:
+        # Said in capitals because the rest of the log can look busy -- a
+        # resumed batch may still be polled below -- while not one photo
+        # from this run reached the API.
+        if key_rejected:
+            why = "the API key was rejected"
+        else:
+            why = (
+                f"all {failed_submissions} batch submission(s) failed "
+                f"(last error: {last_submit_error})"
+            )
+        print(
+            f"NO photos were submitted: {why}. {len(unsubmitted_ids)} listing(s) "
+            f"stay unscored and are retried next run."
+        )
+
+    if key_rejected:
+        conn.close()
+        return _exit_code(unscored_ids + unsubmitted_ids, failed_submissions)
+
     if not submitted_batches:
         conn.close()
         if failed_submissions:
-            print(
-                f"all {failed_submissions} batch submission(s) failed, and none "
-                f"already in flight; nothing was scored"
-            )
-            return EXIT_SUBMIT_FAILED
+            return _exit_code(unscored_ids + unsubmitted_ids, failed_submissions)
         if not missing_ids:
             print("nothing to score, and none already in flight")
         elif too_few_photos == len(missing_ids):
@@ -595,7 +621,7 @@ def main() -> int:
             time.sleep(POLL_INTERVAL_SECONDS)
 
     conn.close()
-    return _exit_code(unscored_ids, failed_submissions)
+    return _exit_code(unscored_ids + unsubmitted_ids, failed_submissions)
 
 
 def _exit_code(unscored_ids: list[str], failed_submissions: int) -> int:
