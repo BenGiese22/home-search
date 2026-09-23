@@ -11,6 +11,7 @@ from anthropic.types.message_create_params import MessageCreateParamsNonStreamin
 from anthropic.types.messages.batch_create_params import Request
 
 from src.config import load_env
+from src.exit_codes import EXIT_PARTIAL
 from src.turso_db import stage_connection
 from src.db import (
     all_listing_ids,
@@ -19,6 +20,7 @@ from src.db import (
     record_vision_batch,
     get_amenities,
     get_listing_ids_missing_visual_score,
+    get_visual_scores_by_listing,
     query_listings,
     upsert_visual_score,
 )
@@ -61,6 +63,12 @@ REQUEST_OVERHEAD_BYTES = 5_000
 # sys.exit(main()), so this exact case -- ANTHROPIC_API_KEY missing -- exited
 # 0 and was reported as a successful run that scored nothing.
 EXIT_NO_API_KEY = 2
+# Nothing was submitted and nothing was already in flight, because every
+# batch-create call failed (or the key was rejected outright). Distinct from
+# EXIT_PARTIAL: no listing got anywhere, so there is nothing for the rest of
+# the run to build on. Before this existed, that case fell through to the
+# "no listings had enough photos" message and exited 0.
+EXIT_SUBMIT_FAILED = 3
 
 # Checkpoints every already-submitted batch's id AND the garage_expected_by_id
 # mapping used to submit it, as a list -- one batch can no longer cover every
@@ -397,7 +405,21 @@ def main() -> int:
     ]
     if rescore_all:
         print(f"--rescore-all: re-scoring {len(missing_ids)} listing(s)")
+    # Only --rescore-all puts an already-scored listing in front of the
+    # failure paths below; normal mode selects listings with no score or a
+    # recorded failure. For those, recording "unavailable" would throw away
+    # a score the listing already earned over one unreadable photo or a
+    # missing download, so they keep it instead.
+    existing_scores = get_visual_scores_by_listing(conn) if rescore_all else {}
 
+    def has_good_score(listing_id: str) -> bool:
+        row = existing_scores.get(listing_id)
+        return row is not None and not row["photo_score_unavailable"]
+
+    # Listings this run tried and could not score. Each is retried next run,
+    # but one that never recovers would otherwise be retried silently forever.
+    unscored_ids = []
+    too_few_photos = 0
     pending_entries = []  # (listing_id, request, garage_expected, size_estimate)
     for listing_id in missing_ids:
         row = listings_by_id[listing_id]
@@ -411,6 +433,14 @@ def main() -> int:
             # machine; pull it back before giving up.
             photo_count = hydrate_from_blob(conn, listing_id)
         if not has_enough_photos(photo_count):
+            too_few_photos += 1
+            if has_good_score(listing_id):
+                unscored_ids.append(listing_id)
+                print(
+                    f"{listing_id}: {photo_count} photos, below floor of "
+                    f"{MIN_PHOTOS_FOR_VISION_SCORING}; kept its existing score"
+                )
+                continue
             upsert_visual_score(conn, listing_id, None)
             print(
                 f"{listing_id}: skipped ({photo_count} photos, below floor of "
@@ -433,11 +463,16 @@ def main() -> int:
             # crash the stage before any batch is even submitted. Same shape
             # as the too-few-photos skip just above: this listing can't be
             # scored this run, so record that and move on to the rest.
+            unscored_ids.append(listing_id)
+            if has_good_score(listing_id):
+                print(f"{listing_id}: failed to build request ({exc}); kept its existing score")
+                continue
             upsert_visual_score(conn, listing_id, None)
             print(f"{listing_id}: failed to build request ({exc}); skipped")
             continue
         pending_entries.append((listing_id, request, garage_expected, size_estimate))
 
+    failed_submissions = 0
     if pending_entries:
         for chunk in _chunk_by_size(pending_entries, MAX_BATCH_REQUEST_BYTES):
             chunk_requests = [entry[1] for entry in chunk]
@@ -445,6 +480,19 @@ def main() -> int:
             chunk_bytes = sum(entry[3] for entry in chunk)
             try:
                 batch = client.messages.batches.create(requests=chunk_requests)
+            except anthropic.AuthenticationError as exc:
+                # A rejected key fails every chunk the same way, so trying
+                # the rest only repeats the same 401 in the alert. Stopping
+                # also skips polling anything already in flight -- retrieve()
+                # would be rejected too -- but every batch submitted so far
+                # is checkpointed in vision_batches, so the next run with a
+                # working key resumes them rather than paying again.
+                print(
+                    f"ANTHROPIC_API_KEY was rejected ({exc}); not submitting "
+                    f"the remaining batch(es)"
+                )
+                conn.close()
+                return EXIT_SUBMIT_FAILED
             except Exception as exc:  # noqa: BLE001
                 # One chunk's API error must not cost every chunk after it
                 # its submission -- especially since earlier chunks in this
@@ -456,6 +504,7 @@ def main() -> int:
                     f"failed to submit batch of {len(chunk_requests)} listing(s) "
                     f"({exc}): {sorted(chunk_garage_expected)}"
                 )
+                failed_submissions += 1
                 continue
             record_vision_batch(conn, batch.id, chunk_garage_expected, _this_home())
             submitted_batches.append(
@@ -467,9 +516,20 @@ def main() -> int:
             )
 
     if not submitted_batches:
-        print("no listings had enough photos to score, and none already in flight")
         conn.close()
-        return 0
+        if failed_submissions:
+            print(
+                f"all {failed_submissions} batch submission(s) failed, and none "
+                f"already in flight; nothing was scored"
+            )
+            return EXIT_SUBMIT_FAILED
+        if not missing_ids:
+            print("nothing to score, and none already in flight")
+        elif too_few_photos == len(missing_ids):
+            print("no listings had enough photos to score, and none already in flight")
+        else:
+            print("nothing submitted, and none already in flight")
+        return _exit_code(unscored_ids, failed_submissions)
 
     # Round-robin across all in-flight batches rather than fully polling one
     # to completion before even checking the next -- batches don't finish in
@@ -503,7 +563,23 @@ def main() -> int:
             time.sleep(POLL_INTERVAL_SECONDS)
 
     conn.close()
-    return 0
+    return _exit_code(unscored_ids, failed_submissions)
+
+
+def _exit_code(unscored_ids: list[str], failed_submissions: int) -> int:
+    """EXIT_PARTIAL, with a closing summary for the alert, when anything this
+    run attempted was left unscored; 0 otherwise."""
+    if not unscored_ids and not failed_submissions:
+        return 0
+    parts = []
+    if unscored_ids:
+        parts.append(
+            f"{len(unscored_ids)} listing(s) could not be scored: {', '.join(unscored_ids)}"
+        )
+    if failed_submissions:
+        parts.append(f"{failed_submissions} batch submission(s) failed")
+    print(f"partial run: {'; '.join(parts)}")
+    return EXIT_PARTIAL
 
 
 if __name__ == "__main__":
