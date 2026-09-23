@@ -159,6 +159,40 @@ def test_a_stale_result_that_does_not_parse_is_also_discarded(conn):
     assert _row(conn, "L1") is None
 
 
+def test_discarded_stale_results_are_counted_once_per_batch(conn, capsys):
+    """A long outage can leave a batch naming many deleted listings. One line
+    each is noise; the count is what an operator actually reads."""
+    add(conn, "L1")
+    for lid in ("L2", "L3"):
+        add(conn, lid)
+        delete_listing(conn, lid)
+
+    client = client_returning([
+        succeeded("L2", FULL_RESPONSE),
+        succeeded("L1", FULL_RESPONSE),
+        errored("L3"),
+    ])
+
+    _process_batch_results(
+        client, conn, "batch_1",
+        garage_expected_by_id={"L1": True, "L2": True, "L3": True},
+    )
+
+    out = capsys.readouterr().out
+    assert "batch batch_1: discarded 2 result(s) for listings no longer in listings" in out
+
+
+def test_no_stale_summary_when_nothing_was_discarded(conn, capsys):
+    add(conn, "L1")
+
+    _process_batch_results(
+        client_returning([succeeded("L1", FULL_RESPONSE)]), conn, "batch_1",
+        garage_expected_by_id={"L1": True},
+    )
+
+    assert "discarded" not in capsys.readouterr().out
+
+
 def test_liveness_costs_one_statement_per_batch_not_per_result(conn):
     for lid in ("L1", "L2", "L3", "L4", "L5"):
         add(conn, lid)

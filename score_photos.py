@@ -328,7 +328,14 @@ def _process_batch_results(
     # nothing to write for it -- visual_scores has a foreign key to
     # listings and the INSERT would fail -- and, like a parse failure, one
     # such result must not cost the rest of the batch its scores.
+    #
+    # One race remains: a listing deleted after this snapshot but before its
+    # result is written still hits the foreign key and raises IntegrityError.
+    # That is safe to leave. The raise escapes this function, and main()
+    # clears this batch's checkpoint only after it returns, so the next run
+    # reprocesses the whole batch, and by then the snapshot filters it out.
     live = all_listing_ids(conn)
+    discarded = 0
     for result in client.messages.batches.results(batch_id):
         listing_id = result.custom_id
         if listing_id not in live:
@@ -336,6 +343,7 @@ def _process_batch_results(
                 f"{listing_id}: no longer in listings (rejected or delisted "
                 f"while batch {batch_id} was in flight); result discarded"
             )
+            discarded += 1
             continue
         try:
             garage_expected = garage_expected_by_id[listing_id]
@@ -361,6 +369,11 @@ def _process_batch_results(
         print(
             f"{listing_id}: condition={visual_result.condition_photo_score:.0f} "
             f"outdoor={visual_result.outdoor_photo_score:.0f}{staging_flag}"
+        )
+    if discarded:
+        print(
+            f"batch {batch_id}: discarded {discarded} result(s) for listings "
+            f"no longer in listings"
         )
 
 
