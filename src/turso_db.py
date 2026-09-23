@@ -54,6 +54,10 @@ CONNECT_BACKOFF_SECONDS = (1, 2)
 # refused" -- and those fail identically on every attempt, so retrying them
 # only delays the alert. Any other status (a 502 from a proxy blip) is still
 # retried.
+#
+# Because this depends on the driver's wording, requirements.txt pins
+# turso_serverless to an exact version (tests/test_turso_db.py checks the
+# pin matches what is installed). Re-read session.py before bumping it.
 _AUTH_FAILURE = re.compile(r"HTTP status (401|403)\b")
 
 

@@ -873,3 +873,17 @@ def test_a_failing_close_does_not_mask_the_retry():
 
     assert len(opened) == 2
     assert conn.row_factory is TursoRow
+
+
+def test_the_driver_is_pinned_to_the_version_its_message_match_was_read_from():
+    """_AUTH_FAILURE matches the driver's own "HTTP status 401" text, not an
+    API. A release that rewords it would quietly turn a refused token back
+    into three retries, so the driver is pinned, and the pin has to be the
+    version actually installed."""
+    import re
+    from importlib.metadata import version
+
+    requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text()
+    pin = re.search(r"^turso_serverless==(\S+)$", requirements, re.MULTILINE)
+    assert pin, "turso_serverless must be pinned with =="
+    assert pin.group(1) == version("turso_serverless")

@@ -9,7 +9,12 @@ beautifulsoup4>=4.12.3
 requests>=2.32.3
 pytest>=8.3.3
 anthropic>=0.116.0
-turso_serverless>=0.1.0
+# The one exact pin, on purpose. src/turso_db.py's _AUTH_FAILURE matches
+# the driver's error text ("HTTP status 401"), which is not an API; a
+# release that rewords it would silently retry a refused token. Pure
+# Python, so the wheel problem above cannot apply. Bump it deliberately,
+# after checking turso_serverless/session.py still raises that text.
+turso_serverless==0.1.0
 # The commutes stage reads the clock in America/Denver to decide which
 # Wednesday 08:15 to ask about. zoneinfo is stdlib, but its *data* is not:
 # on a bare image with no tzdata package ZoneInfo("America/Denver") raises
