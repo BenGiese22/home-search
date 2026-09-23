@@ -413,3 +413,65 @@ def test_one_listing_crashing_does_not_stop_the_others_being_scored(
     scored_ids = {row["listing_id"] for row in get_scores(conn)}
     assert scored_ids == {"L0000", "L0002"}
     assert boom_id not in scored_ids
+
+
+# --- a skipped listing must reach the exit code ---------------------------
+
+
+def _run_with_failing_ids(tmp_path: Path, monkeypatch, count: int, failing: set[str]):
+    """Seed `count` listings that already have a score, make score_listing
+    raise for every id in `failing`, and run the real score.main()."""
+    db_path = tmp_path / "failing.sqlite"
+    conn = get_connection(db_path)
+    _seed(conn, count)
+    upsert_scores(conn, [(f"L{n:04d}", _score_result(1.0)) for n in range(count)])
+
+    real_score_listing = score.score_listing
+
+    def flaky_score_listing(listing, **kwargs):
+        if listing.listing_id in failing:
+            raise ValueError("boom")
+        return real_score_listing(listing, **kwargs)
+
+    csv_path = tmp_path / "ranked.csv"
+    csv_path.write_text("previous good report\n")
+    monkeypatch.setattr(score, "score_listing", flaky_score_listing)
+    monkeypatch.setattr(score, "stage_connection", lambda c=conn: c)
+    monkeypatch.setattr(score, "RANKED_CSV_PATH", csv_path)
+    monkeypatch.setattr(score.sys, "argv", ["score.py"])
+    return score.main(), db_path, csv_path
+
+
+def test_a_clean_run_exits_zero(tmp_path: Path, monkeypatch, capsys):
+    code, _, _ = _run_with_failing_ids(tmp_path, monkeypatch, 3, set())
+    assert code == 0
+
+
+def test_some_listings_skipped_exits_partial_and_names_them(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """A skipped listing keeps its old score, so verify's every-listing-is-
+    scored check can't see the skip. The exit code has to."""
+    from src.exit_codes import EXIT_PARTIAL
+
+    code, _, _ = _run_with_failing_ids(tmp_path, monkeypatch, 3, {"L0001"})
+
+    assert code == EXIT_PARTIAL
+    summary = capsys.readouterr().out.splitlines()[-1]
+    assert summary == "1 of 3 listing(s) failed to score and kept their old score: L0001"
+
+
+def test_every_listing_skipped_is_a_real_failure_and_keeps_the_old_report(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Every listing failing is a code bug, not bad data. Old scores stay put,
+    so without a nonzero exit the run would look healthy -- and an empty
+    ranked CSV would replace the last good one."""
+    failing = {f"L{n:04d}" for n in range(3)}
+    code, db_path, csv_path = _run_with_failing_ids(tmp_path, monkeypatch, 3, failing)
+
+    assert code == 1
+    assert "every listing failed to score" in capsys.readouterr().out
+    assert csv_path.read_text() == "previous good report\n"
+    composites = {row["composite"] for row in get_scores(get_connection(db_path))}
+    assert composites == {1.0}

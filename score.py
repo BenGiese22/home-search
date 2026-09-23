@@ -12,6 +12,7 @@ from src.db import (
     upsert_scores,
 )
 from src.commute import COMMUTE_SOURCE
+from src.exit_codes import EXIT_PARTIAL
 from src.scoring import compute_collection_stats, finished_sqft, score_listing
 
 DATA_DIR = Path("data")
@@ -66,7 +67,7 @@ def write_ranked_csv(ranked: list[tuple], csv_path: Path) -> None:
             ])
 
 
-def main() -> None:
+def main() -> int:
     sort_by_value = "--sort-by-value" in sys.argv
 
     conn = stage_connection()
@@ -95,6 +96,7 @@ def main() -> None:
 
     ranked = []
     score_rows = []
+    skipped_ids = []
     for listing in listings:
         try:
             commute = commute_by_id.get(listing.listing_id)
@@ -140,6 +142,18 @@ def main() -> None:
             # whatever score it already had (or none) and is picked up again
             # next run once whatever is wrong with its data is fixed.
             print(f"{listing.listing_id}: failed to score ({exc}); skipped")
+            skipped_ids.append(listing.listing_id)
+
+    if listings and not score_rows:
+        # Every listing failing is not bad data -- no one listing is that
+        # bad -- it is a bug in score_listing or the stats every call shares.
+        # Exiting 0 here would look healthy: every old score stays in place,
+        # so verify's every-listing-is-scored check still passes. Stop
+        # before the write and before the CSV, so the last good ranked
+        # report is not replaced with an empty one.
+        print(f"every listing failed to score ({len(listings)}); nothing written")
+        conn.close()
+        return 1
 
     # One batched write rather than one INSERT per listing, for the same
     # round-trip reason as the reads above.
@@ -173,6 +187,17 @@ def main() -> None:
     if not sort_by_value:
         print("(sorted by composite; rerun with --sort-by-value to sort by score per $100k)")
 
+    if skipped_ids:
+        # Last line on purpose, so it's what the failure alert shows. A
+        # skipped listing keeps its old score, which is exactly why nothing
+        # downstream would notice the skip without this.
+        print(
+            f"{len(skipped_ids)} of {len(listings)} listing(s) failed to score "
+            f"and kept their old score: {', '.join(skipped_ids)}"
+        )
+        return EXIT_PARTIAL
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
