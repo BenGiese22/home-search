@@ -638,20 +638,22 @@ def test_a_partial_stage_alerts_once_with_its_log_tail(tmp_path: Path, capsys):
     assert "L9 would not geocode" in message
     assert "12 listings fetched" not in message
     assert "later stages still ran" in message.lower()
-    assert "retried" in message.lower()
+    assert "retried on the next run that actually executes" in message
     assert f"[commutes] ok with item failures (exit {EXIT_PARTIAL})" in capsys.readouterr().out
 
 
-def test_a_partial_run_still_revalidates_but_is_not_fresh(
+def test_a_partial_run_revalidates_and_records_success(
     tmp_path: Path, never_revalidate_for_real
 ):
-    """The writes landed, so the viewer's cache is stale either way. But the
-    alert promises the failed items are retried next run, and a fresh
-    marker would let --max-age skip exactly that run."""
+    """The writes landed and the data is consistent, so this is a success
+    for --max-age. Not recording it would disable --max-age for as long as
+    any one listing stays broken -- every trigger a full scrape, Mapbox
+    and vision run -- to retry items that will likely fail again anyway.
+    The failed items wait for the next run that actually executes."""
     marker = tmp_path / "last.json"
     runner = LoggingRunner(exit_codes={"score_photos.py": EXIT_PARTIAL})
     _run_partial(tmp_path, runner, marker=marker)
-    assert is_fresh(marker, max_age_hours=6) is False
+    assert is_fresh(marker, max_age_hours=6) is True
     assert never_revalidate_for_real == [True]
 
 
@@ -787,12 +789,12 @@ def test_a_corrupt_state_file_alerts_rather_than_suppressing(tmp_path: Path):
     assert json.loads(state.read_text())["score"]["ids"] == ["L1"]
 
 
-def test_a_suppressed_partial_run_is_still_not_fresh(tmp_path: Path):
+def test_a_suppressed_partial_run_still_records_success(tmp_path: Path):
     state = tmp_path / "partial-alerts.json"
     marker = tmp_path / "last.json"
     _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
     _run_partial(tmp_path, _partial_score("L1"), marker=marker, partial_state=state)
-    assert is_fresh(marker, max_age_hours=6) is False
+    assert is_fresh(marker, max_age_hours=6) is True
 
 
 def test_a_partial_alert_is_normal_priority_and_tagged_apart(tmp_path: Path):

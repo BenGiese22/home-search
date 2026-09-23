@@ -26,9 +26,11 @@ someone is most likely to look at the viewer -- without doing the work three
 times on a day it stays on.
 
 Only a full run records success. A partial run (--only/--from) deliberately
-does not reset the clock, since it did not refresh everything. Neither does a
-run with a stage that exited EXIT_PARTIAL: its failed items still need the
-retry the alert promised.
+does not reset the clock, since it did not refresh everything. A run with a
+stage that exited EXIT_PARTIAL does: everything it could write landed and
+the data is consistent, and a listing that stays broken would otherwise
+turn every trigger into a full run. Its failed items are retried on the
+next run that actually executes.
 """
 
 import fcntl
@@ -434,7 +436,6 @@ def run_pipeline(
 
     scrape_flags = scrape_flags or []
     partial_alerts = _load_partial_alerts(partial_state) if partial_state else {}
-    any_partial = False
     if dry_run:
         for stage in stages:
             argv = [sys.executable, stage.script]
@@ -491,7 +492,6 @@ def run_pipeline(
             # discard every item that succeeded to protect nothing.
             print(f"[{stage.name}] ok with item failures (exit {code}) "
                   f"in {elapsed:.0f}s", flush=True)
-            any_partial = True
             reason = _stage_log_tail(log_handle, log_offset)
             # From the whole output, not the capped tail: a long enough id
             # list would lose the line's prefix to the character cap.
@@ -518,7 +518,8 @@ def run_pipeline(
             message = (
                 f"The {stage.name} stage finished after {elapsed:.0f}s on "
                 f"{this_home()}, but some items failed. Later stages still "
-                f"ran, and the failed items are retried on the next run."
+                f"ran, and the failed items are retried on the next run that "
+                f"actually executes."
             )
             if reason:
                 message += f"\n\n{reason}"
@@ -575,9 +576,11 @@ def run_pipeline(
     if stages:
         revalidate_fn()
 
-    # Not after a partial stage: its alert promises the failed items are
-    # retried next run, and a fresh marker would let --max-age skip that run.
-    if marker is not None and list(stages) == list(STAGES) and not any_partial:
+    # After a partial stage too. Skipping it would disable --max-age for as
+    # long as any one listing stays broken, and every trigger would redo the
+    # whole scrape, Mapbox and vision run to retry items that likely fail
+    # again. The alert says they wait for the next run that executes.
+    if marker is not None and list(stages) == list(STAGES):
         record_success(marker)
     return 0
 
