@@ -16,9 +16,20 @@ team-wide access. So the run leaves its state on the sandbox's own disk, and
 the reaper -- which does hold a credential, because it is a Vercel function --
 reads it from outside.
 
-`started` without `done` means a run is in progress: the launcher skips, and
-the reaper stops a sandbox stuck that way past its age limit. Both present
-means the run finished and the sandbox is billing for nothing.
+`started` without `done` means a run is in progress -- unless `started` is
+older than the 3h sandbox timeout, which the launcher ignores (short-list
+PR #28): the sandbox that wrote it cannot still be alive. The reaper stops a
+sandbox stuck that way past its age limit. Both present means the run
+finished and the sandbox is billing for nothing.
+
+Every timestamp in the markers (`started_at`, `finished_at`) is epoch
+SECONDS, from time.time(). short-list is JavaScript, where Date.now() is
+milliseconds, so its reader must multiply by 1000 before comparing. The
+Sep 8-19 outage was exactly that mismatch: read as milliseconds, every
+`started` looked decades stale, the in-progress guard never held, and the
+03:30 canary bootstrapped into a pipeline run still going. bootstrap.sh now
+checks the lock itself (exit 75, same as EXIT_LOCKED), but the guard is
+still the launcher's first line.
 
 Stdlib only, and it never reads or prints an environment variable. The
 secrets arrive in this process's environment purely to be inherited by the
@@ -129,6 +140,7 @@ def run_job(
     write_marker(
         run_dir / STARTED_NAME,
         {
+            # Epoch seconds, not ms -- see the module docstring.
             "started_at": now(),
             "job": job,
             "git_sha": sha if sha is not None else git_sha(root),
@@ -142,9 +154,11 @@ def run_job(
         code = runner(argv, root / LOG_DIR / f"{job}-{stamp}.log")
     except BaseException:
         # A crash in the runner itself must still close the marker pair.
-        # Leaving only `started` behind reads as "in progress" forever, and
-        # the launcher would refuse every subsequent run until the reaper's
-        # age limit finally stopped the sandbox.
+        # Leaving only `started` behind reads as "in progress", and the
+        # launcher would refuse every subsequent run until that `started`
+        # aged past the 3h sandbox timeout (or the reaper's age limit
+        # stopped the sandbox) -- a lost night for a crash that took
+        # seconds.
         write_marker(
             done_path,
             {"exit_code": 70, "finished_at": now(), "job": job},
