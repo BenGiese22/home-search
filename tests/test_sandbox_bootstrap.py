@@ -24,9 +24,14 @@ REPO = Path(__file__).resolve().parents[1]
 BOOTSTRAP = REPO / "ops" / "sandbox" / "bootstrap.sh"
 
 
+# Prepended to every stub: note it if the stub inherited bootstrap's lock
+# fd (9). A child holding it keeps the lock after bootstrap itself is gone.
+_FD_CHECK = 'if [ -e "/proc/$$/fd/9" ]; then echo "$(basename "$0") $1" >> "$FD_LOG"; fi\n'
+
+
 def _write_exe(path: Path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/usr/bin/env bash\n" + body)
+    path.write_text("#!/usr/bin/env bash\n" + _FD_CHECK + body)
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
@@ -55,6 +60,7 @@ def checkout(tmp_path):
     bin_dir = tmp_path / "bin"
     git_log = tmp_path / "git.log"
     probe_log = tmp_path / "probe.log"
+    fd_log = tmp_path / "fd.log"
     # A git that records what it was asked, probes the lock mid-bootstrap,
     # and leaves a background child behind holding the inherited lock fd --
     # the shape of an auto-gc git daemonises after a fetch.
@@ -64,6 +70,9 @@ def checkout(tmp_path):
         'if [ "$1" = reset ]; then\n'
         + _PROBE
         + "    sleep 2 >/dev/null 2>&1 &\n"
+        # SIGKILL bootstrap mid-reset: no EXIT trap runs, only the
+        # background child above is left.
+        '    if [ -n "${KILL_BOOTSTRAP:-}" ]; then kill -9 "$PPID"; sleep 1; fi\n'
         "fi\n"
         'if [ "$1" = rev-parse ]; then echo abc123; fi\n'
         "exit 0\n",
@@ -80,6 +89,7 @@ def checkout(tmp_path):
         "HOME": str(home),
         "GIT_LOG": str(git_log),
         "PROBE_LOG": str(probe_log),
+        "FD_LOG": str(fd_log),
     }
     return {
         "root": root,
@@ -87,6 +97,7 @@ def checkout(tmp_path):
         "env": env,
         "git_log": git_log,
         "probe_log": probe_log,
+        "fd_log": fd_log,
         "bin_dir": bin_dir,
     }
 
@@ -163,3 +174,44 @@ def test_the_python_fallback_refuses_too_when_flock_is_absent(checkout):
     assert result.returncode == 0, result.stderr
     with _lock_path(checkout["root"]).open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def test_no_child_command_inherits_the_lock_fd(checkout):
+    """git, pip and python must not hold the lock. If bootstrap is
+    SIGKILLed its EXIT trap never runs, and a child still holding the fd
+    keeps the lock, so run.py exits 75 until that child dies."""
+    result = _run(checkout)
+
+    assert result.returncode == 0, result.stderr
+    assert checkout["git_log"].exists()
+    assert not checkout["fd_log"].exists(), checkout["fd_log"].read_text()
+
+
+def test_a_sigkilled_bootstrap_leaves_the_lock_free(checkout):
+    env = {**checkout["env"], "KILL_BOOTSTRAP": "1"}
+    result = _run(checkout, env)
+
+    assert result.returncode == -9
+    # git's background child is still running (sleep 2); it must not be
+    # the thing keeping run.py out.
+    with _lock_path(checkout["root"]).open("a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def test_no_lock_tool_is_not_mistaken_for_a_held_lock(checkout):
+    """Neither flock nor python3 on PATH is a broken image, not a run in
+    progress. Reporting 75 would make the launcher skip quietly forever."""
+    tools = checkout["bin_dir"].parent / "tools"
+    tools.mkdir()
+    for name in ("bash", "dirname", "mkdir", "env"):
+        found = shutil.which(name)
+        assert found, name
+        (tools / name).symlink_to(found)
+    env = {**checkout["env"], "PATH": str(tools)}
+
+    result = _run(checkout, env)
+
+    assert result.returncode not in (0, EXIT_LOCKED)
+    assert "neither flock nor python3" in result.stderr
+    assert "holds" not in result.stderr
+    assert not checkout["git_log"].exists()

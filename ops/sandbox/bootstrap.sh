@@ -40,10 +40,24 @@ echo "== bootstrap: $REVISION =="
 # child inherits, so a background process git leaves behind (auto gc) would
 # otherwise keep holding it after bootstrap is gone.
 #
+# The unlock is not enough on its own. A SIGKILLed bootstrap never runs its
+# EXIT trap, and then any child still holding fd 9 holds the lock, and run.py
+# exits 75 until that child dies. So no child gets fd 9 at all: every git,
+# pip and python below runs through `nolock`, which closes it for that
+# command. Only lock_fd itself needs it.
+#
 # `flock` is util-linux, present on the sandbox image, but the python3
-# fallback costs nothing and fcntl.flock is the same lock run.py takes.
+# fallback costs nothing and fcntl.flock is the same lock run.py takes. With
+# neither, there is no way to take the lock -- a broken image, not a run in
+# progress -- so that exits EX_UNAVAILABLE rather than 75, which the
+# launcher would read as "skipped" on every run forever.
 EXIT_LOCKED=75
+EXIT_NO_LOCK_TOOL=69
 LOCK_PATH="data/.run/lock"
+
+nolock() {  # run a command without the lock fd
+    "$@" 9>&-
+}
 
 lock_fd() {  # lock_fd lock|unlock -- operates on fd 9
     if command -v flock >/dev/null 2>&1; then
@@ -52,6 +66,11 @@ lock_fd() {  # lock_fd lock|unlock -- operates on fd 9
         python3 -c "import fcntl, sys; fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB if sys.argv[1] == 'lock' else fcntl.LOCK_UN)" "$1"
     fi
 }
+
+if ! command -v flock >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+    echo "bootstrap: neither flock nor python3 is on PATH, so $LOCK_PATH cannot be taken; fix the image (exit $EXIT_NO_LOCK_TOOL)" >&2
+    exit "$EXIT_NO_LOCK_TOOL"
+fi
 
 mkdir -p "$(dirname "$LOCK_PATH")"
 exec 9>>"$LOCK_PATH"
@@ -64,18 +83,18 @@ trap 'lock_fd unlock || true; exec 9>&-' EXIT
 # --- source ---------------------------------------------------------------
 # The clone is shallow (depth 1), so fetch the revision by name rather than
 # assuming any history is present.
-git fetch --depth 1 origin "$REVISION"
-git reset --hard FETCH_HEAD
-echo "revision: $(git rev-parse --short HEAD) $(git log -1 --format=%s)"
+nolock git fetch --depth 1 origin "$REVISION"
+nolock git reset --hard FETCH_HEAD
+echo "revision: $(nolock git rev-parse --short HEAD) $(nolock git log -1 --format=%s)"
 
 # --- python ---------------------------------------------------------------
 if [ ! -x venv/bin/python ]; then
     echo "creating venv"
-    python3 -m venv venv
+    nolock python3 -m venv venv
 fi
 
 # Cheap when everything is already installed, which is the warm case.
-venv/bin/pip install -q --disable-pip-version-check -r requirements.txt
+nolock venv/bin/pip install -q --disable-pip-version-check -r requirements.txt
 
 # --- chromium -------------------------------------------------------------
 # install-deps needs root and is the one step that can legitimately fail on an
@@ -84,18 +103,18 @@ venv/bin/pip install -q --disable-pip-version-check -r requirements.txt
 # missing, nothing downstream can scrape and the run should stop here.
 if [ ! -d "${HOME}/.cache/ms-playwright" ]; then
     if command -v sudo >/dev/null 2>&1; then
-        sudo venv/bin/python -m playwright install-deps chromium \
+        nolock sudo venv/bin/python -m playwright install-deps chromium \
             || echo "warning: install-deps failed; continuing (the image may already carry them)"
     else
-        venv/bin/python -m playwright install-deps chromium \
+        nolock venv/bin/python -m playwright install-deps chromium \
             || echo "warning: install-deps failed and sudo is unavailable; continuing"
     fi
 fi
-venv/bin/python -m playwright install chromium
+nolock venv/bin/python -m playwright install chromium
 
 # --- report ---------------------------------------------------------------
 # Printed every run: when a sandbox misbehaves, the first question is always
 # which versions it is actually holding.
-echo "python:     $(venv/bin/python --version 2>&1)"
-echo "playwright: $(venv/bin/python -m playwright --version 2>&1)"
+echo "python:     $(nolock venv/bin/python --version 2>&1)"
+echo "playwright: $(nolock venv/bin/python -m playwright --version 2>&1)"
 echo "== bootstrap ok =="
