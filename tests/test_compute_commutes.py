@@ -367,6 +367,121 @@ def test_a_dead_token_during_geocoding_also_aborts():
         run_stage([listing("a"), listing("b")], geocode_fn=geocode_fn)
 
 
+# --- through the real adapter -------------------------------------------
+#
+# The tests above hand run() fakes that raise StopTheRun / RetryableStatus
+# directly. In production those come from mapbox_get *inside* the adapter,
+# whose _fetch wraps every exception in a token-scrubbed RoutingError. These
+# go through the adapter, because that wrapping is exactly what the fakes
+# skipped.
+
+GEOCODE_OK = {
+    "features": [
+        {
+            "properties": {
+                "coordinates": {
+                    "latitude": 39.86,
+                    "longitude": -105.08,
+                    "accuracy": "rooftop",
+                }
+            }
+        }
+    ]
+}
+
+
+def real_geocoder(http_get):
+    from src.routing_mapbox import geocode_address
+
+    return lambda parts: geocode_address(parts, "sk.token", http_get)
+
+
+def test_a_401_from_inside_the_adapter_still_stops_the_run():
+    """Without unwrapping, a dead token arrives as RoutingError, is recorded
+    as a route error on every listing, and never reaches EXIT_AUTH_FAILED."""
+    seen = []
+
+    def http_get(url):
+        seen.append(url)
+        raise StopTheRun("HTTP 401: the Mapbox token was rejected")
+
+    with pytest.raises(StopTheRun):
+        run_stage([listing("a"), listing("b")], geocode_fn=real_geocoder(http_get))
+    assert len(seen) == 1
+
+
+def test_a_429_from_inside_the_adapter_is_waited_out_and_retried():
+    calls = {"n": 0}
+
+    def http_get(url):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RetryableStatus(429, retry_after=5.0)
+        return GEOCODE_OK
+
+    code, upserts, slept = run_stage([listing("a")], geocode_fn=real_geocoder(http_get))
+    assert code == 0
+    assert 5.0 in slept
+    assert upserts[0][1].medtronic_minutes == 22.0
+
+
+# --- server errors ------------------------------------------------------
+
+
+class FakeResponse:
+    def __init__(self, status, headers=None):
+        self.status_code = status
+        self.headers = headers or {}
+
+    def raise_for_status(self):
+        raise AssertionError("mapbox_get should have classified this status")
+
+    def json(self):
+        return {}
+
+
+@pytest.mark.parametrize("status", [502, 503, 504])
+def test_a_gateway_error_is_classified_as_retryable(monkeypatch, status):
+    monkeypatch.setattr(
+        compute_commutes.requests, "get", lambda url, timeout: FakeResponse(status)
+    )
+    with pytest.raises(RetryableStatus) as excinfo:
+        compute_commutes.mapbox_get("https://api.mapbox.com/x")
+    assert excinfo.value.status == status
+    assert excinfo.value.retry_after == compute_commutes.SERVER_ERROR_WAIT
+
+
+def test_a_single_503_is_retried_rather_than_failing_the_listing():
+    """One transient 503 on a one-listing run used to fail the listing
+    outright -- and, with nothing else routed, the run."""
+    calls = {"n": 0}
+
+    def route_fn(origin, destination):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RetryableStatus(503, retry_after=compute_commutes.SERVER_ERROR_WAIT)
+        return (9.0, 22.0)
+
+    code, upserts, slept = run_stage([listing("a")], route_fn=route_fn)
+    assert code == 0
+    assert compute_commutes.SERVER_ERROR_WAIT in slept
+    assert upserts[0][1].medtronic_minutes == 22.0
+
+
+def test_a_persistent_503_gives_up_sooner_than_a_rate_limit():
+    """A 429 says when to come back; a 503 does not, and in a real outage
+    every listing would sit through the full rate-limit budget."""
+    attempts = {"n": 0}
+
+    def route_fn(origin, destination):
+        attempts["n"] += 1
+        raise RetryableStatus(503, retry_after=compute_commutes.SERVER_ERROR_WAIT)
+
+    _, upserts, _ = run_stage([listing("a")], route_fn=route_fn)
+    assert attempts["n"] == compute_commutes.SERVER_ERROR_RETRIES + 1
+    assert "503" in upserts[0][1].route_error
+
+
 # --- the token ----------------------------------------------------------
 
 

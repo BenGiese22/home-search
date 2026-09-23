@@ -20,6 +20,7 @@ apart:
   401/403   the token is dead. Stop. Continuing spends a request per listing
             to overwrite the corpus with empty commutes.
   429       we are going too fast. Wait for the reset and retry.
+            (502/503/504 also retry, once, after a short wait.)
   anything  record it in route_error and carry on; one bad address should
             else      not cost the other hundred their numbers.
 
@@ -87,6 +88,14 @@ MAX_RETRIES = 3
 # pipeline lease open long enough for the reaper to kill the sandbox.
 RATE_LIMIT_MAX_SLEEP = 60.0
 
+# 502/503/504 are retried too, but on a shorter leash than a 429. A rate
+# limit says when to come back; a gateway error does not, and in a real
+# outage every listing would otherwise sit through the full rate-limit
+# budget. One retry after a short wait is enough to ride out a blip.
+SERVER_ERROR_STATUSES = (502, 503, 504)
+SERVER_ERROR_RETRIES = 1
+SERVER_ERROR_WAIT = 2.0
+
 TIMEOUT_SECONDS = 30
 
 # Exit codes. Distinct on purpose: the pipeline surfaces the number and
@@ -116,7 +125,7 @@ class StopTheRun(RuntimeError):
 
 
 class RetryableStatus(RuntimeError):
-    """A rate limit. Carries how long the provider asked us to wait."""
+    """A rate limit or a gateway error. Carries how long to wait."""
 
     def __init__(self, status: int, retry_after: float):
         super().__init__(f"HTTP {status}")
@@ -161,6 +170,8 @@ def mapbox_get(url: str) -> dict:
         raise StopTheRun(f"HTTP {response.status_code}: the Mapbox token was rejected")
     if response.status_code == 429:
         raise RetryableStatus(429, retry_after=_retry_after(response))
+    if response.status_code in SERVER_ERROR_STATUSES:
+        raise RetryableStatus(response.status_code, retry_after=SERVER_ERROR_WAIT)
     response.raise_for_status()
     return response.json()
 
@@ -187,16 +198,35 @@ def _retry_after(response) -> float:
     return 5.0
 
 
+def _unwrapped(call):
+    """Run `call`, re-raising StopTheRun / RetryableStatus as themselves.
+
+    mapbox_get raises those *inside* the adapter, whose _fetch wraps every
+    exception in a token-scrubbed RoutingError. Left wrapped, a dead token
+    reads as one more route error per listing and never reaches
+    EXIT_AUTH_FAILED, and a 429 is never retried. Unwrapping is safe for
+    the token: neither class's message contains the URL.
+    """
+    try:
+        return call()
+    except RoutingError as exc:
+        if isinstance(exc.__cause__, (StopTheRun, RetryableStatus)):
+            raise exc.__cause__ from None
+        raise
+
+
 def _with_retries(call, sleep):
-    """Run `call`, waiting out rate limits. StopTheRun is never retried."""
+    """Run `call`, waiting out rate limits and gateway errors. StopTheRun is
+    never retried."""
     for attempt in range(MAX_RETRIES + 1):
         try:
-            return call()
+            return _unwrapped(call)
         except RetryableStatus as exc:
-            if attempt == MAX_RETRIES:
+            limit = MAX_RETRIES if exc.status == 429 else SERVER_ERROR_RETRIES
+            if attempt >= limit:
                 raise
             wait = min(max(exc.retry_after, 0.0), RATE_LIMIT_MAX_SLEEP)
-            print(f"  rate limited, waiting {wait:.0f}s", flush=True)
+            print(f"  HTTP {exc.status}, waiting {wait:.0f}s", flush=True)
             sleep(wait)
     raise AssertionError("unreachable")
 
