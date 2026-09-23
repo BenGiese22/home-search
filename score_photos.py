@@ -11,7 +11,7 @@ from anthropic.types.message_create_params import MessageCreateParamsNonStreamin
 from anthropic.types.messages.batch_create_params import Request
 
 from src.config import load_env
-from src.exit_codes import EXIT_PARTIAL
+from src.exit_codes import EXIT_PARTIAL, format_partial_line
 from src.turso_db import stage_connection
 from src.db import (
     all_listing_ids,
@@ -637,6 +637,8 @@ def _exit_code(unscored_ids: list[str], failed_submissions: int) -> int:
     if failed_submissions:
         parts.append(f"{failed_submissions} batch submission(s) failed")
     print(f"partial run: {'; '.join(parts)}")
+    # Last, for pipeline.py -- see src/exit_codes.py.
+    print(format_partial_line("score-photos", unscored_ids))
     return EXIT_PARTIAL
 
 

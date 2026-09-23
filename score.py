@@ -12,7 +12,7 @@ from src.db import (
     upsert_scores,
 )
 from src.commute import COMMUTE_SOURCE
-from src.exit_codes import EXIT_PARTIAL
+from src.exit_codes import EXIT_PARTIAL, format_partial_line
 from src.scoring import compute_collection_stats, finished_sqft, score_listing
 
 DATA_DIR = Path("data")
@@ -188,13 +188,14 @@ def main() -> int:
         print("(sorted by composite; rerun with --sort-by-value to sort by score per $100k)")
 
     if skipped_ids:
-        # Last line on purpose, so it's what the failure alert shows. A
+        # Last human-readable line on purpose, so the alert shows it. A
         # skipped listing keeps its old score, which is exactly why nothing
         # downstream would notice the skip without this.
         print(
             f"{len(skipped_ids)} of {len(listings)} listing(s) failed to score "
             f"and kept their old score: {', '.join(skipped_ids)}"
         )
+        print(format_partial_line("score", skipped_ids))
         return EXIT_PARTIAL
     return 0
 
