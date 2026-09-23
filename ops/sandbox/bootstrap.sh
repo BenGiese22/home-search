@@ -4,7 +4,11 @@
 # launcher calls it before every run, and a warm sandbox should finish it in
 # seconds.
 #
-#     bash ops/sandbox/bootstrap.sh [revision]
+#     bash ops/sandbox/bootstrap.sh [revision] [job]
+#
+# Given a job (the name run.py will be started with), bootstrap also marks
+# the run started before it does anything else -- see "provisional marker"
+# below. Without one it writes no markers at all, as before.
 #
 # The sandbox is persistent, so this is a cold path once and a no-op after.
 # Everything expensive -- the venv, the pip install, Chromium -- is skipped
@@ -18,9 +22,22 @@
 set -euo pipefail
 
 REVISION="${1:-main}"
+EXIT_USAGE=64  # EX_USAGE
+
+# The job goes into a JSON marker verbatim, so it must be a plain token.
+# Checked before the lock and before any marker is touched.
+JOB=""
+if [ "$#" -ge 2 ]; then
+    JOB="$2"
+    if ! [[ "$JOB" =~ ^[a-z0-9_-]+$ ]]; then
+        echo "bootstrap: job '$JOB' is not a simple token ([a-z0-9_-]+) (exit $EXIT_USAGE)" >&2
+        exit "$EXIT_USAGE"
+    fi
+fi
+
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
-echo "== bootstrap: $REVISION =="
+echo "== bootstrap: $REVISION${JOB:+ ($JOB)} =="
 
 # --- run lock -------------------------------------------------------------
 # Everything below rewrites the checkout (`git reset --hard`, `pip install`)
@@ -78,7 +95,62 @@ if ! lock_fd lock 2>/dev/null; then
     echo "bootstrap: a run holds $LOCK_PATH; not touching its checkout (exit $EXIT_LOCKED)" >&2
     exit "$EXIT_LOCKED"
 fi
-trap 'lock_fd unlock || true; exec 9>&-' EXIT
+
+# --- provisional marker ---------------------------------------------------
+# short-list's reaper fires at :00, the same minute the launcher runs
+# bootstrap. Until run.py wrote its own `started`, the reaper saw either the
+# PREVIOUS run's pair -- `done` beside `started`, "finished", so it stopped
+# the sandbox mid-bootstrap -- or no markers at all, and then judged age by
+# Sandbox.createdAt, which on a long-lived sandbox is days old, so it
+# reaped it as orphaned. Bootstrap already holds the run lock, so it marks
+# the run started here, before any git or pip; run.py overwrites this
+# `started` with its real one when it takes the lock next.
+#
+# Same rules as run.py's run_job: timestamps are epoch SECONDS (a float,
+# like time.time()), every write is temp file + rename in the same dir, and
+# the previous `done` is removed BEFORE `started` is written, or a stale
+# `done` would sit beside a fresh `started` and read as finished.
+#
+# A bootstrap that fails after this point closes the pair with `done` in the
+# EXIT trap: a bare `started` reads as "in progress" and blocks launches for
+# the 3h sandbox timeout. A successful one writes no `done` -- run.py is
+# about to start. (A SIGKILLed one runs no trap; that `started` ages out.)
+STARTED_PATH="data/.run/started"
+DONE_PATH="data/.run/done"
+MARKED=0
+
+now_secs() {
+    if command -v python3 >/dev/null 2>&1; then
+        nolock python3 -c 'import time; print(repr(time.time()))'
+    else
+        nolock date +%s.%N
+    fi
+}
+
+write_marker() {  # write_marker PATH JSON -- atomic within data/.run
+    local tmp="$1.tmp.$$"
+    printf '%s\n' "$2" >"$tmp" && nolock mv -f "$tmp" "$1"
+}
+
+on_exit() {
+    local code=$?
+    if [ "$MARKED" = 1 ] && [ "$code" -ne 0 ]; then
+        write_marker "$DONE_PATH" \
+            "{\"exit_code\": $code, \"finished_at\": $(now_secs || echo 0), \"job\": \"$JOB\"}" \
+            || echo "bootstrap: could not write $DONE_PATH" >&2
+    fi
+    lock_fd unlock || true
+    exec 9>&-
+}
+trap on_exit EXIT
+
+if [ -n "$JOB" ]; then
+    started_at="$(now_secs)"  # a bare assignment, so set -e sees a failure
+    nolock rm -f "$DONE_PATH"
+    write_marker "$STARTED_PATH" \
+        "{\"started_at\": $started_at, \"job\": \"$JOB\", \"provisional\": true}"
+    MARKED=1
+fi
 
 # --- source ---------------------------------------------------------------
 # The clone is shallow (depth 1), so fetch the revision by name rather than

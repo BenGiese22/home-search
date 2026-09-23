@@ -31,6 +31,16 @@ Sep 8-19 outage was exactly that mismatch: read as milliseconds, every
 checks the lock itself (exit 75, same as EXIT_LOCKED), but the guard is
 still the launcher's first line.
 
+run.py is not the only writer of `started`. A launcher that passes the job
+to bootstrap (`bootstrap.sh <revision> <job>`) gets a provisional marker
+written under the same lock before any git or pip -- the previous `done`
+removed, then `{"started_at", "job", "provisional": true}` -- so the reaper
+never sees the last run's finished pair, or no markers at all, while
+bootstrap works. run_job overwrites it with the real marker (no
+`provisional` key). A bootstrap that fails after writing it closes the pair
+itself with `done` and its exit code; one that succeeds leaves `started`
+alone for this script.
+
 Stdlib only, and it never reads or prints an environment variable. The
 secrets arrive in this process's environment purely to be inherited by the
 child.
