@@ -296,3 +296,22 @@ def test_rescore_all_keeps_a_good_score_when_the_photos_are_gone(
     assert row["photo_score_unavailable"] == 0
     assert row["condition_photo_score"] == 80.0
     assert "kept its existing score" in capsys.readouterr().out
+
+
+def test_a_result_that_failed_at_the_api_makes_the_run_partial(conn, monkeypatch, capsys):
+    """Submitted, paid for, and came back errored: the listing is unscored,
+    and the exit code has to say so."""
+    add_listing(conn, "L1")
+
+    class _ErroredResultBatches(_FakeBatches):
+        def results(self, batch_id):
+            return iter([SimpleNamespace(
+                custom_id="L1", result=SimpleNamespace(type="errored"))])
+
+    _prepare_main(conn, monkeypatch, _ErroredResultBatches())
+    monkeypatch.setattr(
+        score_photos, "build_batch_request", lambda lid, *a: SimpleNamespace(custom_id=lid)
+    )
+
+    assert score_photos.main() == EXIT_PARTIAL
+    assert "partial run: 1 listing(s) could not be scored: L1" in capsys.readouterr().out
