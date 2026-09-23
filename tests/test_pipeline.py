@@ -590,8 +590,15 @@ def test_final_exception_line_is_the_last_one_in_the_tail():
 # gain nothing -- the failed ones are retried next run either way.
 
 
-def _run_partial(tmp_path, runner, marker=None):
+def _run_partial(tmp_path, runner, marker=None, partial_state=None, kwargs_out=None):
     alerts = []
+
+    def notify_fn(title, message, **kwargs):
+        if kwargs_out is not None:
+            kwargs_out.append(kwargs)
+        alerts.append((title, message))
+        return True
+
     log_path = tmp_path / "pipeline.log"
     with log_path.open("w+") as log_handle:
         code = run_pipeline(
@@ -599,7 +606,8 @@ def _run_partial(tmp_path, runner, marker=None):
             runner=runner,
             log_handle=log_handle,
             marker=marker,
-            notify_fn=lambda title, message: alerts.append((title, message)) or True,
+            notify_fn=notify_fn,
+            partial_state=partial_state,
         )
     return code, alerts
 
@@ -630,13 +638,16 @@ def test_a_partial_stage_alerts_once_with_its_log_tail(tmp_path: Path, capsys):
     assert f"[commutes] ok with item failures (exit {EXIT_PARTIAL})" in capsys.readouterr().out
 
 
-def test_a_partial_run_still_counts_as_a_success(tmp_path: Path, never_revalidate_for_real):
-    """The data is consistent -- the failed items just are not in it yet --
-    so the run revalidates and resets the freshness clock like any other."""
+def test_a_partial_run_still_revalidates_but_is_not_fresh(
+    tmp_path: Path, never_revalidate_for_real
+):
+    """The writes landed, so the viewer's cache is stale either way. But the
+    alert promises the failed items are retried next run, and a fresh
+    marker would let --max-age skip exactly that run."""
     marker = tmp_path / "last.json"
     runner = LoggingRunner(exit_codes={"score_photos.py": EXIT_PARTIAL})
     _run_partial(tmp_path, runner, marker=marker)
-    assert is_fresh(marker, max_age_hours=6) is True
+    assert is_fresh(marker, max_age_hours=6) is False
     assert never_revalidate_for_real == [True]
 
 
@@ -653,3 +664,113 @@ def test_a_real_failure_after_a_partial_one_still_stops_the_run(tmp_path: Path):
         "home-search: commutes partially failed",
         "home-search: score failed",
     ]
+
+
+# --- a partial alert is news only when the failed set changes --------------
+#
+# A permanently broken listing makes its stage partial on every run. An
+# alert for each is four a day forever, and the real ones drown in them.
+
+
+def _partial_score(ids):
+    return LoggingRunner(
+        exit_codes={"score.py": EXIT_PARTIAL},
+        outputs={"score.py": f"L1: failed to score\nPARTIAL: score: {ids}\n"},
+    )
+
+
+def test_the_same_failed_set_twice_alerts_once(tmp_path: Path, capsys):
+    state = tmp_path / ".run" / "partial-alerts.json"
+    _, first = _run_partial(tmp_path, _partial_score("L1,L2"), partial_state=state)
+    _, second = _run_partial(tmp_path, _partial_score("L1,L2"), partial_state=state)
+    assert len(first) == 1
+    assert second == []
+    assert "same items as last time" in capsys.readouterr().out
+
+
+def test_a_changed_failed_set_alerts_again(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    _, alerts = _run_partial(tmp_path, _partial_score("L1,L2"), partial_state=state)
+    assert [t for t, _ in alerts] == ["home-search: score partially failed"]
+
+
+def test_a_clean_run_of_the_stage_clears_it(tmp_path: Path):
+    """Fixed, then broken the same way again, is a new failure."""
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    _run_partial(tmp_path, LoggingRunner(), partial_state=state)
+    assert "score" not in json.loads(state.read_text())
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert len(alerts) == 1
+
+
+def test_one_stages_set_does_not_suppress_anothers(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    runner = LoggingRunner(
+        exit_codes={"score_photos.py": EXIT_PARTIAL},
+        outputs={"score_photos.py": "PARTIAL: score-photos: L1\n"},
+    )
+    _, alerts = _run_partial(tmp_path, runner, partial_state=state)
+    assert [t for t, _ in alerts] == ["home-search: score-photos partially failed"]
+
+
+def test_a_partial_stage_with_no_partial_line_always_alerts(tmp_path: Path):
+    """No ids means nothing to compare, and a missed alert is the worse
+    mistake."""
+    state = tmp_path / "partial-alerts.json"
+    runner = LoggingRunner(exit_codes={"compute_commutes.py": EXIT_PARTIAL})
+    _, first = _run_partial(tmp_path, runner, partial_state=state)
+    _, second = _run_partial(tmp_path, runner, partial_state=state)
+    assert len(first) == len(second) == 1
+
+
+def test_a_corrupt_state_file_alerts_rather_than_suppressing(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    state.write_text("{not json")
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert len(alerts) == 1
+    assert json.loads(state.read_text()) == {"score": ["L1"]}
+
+
+def test_a_suppressed_partial_run_is_still_not_fresh(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    marker = tmp_path / "last.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    _run_partial(tmp_path, _partial_score("L1"), marker=marker, partial_state=state)
+    assert is_fresh(marker, max_age_hours=6) is False
+
+
+def test_a_partial_alert_is_normal_priority_and_tagged_apart(tmp_path: Path):
+    """A failure stops the run and gets high priority. Items failing in a
+    run that finished can wait for morning."""
+    kwargs = []
+    runner = LoggingRunner(exit_codes={"compute_commutes.py": EXIT_PARTIAL, "score.py": 1})
+    _run_partial(tmp_path, runner, kwargs_out=kwargs)
+    partial_kwargs, failure_kwargs = kwargs
+    assert partial_kwargs["priority"] == "default"
+    assert partial_kwargs["tags"] != failure_kwargs.get("tags", pipeline.FAILURE_TAGS)
+    assert failure_kwargs.get("priority", "high") == "high"
+
+
+def test_default_notify_passes_the_priority_and_tags_through(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(pipeline, "load_env", lambda: {"NTFY_TOPIC": "t"})
+    monkeypatch.setattr(pipeline, "send_email", lambda *a, **k: False)
+    monkeypatch.setattr(
+        pipeline, "notify",
+        lambda topic, title, message, **kw: seen.update(kw) or True,
+    )
+    pipeline._default_notify("t", "m", priority="default", tags=("warning",))
+    assert seen == {"priority": "default", "tags": ("warning",)}
+
+
+def test_a_long_id_list_still_parses_past_the_alert_cap(tmp_path: Path):
+    """The alert's tail is capped by characters, which would cut the
+    PARTIAL: prefix off a long line and make every run look new."""
+    ids = ",".join(f"L{n:05d}" for n in range(1000))
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score(ids), partial_state=state)
+    _, alerts = _run_partial(tmp_path, _partial_score(ids), partial_state=state)
+    assert alerts == []
