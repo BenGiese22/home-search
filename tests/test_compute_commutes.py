@@ -40,6 +40,7 @@ def run_stage(
     route_fn=None,
     sleeps=None,
     upserts=None,
+    canaries=(),
 ):
     conn = FakeConn()
     recorded = [] if upserts is None else upserts
@@ -53,6 +54,7 @@ def run_stage(
             arrive_by=ARRIVE,
             sleep=slept.append,
             upsert_fn=lambda c, lid, result: recorded.append((lid, result)),
+            canaries=canaries,
         ),
         recorded,
         slept,
@@ -111,31 +113,170 @@ def test_a_geocode_miss_still_writes_a_row():
     assert upserts[1][1].geocode_failed is False
 
 
-def test_a_corpus_where_nothing_geocodes_is_a_failed_run():
-    """One address the geocoder does not know is a fact about that address.
-    Every address failing is a fact about us -- and exiting 0 would hand the
-    scorer a corpus with no commutes in it, looking like a good run."""
-    listings = [listing(str(i)) for i in range(compute_commutes.NOTHING_ROUTED_FLOOR)]
-    code, upserts, _ = run_stage(listings, geocode_fn=lambda parts: None)
-    assert code == 4
-    assert len(upserts) == compute_commutes.NOTHING_ROUTED_FLOOR
+# A listing that has routed before, standing by as the canary. Its address is
+# its own so the fakes below can fail everything *except* it.
+CANARY_ADDRESS = "4012 Canary Court"
 
 
-def test_one_listing_that_will_not_geocode_is_not_a_failed_run():
+def canary():
+    return listing("canary", address=CANARY_ADDRESS)
+
+
+def geocode_all_but_canary_fails(parts):
+    return (39.9, -105.1, "rooftop") if parts.address == CANARY_ADDRESS else None
+
+
+# --- a run that routes nothing, with a canary ---------------------------
+
+
+def test_one_listing_that_will_not_geocode_is_not_a_failed_run(capsys):
     """2026-09-19: a run needed to measure exactly one listing, whose address
     (9233 North Lamar Street) would not geocode. 0/1 routed tripped
     EXIT_NOTHING_ROUTED and failed the entire pipeline -- indistinguishable
-    from a real Mapbox outage. One bad address is not that."""
+    from a real Mapbox outage. The canary tells them apart: it routes, so
+    the service works and the failure is a fact about that address."""
+    code, upserts, _ = run_stage(
+        [listing("a", address="9233 North Lamar Street")],
+        geocode_fn=geocode_all_but_canary_fails,
+        canaries=[canary()],
+    )
+    assert code == 0
+    assert len(upserts) == 1
+    assert upserts[0][1].geocode_failed is True
+    lines = capsys.readouterr().out.splitlines()
+    assert "a (9233 North Lamar Street, Westminster): no coordinates" in lines
+    assert (
+        "commutes: nothing routed, but canary canary routed fine; not systemic "
+        "-- the failed row(s) are recorded and will be retried next run: a"
+    ) in lines
+
+
+def test_the_canary_is_measured_but_never_written():
+    """The canary's row is a known-good measurement from an earlier run.
+    Writing the probe would churn it on every quiet run -- and, the day the
+    probe fails, overwrite a good commute with an empty one."""
+    code, upserts, _ = run_stage(
+        [listing("a", address="9233 North Lamar Street")],
+        geocode_fn=geocode_all_but_canary_fails,
+        canaries=[canary()],
+    )
+    assert code == 0
+    assert [lid for lid, _ in upserts] == ["a"]
+
+
+def test_a_canary_that_fails_too_fails_the_run(capsys):
+    """Any failure counts, a no-match included: a geocode-parse regression
+    answers "no match" for every address, the canary's among them."""
+    code, upserts, _ = run_stage(
+        [listing("a")], geocode_fn=lambda parts: None, canaries=[canary()]
+    )
+    assert code == compute_commutes.EXIT_NOTHING_ROUTED
+    assert [lid for lid, _ in upserts] == ["a"]
+    lines = capsys.readouterr().out.splitlines()
+    assert "commutes: canary canary failed (no coordinates)" in lines
+    assert (
+        "commutes: nothing routed, and every canary failed too (canary) "
+        "-- treating the run as failed"
+    ) in lines
+
+
+def test_the_canary_is_not_probed_when_something_routed():
+    geocoded = []
+
+    def geocode_fn(parts):
+        geocoded.append(parts.address)
+        return (39.86, -105.08, "rooftop")
+
+    code, _, _ = run_stage([listing("a")], geocode_fn=geocode_fn, canaries=[canary()])
+    assert code == 0
+    assert CANARY_ADDRESS not in geocoded
+
+
+def test_a_dead_token_during_the_canary_still_stops_the_run():
+    def geocode_fn(parts):
+        if parts.address == CANARY_ADDRESS:
+            raise StopTheRun("HTTP 401")
+        return None
+
+    with pytest.raises(StopTheRun):
+        run_stage([listing("a")], geocode_fn=geocode_fn, canaries=[canary()])
+
+
+# --- more than one canary -----------------------------------------------
+
+BROKEN_CANARY_ADDRESS = "1 Broken Canary Row"
+
+
+def test_a_bad_first_canary_is_rescued_by_a_good_second(capsys):
+    """One canary whose own address has stopped routing (a Mapbox data
+    change, a single 5xx blip) must not fail every quiet run by itself.
+    The next canary routes, so the service works."""
+    geocoded = []
+
+    def geocode_fn(parts):
+        geocoded.append(parts.address)
+        return geocode_all_but_canary_fails(parts)
+
+    third = listing("third", address="3 Unused Canary Way")
+    code, upserts, _ = run_stage(
+        [listing("a", address="9233 North Lamar Street")],
+        geocode_fn=geocode_fn,
+        canaries=[listing("broken", address=BROKEN_CANARY_ADDRESS), canary(), third],
+    )
+    assert code == 0
+    assert [lid for lid, _ in upserts] == ["a"]
+    # Stops at the first canary that routes.
+    assert "3 Unused Canary Way" not in geocoded
+    lines = capsys.readouterr().out.splitlines()
+    assert "commutes: canary broken failed (no coordinates)" in lines
+    assert (
+        "commutes: nothing routed, but canary canary routed fine; not systemic "
+        "-- the failed row(s) are recorded and will be retried next run: a"
+    ) in lines
+
+
+def test_every_canary_failing_fails_the_run(capsys):
+    canaries = [listing(f"c{i}", address=f"{i} Canary Court") for i in range(3)]
+    code, upserts, _ = run_stage(
+        [listing("a")], geocode_fn=lambda parts: None, canaries=canaries
+    )
+    assert code == compute_commutes.EXIT_NOTHING_ROUTED
+    assert [lid for lid, _ in upserts] == ["a"]
+    assert (
+        "commutes: nothing routed, and every canary failed too (c0, c1, c2) "
+        "-- treating the run as failed"
+    ) in capsys.readouterr().out.splitlines()
+
+
+def test_a_dead_token_on_a_later_canary_still_stops_the_run():
+    def geocode_fn(parts):
+        if parts.address == CANARY_ADDRESS:
+            raise StopTheRun("HTTP 401")
+        return None
+
+    with pytest.raises(StopTheRun):
+        run_stage(
+            [listing("a")],
+            geocode_fn=geocode_fn,
+            canaries=[listing("broken", address=BROKEN_CANARY_ADDRESS), canary()],
+        )
+
+
+# --- a run that routes nothing, on a corpus that has never routed -------
+
+
+def test_with_no_canary_one_bad_address_is_not_a_failed_run():
+    """No listing has ever routed, so there is nothing to probe with: fall
+    back to counting this run's attempts against the floor."""
     code, upserts, _ = run_stage(
         [listing("a", address="9233 North Lamar Street")],
         geocode_fn=lambda parts: None,
     )
     assert code == 0
-    assert len(upserts) == 1
     assert upserts[0][1].geocode_failed is True
 
 
-def test_just_under_the_floor_all_failing_is_still_not_a_failed_run():
+def test_with_no_canary_just_under_the_floor_is_still_not_a_failed_run():
     """Every row still lands -- that is what lets the selector retry each
     one next run instead of the whole corpus being read as a Mapbox outage."""
     listings = [
@@ -147,21 +288,32 @@ def test_just_under_the_floor_all_failing_is_still_not_a_failed_run():
     assert all(result.geocode_failed is True for _, result in upserts)
 
 
-def test_at_the_floor_nothing_routed_is_a_failed_run():
+def test_with_no_canary_at_the_floor_is_a_failed_run():
+    """FLOOR addresses all failing, with nothing succeeding and nothing
+    known-good to compare against, is a fact about us -- and exiting 0 would
+    hand the scorer a corpus with no commutes in it, looking like a good
+    run."""
     listings = [listing(str(i)) for i in range(compute_commutes.NOTHING_ROUTED_FLOOR)]
-    code, _, _ = run_stage(listings, geocode_fn=lambda parts: None)
-    assert code == 4
+    code, upserts, _ = run_stage(listings, geocode_fn=lambda parts: None)
+    assert code == compute_commutes.EXIT_NOTHING_ROUTED
+    assert len(upserts) == compute_commutes.NOTHING_ROUTED_FLOOR
 
 
-def test_under_the_floor_says_so_in_the_log(capsys):
+def test_with_no_canary_under_the_floor_says_so_in_the_log(capsys):
     """The line a human reads in a sandbox log has to say "below the floor,
     will retry" -- not just print nothing and exit 0 -- so "guard removed"
     and "guard below floor" don't look identical from the outside."""
     code, _, _ = run_stage([listing("a")], geocode_fn=lambda parts: None)
     assert code == 0
-    out = capsys.readouterr().out
-    assert "floor" in out
-    assert "retried" in out
+    floor = compute_commutes.NOTHING_ROUTED_FLOOR
+    assert (
+        f"commutes: nothing routed, no canary to probe with, "
+        f"and only 1 attempted (floor for calling that systemic is {floor}); "
+        f"the row(s) are recorded and will be retried next run"
+    ) in capsys.readouterr().out.splitlines()
+
+
+# --- the service failing to answer --------------------------------------
 
 
 def test_a_route_that_raises_still_writes_a_row_naming_the_failure():
@@ -169,16 +321,13 @@ def test_a_route_that_raises_still_writes_a_row_naming_the_failure():
     all. The listing then scored on the neutral fallback with nothing in the
     data saying why.
 
-    Only 1 listing here, which is under NOTHING_ROUTED_FLOOR, so this is not
-    read as a systemic failure -- code 0, not 4. The row/route_error content
-    is what this test is actually checking.
-    """
+    And at one listing it fails the run: the canary hits the same error."""
 
     def route_fn(origin, destination):
         raise RuntimeError("connection reset")
 
-    code, upserts, _ = run_stage([listing("a")], route_fn=route_fn)
-    assert code == 0
+    code, upserts, _ = run_stage([listing("a")], route_fn=route_fn, canaries=[canary()])
+    assert code == compute_commutes.EXIT_NOTHING_ROUTED
     assert len(upserts) == 1
     assert upserts[0][1].medtronic_minutes is None
     assert "connection reset" in upserts[0][1].route_error
@@ -252,18 +401,18 @@ def test_the_rate_limit_wait_is_capped():
 
 
 def test_a_rate_limit_gives_up_after_a_few_tries():
-    """1 listing is under NOTHING_ROUTED_FLOOR, so giving up here is code 0,
-    not a failed run -- the attempt count and the stored 429 are what this
-    test is actually checking."""
+    """A quota that is still exhausted after the retries is exhausted for
+    the canary too, so a one-listing run fails."""
     attempts = {"n": 0}
 
     def route_fn(origin, destination):
         attempts["n"] += 1
         raise RetryableStatus(429, retry_after=1.0)
 
-    code, upserts, _ = run_stage([listing("a")], route_fn=route_fn)
-    assert code == 0
-    assert attempts["n"] <= compute_commutes.MAX_RETRIES + 1
+    code, upserts, _ = run_stage([listing("a")], route_fn=route_fn, canaries=[canary()])
+    assert code == compute_commutes.EXIT_NOTHING_ROUTED
+    # The listing and then the canary, each through the full retry budget.
+    assert attempts["n"] == 2 * (compute_commutes.MAX_RETRIES + 1)
     assert "429" in upserts[0][1].route_error
 
 
@@ -291,6 +440,121 @@ def test_a_dead_token_during_geocoding_also_aborts():
 
     with pytest.raises(StopTheRun):
         run_stage([listing("a"), listing("b")], geocode_fn=geocode_fn)
+
+
+# --- through the real adapter -------------------------------------------
+#
+# The tests above hand run() fakes that raise StopTheRun / RetryableStatus
+# directly. In production those come from mapbox_get *inside* the adapter,
+# whose _fetch wraps every exception in a token-scrubbed RoutingError. These
+# go through the adapter, because that wrapping is exactly what the fakes
+# skipped.
+
+GEOCODE_OK = {
+    "features": [
+        {
+            "properties": {
+                "coordinates": {
+                    "latitude": 39.86,
+                    "longitude": -105.08,
+                    "accuracy": "rooftop",
+                }
+            }
+        }
+    ]
+}
+
+
+def real_geocoder(http_get):
+    from src.routing_mapbox import geocode_address
+
+    return lambda parts: geocode_address(parts, "sk.token", http_get)
+
+
+def test_a_401_from_inside_the_adapter_still_stops_the_run():
+    """Without unwrapping, a dead token arrives as RoutingError, is recorded
+    as a route error on every listing, and never reaches EXIT_AUTH_FAILED."""
+    seen = []
+
+    def http_get(url):
+        seen.append(url)
+        raise StopTheRun("HTTP 401: the Mapbox token was rejected")
+
+    with pytest.raises(StopTheRun):
+        run_stage([listing("a"), listing("b")], geocode_fn=real_geocoder(http_get))
+    assert len(seen) == 1
+
+
+def test_a_429_from_inside_the_adapter_is_waited_out_and_retried():
+    calls = {"n": 0}
+
+    def http_get(url):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RetryableStatus(429, retry_after=5.0)
+        return GEOCODE_OK
+
+    code, upserts, slept = run_stage([listing("a")], geocode_fn=real_geocoder(http_get))
+    assert code == 0
+    assert 5.0 in slept
+    assert upserts[0][1].medtronic_minutes == 22.0
+
+
+# --- server errors ------------------------------------------------------
+
+
+class FakeResponse:
+    def __init__(self, status, headers=None):
+        self.status_code = status
+        self.headers = headers or {}
+
+    def raise_for_status(self):
+        raise AssertionError("mapbox_get should have classified this status")
+
+    def json(self):
+        return {}
+
+
+@pytest.mark.parametrize("status", [502, 503, 504])
+def test_a_gateway_error_is_classified_as_retryable(monkeypatch, status):
+    monkeypatch.setattr(
+        compute_commutes.requests, "get", lambda url, timeout: FakeResponse(status)
+    )
+    with pytest.raises(RetryableStatus) as excinfo:
+        compute_commutes.mapbox_get("https://api.mapbox.com/x")
+    assert excinfo.value.status == status
+    assert excinfo.value.retry_after == compute_commutes.SERVER_ERROR_WAIT
+
+
+def test_a_single_503_is_retried_rather_than_failing_the_listing():
+    """One transient 503 on a one-listing run used to fail the listing
+    outright -- and, with nothing else routed, the run."""
+    calls = {"n": 0}
+
+    def route_fn(origin, destination):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RetryableStatus(503, retry_after=compute_commutes.SERVER_ERROR_WAIT)
+        return (9.0, 22.0)
+
+    code, upserts, slept = run_stage([listing("a")], route_fn=route_fn)
+    assert code == 0
+    assert compute_commutes.SERVER_ERROR_WAIT in slept
+    assert upserts[0][1].medtronic_minutes == 22.0
+
+
+def test_a_persistent_503_gives_up_sooner_than_a_rate_limit():
+    """A 429 says when to come back; a 503 does not, and in a real outage
+    every listing would sit through the full rate-limit budget."""
+    attempts = {"n": 0}
+
+    def route_fn(origin, destination):
+        attempts["n"] += 1
+        raise RetryableStatus(503, retry_after=compute_commutes.SERVER_ERROR_WAIT)
+
+    _, upserts, _ = run_stage([listing("a")], route_fn=route_fn)
+    assert attempts["n"] == compute_commutes.SERVER_ERROR_RETRIES + 1
+    assert "503" in upserts[0][1].route_error
 
 
 # --- the token ----------------------------------------------------------

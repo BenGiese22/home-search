@@ -26,12 +26,17 @@ someone is most likely to look at the viewer -- without doing the work three
 times on a day it stays on.
 
 Only a full run records success. A partial run (--only/--from) deliberately
-does not reset the clock, since it did not refresh everything.
+does not reset the clock, since it did not refresh everything. A run with a
+stage that exited EXIT_PARTIAL does: everything it could write landed and
+the data is consistent, and a listing that stays broken would otherwise
+turn every trigger into a full run. Its failed items are retried on the
+next run that actually executes.
 """
 
 import fcntl
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -43,6 +48,7 @@ from pathlib import Path
 from src.config import load_env, this_home
 from src.mailer import send_email
 from src.notify import notify
+from src.exit_codes import EXIT_PARTIAL, parse_partial_line
 from src.db import (
     acquire_pipeline_lease,
     release_pipeline_lease,
@@ -54,6 +60,15 @@ DATA_DIR = Path("data")
 LOG_DIR = DATA_DIR / "logs"
 LOCK_PATH = DATA_DIR / ".pipeline.lock"
 MARKER_PATH = DATA_DIR / ".pipeline-last-success.json"
+# Which items each stage last alerted on for a partial run, and when. Per
+# execution home, like everything else under data/, which is fine: each home
+# alerts for a set it has not seen, then at most once a window while the
+# same set keeps failing.
+PARTIAL_ALERTS_PATH = DATA_DIR / ".run" / "partial-alerts.json"
+# How long an alert for a (kind, ids) keeps the same one quiet. Once and
+# never again is easy to miss -- a dead API key would get one alert, ever --
+# while one every run is four a day that bury the real ones.
+PARTIAL_REALERT_SECONDS = 24 * 3600
 
 DEFAULT_MAX_AGE_HOURS = 6.0
 
@@ -153,8 +168,56 @@ def record_success(marker: Path) -> None:
     }))
 
 
+def _load_partial_alerts(path: Path) -> dict[str, dict]:
+    """Each stage's last-alerted cause and failed ids, and when, as
+    {"kind", "ids", "alerted_at"} (epoch seconds).
+    Any doubt reads as empty: a lost record costs one repeated alert, a
+    wrong one hides a new failure."""
+    try:
+        state = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def _save_partial_alerts(path: Path, state: dict[str, dict]) -> None:
+    """Atomic, so a run killed mid-write leaves the old record rather than a
+    truncated one."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(state, indent=2, sort_keys=True))
+        os.replace(tmp, path)
+    except OSError as exc:
+        # Bookkeeping for alert noise; never a reason to fail the run.
+        print(f"pipeline: could not save {path} ({exc})", flush=True)
+
+
+def _already_alerted(previous, current: dict, now: float) -> bool:
+    """Whether a stored record is the (kind, ids) just reported, alerted on
+    within the last PARTIAL_REALERT_SECONDS. A record in any other shape --
+    a bare id list from before kinds, or one with no time -- is not."""
+    if not isinstance(previous, dict):
+        return False
+    alerted_at = previous.get("alerted_at")
+    if not isinstance(alerted_at, (int, float)):
+        return False
+    return (
+        previous.get("kind") == current["kind"]
+        and previous.get("ids") == current["ids"]
+        and now - alerted_at < PARTIAL_REALERT_SECONDS
+    )
+
+
 def _default_runner(argv, log_handle=None):
-    process = subprocess.run(argv, stdout=log_handle, stderr=subprocess.STDOUT)
+    # Unbuffered, or the alert reads the wrong end of the log. With stdout
+    # redirected to a file a child block-buffers it, so a stage that reports
+    # its error on stderr and exits nonzero has that report land *before*
+    # its buffered progress lines -- and the tail _stage_log_tail reads back
+    # ends in chatter instead of the error. Set in the env rather than as
+    # `-u` in argv so the printed command (and --dry-run) stay unchanged.
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    process = subprocess.run(argv, stdout=log_handle, stderr=subprocess.STDOUT, env=env)
     return process.returncode
 
 
@@ -175,7 +238,21 @@ def _default_revalidate() -> bool:
     return revalidate(env["SHORT_LIST_URL"], env["REVALIDATE_SECRET"])
 
 
-def _default_notify(title: str, message: str) -> bool:
+FAILURE_PRIORITY = "high"
+FAILURE_TAGS = ("rotating_light",)
+# A partial stage finished and the run went on, so this can wait for
+# morning. Its own tag so the two read differently at a glance.
+PARTIAL_PRIORITY = "default"
+PARTIAL_TAGS = ("warning",)
+
+
+def _default_notify(
+    title: str,
+    message: str,
+    *,
+    priority: str = FAILURE_PRIORITY,
+    tags=FAILURE_TAGS,
+) -> bool:
     """Tell someone the run failed. Returns whether anything was delivered.
 
     Email AND ntfy, both attempted, neither required. That is not belt and
@@ -205,8 +282,8 @@ def _default_notify(title: str, message: str) -> bool:
         env.get("NTFY_TOPIC", ""),
         title,
         message,
-        priority="high",
-        tags=("rotating_light",),
+        priority=priority,
+        tags=tuple(tags),
     )
     return emailed or pushed
 
@@ -229,31 +306,85 @@ TRANSIENT_MARKERS = (
     "socket.timeout",
     "requests.exceptions.ConnectionError",
     "requests.exceptions.Timeout",
+    # The Anthropic SDK's own names for "try again later". Each one reaches
+    # a traceback only after the SDK's retries gave up.
+    "OverloadedError",
+    "InternalServerError",
+    "APIConnectionError",
+    "APITimeoutError",
+)
+
+# A server-side HTTP failure the driver reports in its message rather than
+# its type: turso_serverless raises "HTTP status 502" (or 503, 504...) as a
+# plain ProtocolError/OperationalError. A 4xx stays "action needed" -- a
+# rejected token or a bad statement fails the same way every time.
+_SERVER_ERROR_STATUS = re.compile(r"\bHTTP status 5\d\d\b")
+
+
+# Spelled like a transient error, but it is not one. A Playwright selector
+# timeout is what a Compass redesign looks like, and that fails every run
+# until someone fixes the selector -- the opposite of "retries on its own".
+NEVER_TRANSIENT = ("playwright._impl._errors.TimeoutError",)
+
+# The line a traceback ends on: `KeyError: 'x'`, `module.Type: message`, or
+# a bare `SomeError`. The type has to look like an exception class, so a log
+# prefix such as `compute_commutes: 0/5 routed` is not mistaken for one.
+_EXCEPTION_LINE = re.compile(
+    r"^(?P<type>(?:[A-Za-z_]\w*\.)*\w*(?:Error|Exception|Timeout|timeout))(?::\s|$)"
 )
 
 
+def _final_exception_line(text: str) -> str | None:
+    """The last `Type: message` line in the tail, or None with no traceback."""
+    for line in reversed(text.splitlines()):
+        if _EXCEPTION_LINE.match(line.strip()):
+            return line.strip()
+    return None
+
+
 def _looks_transient(text: str) -> bool:
-    return any(marker in text for marker in TRANSIENT_MARKERS)
+    """Judge only the exception the stage died on.
 
-
-def _stage_log_tail(log_handle, offset) -> str:
-    """The failed stage's own captured stdout/stderr, sliced out of the log
-    file every stage's subprocess already writes into -- no new IPC needed,
-    since `offset` (recorded before the stage ran) to EOF is exactly that
-    stage's output and nothing before it.
-
-    Empty when there is no log (e.g. --dry-run, where log_handle is None)
-    or nothing was captured at `offset`, which is what tells the caller to
-    fall back to the old generic message with no reason text.
+    Not "any marker anywhere": the tail is also the stage's own chatter, and
+    a per-listing ConnectionError it logged and skipped past earlier says
+    nothing about the KeyError that actually ended it. No traceback at all
+    (a stage that returned its own exit code) is not evidence of a network
+    blip either, so that reads as "action needed" too.
     """
+    line = _final_exception_line(text)
+    if line is None:
+        return False
+    exc_type = _EXCEPTION_LINE.match(line).group("type")
+    if exc_type in NEVER_TRANSIENT:
+        return False
+    if _SERVER_ERROR_STATUS.search(line):
+        return True
+    return exc_type in TRANSIENT_MARKERS or exc_type.rsplit(".", 1)[-1] in TRANSIENT_MARKERS
+
+
+def _stage_output(log_handle, offset) -> str:
+    """The stage's own captured stdout/stderr, sliced out of the log file
+    every stage's subprocess already writes into -- no new IPC needed, since
+    `offset` (recorded before the stage ran) to EOF is exactly that stage's
+    output and nothing before it. Empty when there is no log."""
     if log_handle is None or offset is None:
         return ""
     try:
         log_handle.flush()
         log_handle.seek(offset)
-        text = log_handle.read()
+        return log_handle.read()
     except (OSError, ValueError):
         return ""
+
+
+def _stage_log_tail(log_handle, offset) -> str:
+    """The end of a stage's _stage_output, capped for an alert.
+
+    Empty when there is no log (e.g. --dry-run, where log_handle is None)
+    or nothing was captured at `offset`, which is what tells the caller to
+    fall back to the old generic message with no reason text.
+    """
+    text = _stage_output(log_handle, offset)
     tail = "\n".join(text.splitlines()[-ALERT_LOG_MAX_LINES:]).strip()
     return tail[-ALERT_LOG_MAX_CHARS:]
 
@@ -283,6 +414,7 @@ def run_pipeline(
     renew_lease=None,
     notify_fn=None,
     forwarded=(),
+    partial_state=None,
 ) -> int:
     # Late-bound rather than default arguments so tests (and any caller) can
     # substitute them by patching the module attribute.
@@ -293,8 +425,9 @@ def run_pipeline(
     if notify_fn is None:
         notify_fn = _default_notify
 
-    def alert(title: str, message: str) -> None:
-        """Notify without ever becoming the failure.
+    def alert(title: str, message: str, **kwargs) -> bool:
+        """Notify without ever becoming the failure. Returns whether it was
+        delivered; a notifier that returns nothing counts as delivered.
 
         src/notify.py already swallows delivery errors, but the call reaches
         it through load_env(), and a malformed .env raising here would kill
@@ -303,15 +436,18 @@ def run_pipeline(
         sent; it is not a reason to lose the exit code that says what broke.
         """
         try:
-            notify_fn(title, message)
+            delivered = notify_fn(title, message, **kwargs)
         except Exception as exc:  # noqa: BLE001 -- the whole point
             print(f"pipeline: notification failed ({type(exc).__name__}: {exc})",
                   flush=True)
+            return False
+        return delivered is not False
 
     if marker is not None and is_fresh(marker, max_age_hours):
         raise Skipped(f"last successful run was under {max_age_hours}h ago")
 
     scrape_flags = scrape_flags or []
+    partial_alerts = _load_partial_alerts(partial_state) if partial_state else {}
     if dry_run:
         for stage in stages:
             argv = [sys.executable, stage.script]
@@ -361,6 +497,58 @@ def run_pipeline(
             log_offset = log_handle.tell()
         code = runner(argv, log_handle=log_handle)
         elapsed = time.monotonic() - started
+        if code == EXIT_PARTIAL:
+            # The stage finished and wrote everything it could; only some
+            # items failed. Later stages read a consistent database -- the
+            # failed items are just not in it yet -- so stopping here would
+            # discard every item that succeeded to protect nothing.
+            print(f"[{stage.name}] ok with item failures (exit {code}) "
+                  f"in {elapsed:.0f}s", flush=True)
+            reason = _stage_log_tail(log_handle, log_offset)
+            # From the whole output, not the capped tail: a long enough id
+            # list would lose the line's prefix to the character cap.
+            report = parse_partial_line(_stage_output(log_handle, log_offset), stage.name)
+            # The cause is part of the key: the same ids failing for a new
+            # reason (a revoked key, after their results errored) is news.
+            current = (
+                None if report is None
+                else {"kind": report.kind, "ids": sorted(report.ids)}
+            )
+            previous = partial_alerts.get(stage.name)
+            if partial_state is not None and current is None:
+                # No PARTIAL line means nothing to compare next time, so
+                # the record goes and the next partial run alerts again.
+                partial_alerts.pop(stage.name, None)
+                _save_partial_alerts(partial_state, partial_alerts)
+            if current is not None and _already_alerted(previous, current, time.time()):
+                # A listing that is broken for good fails every run. An
+                # alert a day for it keeps it in view; four a day forever
+                # is noise that buries the next real one.
+                print(f"[{stage.name}] same items as last time; not alerting again "
+                      f"until {PARTIAL_REALERT_SECONDS // 3600}h after the last alert",
+                      flush=True)
+                continue
+            message = (
+                f"The {stage.name} stage finished after {elapsed:.0f}s on "
+                f"{this_home()}, but some items failed. Later stages still "
+                f"ran, and the failed items are retried on the next run that "
+                f"actually executes."
+            )
+            if reason:
+                message += f"\n\n{reason}"
+            delivered = alert(
+                f"home-search: {stage.name} partially failed",
+                message,
+                priority=PARTIAL_PRIORITY,
+                tags=PARTIAL_TAGS,
+            )
+            # Recorded only once it arrived. With ntfy and email both down,
+            # a record saved first would call the set reported, and every
+            # later run would stay quiet about an alert nobody ever got.
+            if partial_state is not None and current is not None and delivered:
+                partial_alerts[stage.name] = {**current, "alerted_at": time.time()}
+                _save_partial_alerts(partial_state, partial_alerts)
+            continue
         if code != 0:
             print(f"[{stage.name}] FAILED (exit {code}) after {elapsed:.0f}s", flush=True)
             # Which stage, because that is the whole diagnostic. The sandbox
@@ -390,6 +578,9 @@ def run_pipeline(
             # publish results computed from half-updated data.
             return code
         print(f"[{stage.name}] ok in {elapsed:.0f}s", flush=True)
+        if partial_state is not None and stage.name in partial_alerts:
+            del partial_alerts[stage.name]
+            _save_partial_alerts(partial_state, partial_alerts)
 
     # Every stage wrote straight to the database the viewer reads, so any
     # successful run -- full or partial -- has changed what it should serve.
@@ -398,6 +589,10 @@ def run_pipeline(
     if stages:
         revalidate_fn()
 
+    # After a partial stage too. Skipping it would disable --max-age for as
+    # long as any one listing stays broken, and every trigger would redo the
+    # whole scrape, Mapbox and vision run to retry items that likely fail
+    # again. The alert says they wait for the next run that executes.
     if marker is not None and list(stages) == list(STAGES):
         record_success(marker)
     return 0
@@ -496,6 +691,7 @@ def main() -> int:
                 max_age_hours=max_age_hours,
                 log_handle=log_handle,
                 forwarded=forwarded,
+                partial_state=PARTIAL_ALERTS_PATH,
                 renew_lease=lambda: renew_pipeline_lease(lease_conn, lease_token),
             )
     except Skipped as exc:

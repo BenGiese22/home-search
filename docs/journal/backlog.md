@@ -209,6 +209,14 @@ the empty-tab case is the one actually observed in the wild.
 
 ## Forward the sandbox's failure tail
 
+**Update 2026-09-23:** mostly done by #107, from the runner side rather than
+the reaper's. On failure the pipeline now reads the failed stage's last 30
+lines of log back and puts them in the email/ntfy alert. What is still
+missing: it only fires when `pipeline.py` itself survives to send the alert,
+so a VM killed by the reaper still has no tail in Vercel's logs. Also, until
+stages run unbuffered, the tail can end before the traceback (decisions,
+2026-09-19).
+
 The runner holds no Vercel credential, so nothing it prints reaches Vercel's
 logs. Its stage output lives on an ephemeral filesystem readable only by
 resuming the sandbox. When a run fails, the reason is therefore visible only

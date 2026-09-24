@@ -41,44 +41,49 @@ REQUIRED_ENV_VARS = ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN")
 # compute_commutes' open-ended rate-limit wait -- there is no Retry-After to
 # read here, and a genuinely dead credential should still fail in a few
 # seconds rather than have its failure notification delayed by minutes of
-# backoff.
+# backoff. One wait between each pair of attempts, so the schedule is
+# exactly CONNECT_MAX_ATTEMPTS - 1 long.
 CONNECT_MAX_ATTEMPTS = 3
-CONNECT_BACKOFF_SECONDS = (1, 2, 4)
+CONNECT_BACKOFF_SECONDS = (1, 2)
+
+# turso_serverless has no status attribute on its errors: session.py turns a
+# non-200 response into ProtocolError("HTTP status NNN: ..."), and
+# connection.py re-raises that as OperationalError with the same message.
+# The prefix is the driver's own text, not echoed SQL, so it is a reliable
+# enough discriminator for the two statuses that mean "this credential is
+# refused" -- and those fail identically on every attempt, so retrying them
+# only delays the alert. Any other status (a 502 from a proxy blip) is still
+# retried.
+#
+# Because this depends on the driver's wording, requirements.txt pins
+# turso_serverless to an exact version (tests/test_turso_db.py checks the
+# pin matches what is installed). Re-read session.py before bumping it.
+_AUTH_FAILURE = re.compile(r"HTTP status (401|403)\b")
+
+
+def _is_retryable(exc: Exception) -> bool:
+    return not _AUTH_FAILURE.search(str(exc))
 
 
 def _retry_with_backoff(attempt_fn: Callable, sleep: Callable[[float], None]):
     """Retries `attempt_fn` up to CONNECT_MAX_ATTEMPTS times with a short
-    backoff. Shared by connect() and stage_connection() -- the two places a
-    stage's startup can hit a transient Turso failure.
+    backoff. An auth rejection is raised at once: it is not transient.
 
-    connect() itself does no network I/O: turso_serverless.connect() only
-    builds a Session/Connection object. The retry there is cheap insurance
-    against a future driver version that connects eagerly, but the real
-    first round-trip happens in stage_connection()'s ensure_schema() call,
-    which is what this decorates a second time around.
+    Configuration errors never reach this: both callers check the env before
+    the first attempt, because a missing URL is just as missing a second
+    later.
     """
     for attempt in range(CONNECT_MAX_ATTEMPTS):
         try:
             return attempt_fn()
-        except Exception:
-            if attempt == CONNECT_MAX_ATTEMPTS - 1:
+        except Exception as exc:
+            if attempt == CONNECT_MAX_ATTEMPTS - 1 or not _is_retryable(exc):
                 raise
             sleep(CONNECT_BACKOFF_SECONDS[attempt])
 
 
-def connect(
-    env: Mapping[str, str] | None = None,
-    connect_fn: Callable = turso_serverless.connect,
-    *,
-    sleep: Callable[[float], None] = time.sleep,
-):
-    """Opens the hosted Turso connection the stages read and write.
-
-    One place remembers to set the row factory, so no stage has to. `env`
-    defaults to the merged .env/process-environment lookup; `connect_fn` is
-    injected so tests never open a real session, and `sleep` so a test never
-    waits out a real backoff.
-    """
+def _credentials(env: Mapping[str, str] | None) -> tuple[str, str]:
+    """The URL and token, or a RuntimeError naming what is missing."""
     env = load_env() if env is None else env
     missing = [key for key in REQUIRED_ENV_VARS if not env.get(key)]
     if missing:
@@ -87,27 +92,47 @@ def connect(
             + ", ".join(missing)
             + " (set them in .env -- see .env.example)"
         )
-    conn = _connect_with_retries(
-        connect_fn, env["TURSO_DATABASE_URL"], env["TURSO_AUTH_TOKEN"], sleep
-    )
+    return env["TURSO_DATABASE_URL"], env["TURSO_AUTH_TOKEN"]
+
+
+def _open(connect_fn: Callable, url: str, auth_token: str):
+    """One connection attempt, no retry. Sets the row factory."""
+    conn = connect_fn(url, auth_token=auth_token)
     conn.row_factory = ROW_FACTORY
     return conn
 
 
-def _connect_with_retries(connect_fn: Callable, url: str, auth_token: str, sleep):
-    """Retries a failed connection attempt with a short exponential backoff.
+def _close_quietly(conn) -> None:
+    """Best effort. The connection being abandoned is usually the one that
+    just failed, so close() raising is expected and must not replace the
+    error that actually matters."""
+    try:
+        conn.close()
+    except Exception:
+        pass
 
-    turso_serverless's own exceptions (dbapi.py) do not distinguish "the
-    network is down" from "the credential is wrong" at this call -- both
-    would surface the same way from a driver that has not tried to reach the
-    server yet. Retrying broadly rather than picking out a connection-class
-    exception is the deliberate trade-off that follows: a real auth failure
-    just fails the same way three times in as many seconds instead of one,
-    which is cheap next to a transient blip going unretried.
+
+def connect(
+    env: Mapping[str, str] | None = None,
+    connect_fn: Callable = turso_serverless.connect,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+):
+    """Opens the hosted Turso connection the ops/ scripts read and write.
+
+    One place remembers to set the row factory, so no caller has to. `env`
+    defaults to the merged .env/process-environment lookup; `connect_fn` is
+    injected so tests never open a real session, and `sleep` so a test never
+    waits out a real backoff.
+
+    turso_serverless.connect() itself does no network I/O -- it only builds a
+    Session/Connection object -- so this retry is cheap insurance against a
+    driver version that connects eagerly. The stages go through
+    stage_connection(), which retries around the real first round-trip
+    instead and does not stack this retry inside its own.
     """
-    return _retry_with_backoff(
-        lambda: connect_fn(url, auth_token=auth_token), sleep
-    )
+    url, auth_token = _credentials(env)
+    return _retry_with_backoff(lambda: _open(connect_fn, url, auth_token), sleep)
 
 # source_url is what a hosted photo actually IS. (listing_id, position) is
 # only where it sits: a listing can relist under the same id with entirely
@@ -445,9 +470,18 @@ def stage_connection(
     included, not just the schema check -- since a connection that failed
     partway through is not one worth reusing.
     """
+    url, auth_token = _credentials(env)
+
     def _attempt():
-        conn = with_stream_recovery(connect(env, connect_fn, sleep=sleep))
-        ensure_schema(conn)
+        # One connect per attempt: going through connect() here would nest
+        # its retry inside this one, 3 x 3 connects before a dead network
+        # surfaced.
+        conn = with_stream_recovery(_open(connect_fn, url, auth_token))
+        try:
+            ensure_schema(conn)
+        except Exception:
+            _close_quietly(conn)
+            raise
         return conn
 
     return _retry_with_backoff(_attempt, sleep)

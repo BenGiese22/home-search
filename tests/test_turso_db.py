@@ -715,3 +715,175 @@ def test_the_real_schema_still_migrates_onto_an_older_table():
 
     columns = {r[1] for r in conn.execute("PRAGMA table_info(rejections)")}
     assert {"listing_ref", "compass_synced_at", "compass_sync_note"} <= columns
+
+
+def _env():
+    return {"TURSO_DATABASE_URL": "libsql://db", "TURSO_AUTH_TOKEN": "t"}
+
+
+def _flaky_conn_class(opened, fail_until, close_raises=False):
+    """A connection whose statements fail until `fail_until` connections have
+    been opened, backed by one shared in-memory SQLite database once they
+    stop failing."""
+    backing = sqlite3.connect(":memory:")
+
+    class _Conn:
+        def __init__(self):
+            self.row_factory = None
+            self.closed = False
+
+        def execute(self, *a, **k):
+            if len(opened) < fail_until:
+                raise ConnectionError("blip")
+            return backing.execute(*a, **k)
+
+        def commit(self):
+            return backing.commit()
+
+        def close(self):
+            if close_raises:
+                raise OSError("close on a dead socket")
+            self.closed = True
+
+    return _Conn
+
+
+def test_the_backoff_schedule_has_one_wait_per_retry():
+    """N attempts have N-1 waits between them. A schedule longer than that
+    carries a value nothing ever reads, which misleads whoever tunes it."""
+    assert len(turso_db.CONNECT_BACKOFF_SECONDS) == turso_db.CONNECT_MAX_ATTEMPTS - 1
+
+
+def test_stage_connection_does_not_retry_missing_configuration():
+    """A missing URL or token will be just as missing a second later. Retrying
+    it only delays the failure notification that says what is wrong."""
+    slept = []
+    attempts = []
+
+    def connect_fn(*a, **k):
+        attempts.append(a)
+        return _FakeTursoConnection()
+
+    with pytest.raises(RuntimeError, match="TURSO_"):
+        turso_db.stage_connection({}, connect_fn=connect_fn, sleep=slept.append)
+
+    assert attempts == []
+    assert slept == []
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_stage_connection_does_not_retry_an_auth_failure(status):
+    """The driver turns an HTTP error into OperationalError("HTTP status
+    NNN: ..."). A rejected credential fails the same way on every attempt, so
+    retrying it only delays the alert."""
+    connect_calls = []
+
+    class _RejectedConn:
+        row_factory = None
+
+        def execute(self, *a, **k):
+            raise turso_serverless.OperationalError(
+                f"HTTP status {status}: unauthorized"
+            )
+
+        def close(self):
+            pass
+
+    def connect_fn(url, auth_token=None):
+        connect_calls.append(url)
+        return _RejectedConn()
+
+    slept = []
+    with pytest.raises(turso_serverless.OperationalError, match=str(status)):
+        turso_db.stage_connection(_env(), connect_fn=connect_fn, sleep=slept.append)
+
+    assert len(connect_calls) == 1
+    assert slept == []
+
+
+def test_stage_connection_still_retries_a_server_side_http_error():
+    """Only the credential statuses are final. A 502 from a proxy blip is
+    exactly the transient failure the retry exists for."""
+    calls = []
+
+    class _Conn:
+        row_factory = None
+
+        def execute(self, *a, **k):
+            raise turso_serverless.OperationalError("HTTP status 502: bad gateway")
+
+        def close(self):
+            pass
+
+    def connect_fn(url, auth_token=None):
+        calls.append(url)
+        return _Conn()
+
+    with pytest.raises(turso_serverless.OperationalError):
+        turso_db.stage_connection(_env(), connect_fn=connect_fn, sleep=lambda s: None)
+
+    assert len(calls) == turso_db.CONNECT_MAX_ATTEMPTS
+
+
+def test_stage_connection_makes_one_connect_per_attempt():
+    """stage_connection's retry must not wrap connect()'s own retry: nested,
+    a dead network cost 3 x 3 connects and 3 x 3 backoffs before the stage
+    gave up."""
+    calls = []
+
+    def always_fails(url, auth_token=None):
+        calls.append(url)
+        raise ConnectionError("still down")
+
+    slept = []
+    with pytest.raises(ConnectionError):
+        turso_db.stage_connection(_env(), connect_fn=always_fails, sleep=slept.append)
+
+    assert len(calls) == turso_db.CONNECT_MAX_ATTEMPTS
+    assert slept == list(turso_db.CONNECT_BACKOFF_SECONDS)
+
+
+def test_stage_connection_closes_the_connection_from_a_failed_attempt():
+    """Each retry opens a fresh connection. The one it abandons still holds a
+    session, and possibly a server-side stream, until it is closed."""
+    opened = []
+    conn_cls = _flaky_conn_class(opened, fail_until=3)
+
+    def connect_fn(url, auth_token=None):
+        opened.append(conn_cls())
+        return opened[-1]
+
+    turso_db.stage_connection(_env(), connect_fn=connect_fn, sleep=lambda s: None)
+
+    assert [c.closed for c in opened] == [True, True, False]
+
+
+def test_a_failing_close_does_not_mask_the_retry():
+    """Closing an abandoned connection is best effort. If close() itself
+    raises -- likely, on the connection that just failed -- the retry must go
+    ahead anyway."""
+    opened = []
+    conn_cls = _flaky_conn_class(opened, fail_until=2, close_raises=True)
+
+    def connect_fn(url, auth_token=None):
+        opened.append(conn_cls())
+        return opened[-1]
+
+    conn = turso_db.stage_connection(_env(), connect_fn=connect_fn, sleep=lambda s: None)
+
+    assert len(opened) == 2
+    assert conn.row_factory is TursoRow
+
+
+def test_the_driver_is_pinned_to_the_version_its_message_match_was_read_from():
+    """_AUTH_FAILURE matches the driver's own "HTTP status 401" text, not an
+    API. A release that rewords it would quietly turn a refused token back
+    into three retries, so the driver is pinned, and the pin has to be the
+    version actually installed."""
+    import re
+    from importlib.metadata import version
+
+    requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text()
+    pin = re.search(r"^turso_serverless==(\S+)$", requirements, re.MULTILINE)
+    assert pin, "turso_serverless must be pinned with =="
+    assert pin.group(1) == version("turso_serverless")

@@ -24,6 +24,7 @@ import pytest
 from score_photos import _process_batch_results
 from src.db import delete_listing, upsert_visual_score
 from src.turso_db import ensure_schema
+from src.vision import VisualScoreResult
 
 FULL_RESPONSE = {
     "kitchen": {"status": "present", "score": 8, "notes": "Updated cabinets, newer appliances."},
@@ -157,6 +158,94 @@ def test_a_stale_result_that_does_not_parse_is_also_discarded(conn):
     _process_batch_results(client, conn, "batch_1", garage_expected_by_id={"L1": True})
 
     assert _row(conn, "L1") is None
+
+
+def test_discarded_stale_results_are_counted_once_per_batch(conn, capsys):
+    """A long outage can leave a batch naming many deleted listings. One line
+    each is noise; the count is what an operator actually reads."""
+    add(conn, "L1")
+    for lid in ("L2", "L3"):
+        add(conn, lid)
+        delete_listing(conn, lid)
+
+    client = client_returning([
+        succeeded("L2", FULL_RESPONSE),
+        succeeded("L1", FULL_RESPONSE),
+        errored("L3"),
+    ])
+
+    _process_batch_results(
+        client, conn, "batch_1",
+        garage_expected_by_id={"L1": True, "L2": True, "L3": True},
+    )
+
+    out = capsys.readouterr().out
+    assert "batch batch_1: discarded 2 result(s) for listings no longer in listings" in out
+
+
+def test_no_stale_summary_when_nothing_was_discarded(conn, capsys):
+    add(conn, "L1")
+
+    _process_batch_results(
+        client_returning([succeeded("L1", FULL_RESPONSE)]), conn, "batch_1",
+        garage_expected_by_id={"L1": True},
+    )
+
+    assert "discarded" not in capsys.readouterr().out
+
+
+# --- a failed result must not replace a good score, and must be reported --
+
+
+def _seed_good_score(conn, lid):
+    add(conn, lid)
+    upsert_visual_score(conn, lid, VisualScoreResult(
+        condition_photo_score=80.0, outdoor_photo_score=70.0, garage_attached=None))
+
+
+@pytest.mark.parametrize("bad_result", [
+    errored("L1"),
+    succeeded("L1", {"garbage": True}),
+], ids=["errored", "unparseable"])
+def test_a_failed_result_keeps_an_existing_good_score(conn, capsys, bad_result):
+    """A --rescore-all batch covers already-scored listings. One API error or
+    one malformed response used to overwrite that listing's good score with
+    'unavailable'."""
+    _seed_good_score(conn, "L1")
+
+    failed = _process_batch_results(
+        client_returning([bad_result]), conn, "batch_1", garage_expected_by_id={"L1": True}
+    )
+
+    row = _row(conn, "L1")
+    assert row["photo_score_unavailable"] == 0
+    assert row["condition_photo_score"] == 80.0
+    assert failed == ["L1"]
+    assert "kept its existing score" in capsys.readouterr().out
+
+
+def test_a_failed_result_without_a_good_score_is_still_recorded_unavailable(conn):
+    add(conn, "L1")
+
+    failed = _process_batch_results(
+        client_returning([errored("L1")]), conn, "batch_1", garage_expected_by_id={"L1": True}
+    )
+
+    assert _row(conn, "L1")["photo_score_unavailable"] == 1
+    assert failed == ["L1"]
+
+
+def test_successes_and_discards_are_not_reported_as_failures(conn):
+    add(conn, "L1")
+    add(conn, "L2")
+    delete_listing(conn, "L2")
+
+    failed = _process_batch_results(
+        client_returning([succeeded("L1", FULL_RESPONSE), succeeded("L2", FULL_RESPONSE)]),
+        conn, "batch_1", garage_expected_by_id={"L1": True, "L2": True},
+    )
+
+    assert failed == []
 
 
 def test_liveness_costs_one_statement_per_batch_not_per_result(conn):

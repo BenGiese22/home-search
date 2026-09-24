@@ -18,6 +18,7 @@ from pipeline import (
     record_success,
     run_pipeline,
 )
+from src.exit_codes import EXIT_PARTIAL
 
 
 class Runner:
@@ -478,3 +479,437 @@ def test_a_long_captured_reason_is_truncated_for_the_email(tmp_path: Path):
     assert len(message) < len(huge)
     assert "line 499" in message
     assert "line 0" not in message
+
+
+def test_a_real_stages_traceback_is_the_end_of_its_log_tail(tmp_path: Path, monkeypatch):
+    """A real subprocess, not a fake runner, because the bug lived in the
+    process boundary. With stdout redirected to a file, a child Python
+    block-buffers it. A stage that catches its error, reports it on stderr,
+    and exits nonzero (compute_commutes.py's shape) wrote that report first,
+    and the buffered progress lines landed after it at exit -- so the tail
+    ended in chatter and the KeyError was nowhere in the alert.
+
+    An uncaught exception alone does not show it: CPython flushes stdout
+    before printing that traceback. The report-then-exit path is the one
+    that needs the child run unbuffered.
+    """
+    monkeypatch.delenv("PYTHONUNBUFFERED", raising=False)
+    script = tmp_path / "stage.py"
+    script.write_text(
+        "import sys, traceback\n"
+        "for n in range(100):\n"
+        "    print(f'progress {n}')\n"
+        "try:\n"
+        "    {}['listing_id']\n"
+        "except KeyError:\n"
+        "    traceback.print_exc()\n"
+        "    sys.exit(1)\n"
+    )
+    log_path = tmp_path / "pipeline.log"
+    with log_path.open("w+") as log_handle:
+        code = pipeline._default_runner(
+            [pipeline.sys.executable, str(script)], log_handle=log_handle
+        )
+        tail = pipeline._stage_log_tail(log_handle, 0)
+    assert code == 1
+    assert tail.splitlines()[-1] == "KeyError: 'listing_id'"
+
+
+# --- the verdict reads the final exception, not the whole tail -------------
+#
+# A marker anywhere in the tail used to be enough. The tail is a stage's own
+# chatter too, so one earlier per-listing ConnectionError log line turned a
+# later real crash into "no action needed".
+
+_TRACEBACK_KEYERROR = (
+    "Traceback (most recent call last):\n"
+    '  File "score.py", line 40, in main\n'
+    "    row['listing_id']\n"
+    "KeyError: 'listing_id'\n"
+)
+
+
+def _verdict(tmp_path, output):
+    runner = LoggingRunner(exit_codes={"score.py": 1}, outputs={"score.py": output})
+    _, message = _run_with_alert(tmp_path, runner)[0]
+    return message.lower()
+
+
+def test_an_earlier_logged_connection_error_does_not_excuse_a_later_crash(tmp_path: Path):
+    output = (
+        "listing L7: requests.exceptions.ConnectionError: reset by peer, skipping\n"
+        "scored 41 listings\n" + _TRACEBACK_KEYERROR
+    )
+    message = _verdict(tmp_path, output)
+    assert "no action needed" not in message
+    assert "action needed" in message
+
+
+def test_a_final_transient_exception_still_says_no_action_needed(tmp_path: Path):
+    output = (
+        "scored 41 listings\n"
+        "Traceback (most recent call last):\n"
+        '  File "score.py", line 40, in main\n'
+        "requests.exceptions.ConnectionError: HTTPSConnectionPool: Max retries exceeded\n"
+    )
+    assert "no action needed" in _verdict(tmp_path, output)
+
+
+def test_a_playwright_timeout_is_not_transient(tmp_path: Path):
+    """A selector timeout after a Compass redesign fails every single run.
+    It is spelled TimeoutError, but nothing about it retries its way out."""
+    output = (
+        "Traceback (most recent call last):\n"
+        '  File "scrape.py", line 90, in main\n'
+        "playwright._impl._errors.TimeoutError: Locator.click: Timeout 30000ms exceeded.\n"
+    )
+    message = _verdict(tmp_path, output)
+    assert "no action needed" not in message
+    assert "action needed" in message
+
+
+def test_a_deliberate_exit_code_with_no_traceback_says_action_needed(tmp_path: Path):
+    """A stage that chose its own nonzero exit left no exception to read. A
+    network word in its last log line is not evidence the failure was one."""
+    output = "listing L3: ConnectionError from mapbox\ncommutes: 0/5 routed\n"
+    message = _verdict(tmp_path, output)
+    assert "no action needed" not in message
+    assert "action needed" in message
+
+
+def test_final_exception_line_is_the_last_one_in_the_tail():
+    tail = "requests.exceptions.ConnectionError: earlier\n" + _TRACEBACK_KEYERROR + "\n"
+    assert pipeline._final_exception_line(tail) == "KeyError: 'listing_id'"
+    # A log prefix is not an exception type.
+    assert pipeline._final_exception_line("compute_commutes: 0/5 routed\n") is None
+
+
+# --- EXIT_PARTIAL: some items failed, the stage's work still landed --------
+#
+# Stopping the run over it would throw away every item that succeeded and
+# gain nothing -- the failed ones are retried next run either way.
+
+
+def _run_partial(
+    tmp_path, runner, marker=None, partial_state=None, kwargs_out=None, delivered=True
+):
+    alerts = []
+
+    def notify_fn(title, message, **kwargs):
+        if kwargs_out is not None:
+            kwargs_out.append(kwargs)
+        alerts.append((title, message))
+        if isinstance(delivered, Exception):
+            raise delivered
+        return delivered
+
+    log_path = tmp_path / "pipeline.log"
+    with log_path.open("w+") as log_handle:
+        code = run_pipeline(
+            build_plan(),
+            runner=runner,
+            log_handle=log_handle,
+            marker=marker,
+            notify_fn=notify_fn,
+            partial_state=partial_state,
+        )
+    return code, alerts
+
+
+def test_a_partial_stage_does_not_stop_later_stages(tmp_path: Path):
+    runner = LoggingRunner(exit_codes={"compute_commutes.py": EXIT_PARTIAL})
+    code, _ = _run_partial(tmp_path, runner)
+    assert code == 0
+    assert len(runner.calls) == len(STAGE_NAMES)
+
+
+def test_a_partial_stage_alerts_once_with_its_log_tail(tmp_path: Path, capsys):
+    runner = LoggingRunner(
+        exit_codes={"compute_commutes.py": EXIT_PARTIAL},
+        outputs={
+            "scrape.py": "scrape: 12 listings fetched\n",
+            "compute_commutes.py": "commutes: 11/12 routed; L9 would not geocode\n",
+        },
+    )
+    _, alerts = _run_partial(tmp_path, runner)
+    assert len(alerts) == 1
+    title, message = alerts[0]
+    assert title == "home-search: commutes partially failed"
+    assert "L9 would not geocode" in message
+    assert "12 listings fetched" not in message
+    assert "later stages still ran" in message.lower()
+    assert "retried on the next run that actually executes" in message
+    assert f"[commutes] ok with item failures (exit {EXIT_PARTIAL})" in capsys.readouterr().out
+
+
+def test_a_partial_run_revalidates_and_records_success(
+    tmp_path: Path, never_revalidate_for_real
+):
+    """The writes landed and the data is consistent, so this is a success
+    for --max-age. Not recording it would disable --max-age for as long as
+    any one listing stays broken -- every trigger a full scrape, Mapbox
+    and vision run -- to retry items that will likely fail again anyway.
+    The failed items wait for the next run that actually executes."""
+    marker = tmp_path / "last.json"
+    runner = LoggingRunner(exit_codes={"score_photos.py": EXIT_PARTIAL})
+    _run_partial(tmp_path, runner, marker=marker)
+    assert is_fresh(marker, max_age_hours=6) is True
+    assert never_revalidate_for_real == [True]
+
+
+def test_a_real_failure_after_a_partial_one_still_stops_the_run(tmp_path: Path):
+    runner = LoggingRunner(
+        exit_codes={"compute_commutes.py": EXIT_PARTIAL, "score.py": 1},
+    )
+    code, alerts = _run_partial(tmp_path, runner)
+    assert code == 1
+    assert runner.scripts == [
+        "scrape.py", "compute_commutes.py", "score_photos.py", "score.py"
+    ]
+    assert [title for title, _ in alerts] == [
+        "home-search: commutes partially failed",
+        "home-search: score failed",
+    ]
+
+
+# --- a partial alert is news only when the failed set changes --------------
+#
+# A permanently broken listing makes its stage partial on every run. An
+# alert for each is four a day forever, and the real ones drown in them.
+
+
+def _partial_score(ids, kind="items-failed"):
+    return LoggingRunner(
+        exit_codes={"score.py": EXIT_PARTIAL},
+        outputs={"score.py": f"L1: failed to score\nPARTIAL: score: {kind}: {ids}\n"},
+    )
+
+
+def test_the_same_failed_set_twice_alerts_once(tmp_path: Path, capsys):
+    state = tmp_path / ".run" / "partial-alerts.json"
+    _, first = _run_partial(tmp_path, _partial_score("L1,L2"), partial_state=state)
+    _, second = _run_partial(tmp_path, _partial_score("L1,L2"), partial_state=state)
+    assert len(first) == 1
+    assert second == []
+    assert "same items as last time" in capsys.readouterr().out
+
+
+def test_a_changed_failed_set_alerts_again(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    _, alerts = _run_partial(tmp_path, _partial_score("L1,L2"), partial_state=state)
+    assert [t for t, _ in alerts] == ["home-search: score partially failed"]
+
+
+def test_the_same_ids_for_a_new_reason_alert_again(tmp_path: Path):
+    """Results errored for L1 and L2 last run; this run the key is revoked
+    and the same two were never submitted. That is a new problem with a
+    different fix, not the one already alerted on."""
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1,L2"), partial_state=state)
+    _, alerts = _run_partial(
+        tmp_path, _partial_score("L1,L2", kind="key-rejected"), partial_state=state
+    )
+    assert [t for t, _ in alerts] == ["home-search: score partially failed"]
+
+
+def test_an_old_format_line_matches_an_items_failed_record(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    old_style = LoggingRunner(
+        exit_codes={"score.py": EXIT_PARTIAL},
+        outputs={"score.py": "PARTIAL: score: L1\n"},
+    )
+    _, alerts = _run_partial(tmp_path, old_style, partial_state=state)
+    assert alerts == []
+
+
+def test_a_record_from_before_kinds_does_not_suppress(tmp_path: Path):
+    """A bare id list says nothing about why; one extra alert is cheaper
+    than guessing."""
+    state = tmp_path / "partial-alerts.json"
+    state.write_text(json.dumps({"score": ["L1"]}))
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert len(alerts) == 1
+
+
+@pytest.mark.parametrize("delivered", [False, RuntimeError("malformed .env")])
+def test_an_undelivered_alert_is_not_recorded(tmp_path: Path, delivered):
+    """ntfy and email both down: the alert never arrived, so the next run
+    has to try again rather than treat the set as already reported."""
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state, delivered=delivered)
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert len(alerts) == 1
+
+
+def test_a_notifier_that_returns_nothing_counts_as_delivered(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state, delivered=None)
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert alerts == []
+
+
+def _aged(state: Path, stage: str, seconds: float) -> None:
+    record = json.loads(state.read_text())
+    record[stage]["alerted_at"] -= seconds
+    state.write_text(json.dumps(record))
+
+
+def test_the_record_says_when_it_alerted(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    before = time.time()
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert before <= json.loads(state.read_text())["score"]["alerted_at"] <= time.time()
+
+
+def test_the_same_set_alerts_again_after_the_window(tmp_path: Path):
+    """A dead key alerted once and then never again is easy to miss. Once
+    a day it stays in view without drowning anything."""
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    _aged(state, "score", pipeline.PARTIAL_REALERT_SECONDS + 60)
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert len(alerts) == 1
+    # And the window restarts from that alert.
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert alerts == []
+
+
+def test_the_same_set_stays_quiet_inside_the_window(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    _aged(state, "score", pipeline.PARTIAL_REALERT_SECONDS - 60)
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert alerts == []
+
+
+def test_a_record_with_no_time_does_not_suppress(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    state.write_text(json.dumps({"score": {"kind": "items-failed", "ids": ["L1"]}}))
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert len(alerts) == 1
+
+
+def test_the_realert_window_is_a_day():
+    assert pipeline.PARTIAL_REALERT_SECONDS == 24 * 3600
+
+
+def test_a_clean_run_of_the_stage_clears_it(tmp_path: Path):
+    """Fixed, then broken the same way again, is a new failure."""
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    _run_partial(tmp_path, LoggingRunner(), partial_state=state)
+    assert "score" not in json.loads(state.read_text())
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert len(alerts) == 1
+
+
+def test_one_stages_set_does_not_suppress_anothers(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    runner = LoggingRunner(
+        exit_codes={"score_photos.py": EXIT_PARTIAL},
+        outputs={"score_photos.py": "PARTIAL: score-photos: items-failed: L1\n"},
+    )
+    _, alerts = _run_partial(tmp_path, runner, partial_state=state)
+    assert [t for t, _ in alerts] == ["home-search: score-photos partially failed"]
+
+
+def test_a_partial_stage_with_no_partial_line_always_alerts(tmp_path: Path):
+    """No ids means nothing to compare, and a missed alert is the worse
+    mistake."""
+    state = tmp_path / "partial-alerts.json"
+    runner = LoggingRunner(exit_codes={"compute_commutes.py": EXIT_PARTIAL})
+    _, first = _run_partial(tmp_path, runner, partial_state=state)
+    _, second = _run_partial(tmp_path, runner, partial_state=state)
+    assert len(first) == len(second) == 1
+
+
+def test_a_corrupt_state_file_alerts_rather_than_suppressing(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    state.write_text("{not json")
+    _, alerts = _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    assert len(alerts) == 1
+    assert json.loads(state.read_text())["score"]["ids"] == ["L1"]
+
+
+def test_a_suppressed_partial_run_still_records_success(tmp_path: Path):
+    state = tmp_path / "partial-alerts.json"
+    marker = tmp_path / "last.json"
+    _run_partial(tmp_path, _partial_score("L1"), partial_state=state)
+    _run_partial(tmp_path, _partial_score("L1"), marker=marker, partial_state=state)
+    assert is_fresh(marker, max_age_hours=6) is True
+
+
+def test_a_partial_alert_is_normal_priority_and_tagged_apart(tmp_path: Path):
+    """A failure stops the run and gets high priority. Items failing in a
+    run that finished can wait for morning."""
+    kwargs = []
+    runner = LoggingRunner(exit_codes={"compute_commutes.py": EXIT_PARTIAL, "score.py": 1})
+    _run_partial(tmp_path, runner, kwargs_out=kwargs)
+    partial_kwargs, failure_kwargs = kwargs
+    assert partial_kwargs["priority"] == "default"
+    assert partial_kwargs["tags"] != failure_kwargs.get("tags", pipeline.FAILURE_TAGS)
+    assert failure_kwargs.get("priority", "high") == "high"
+
+
+def test_default_notify_passes_the_priority_and_tags_through(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(pipeline, "load_env", lambda: {"NTFY_TOPIC": "t"})
+    monkeypatch.setattr(pipeline, "send_email", lambda *a, **k: False)
+    monkeypatch.setattr(
+        pipeline, "notify",
+        lambda topic, title, message, **kw: seen.update(kw) or True,
+    )
+    pipeline._default_notify("t", "m", priority="default", tags=("warning",))
+    assert seen == {"priority": "default", "tags": ("warning",)}
+
+
+def test_a_long_id_list_still_parses_past_the_alert_cap(tmp_path: Path):
+    """The alert's tail is capped by characters, which would cut the
+    PARTIAL: prefix off a long line and make every run look new."""
+    ids = ",".join(f"L{n:05d}" for n in range(1000))
+    state = tmp_path / "partial-alerts.json"
+    _run_partial(tmp_path, _partial_score(ids), partial_state=state)
+    _, alerts = _run_partial(tmp_path, _partial_score(ids), partial_state=state)
+    assert alerts == []
+
+
+# --- server-side 5xx and Anthropic overloads are transient -----------------
+
+
+@pytest.mark.parametrize("line", [
+    # A Turso 502 that outlasted the connect retry. Seen live.
+    "turso_serverless.OperationalError: HTTP status 502",
+    "OperationalError: HTTP status 503: Service Unavailable",
+    "OperationalError: HTTP status 504",
+    "anthropic.OverloadedError: Error code: 529 - {'type': 'overloaded_error'}",
+    "anthropic.InternalServerError: Error code: 500",
+    "anthropic.APIConnectionError: Connection error.",
+    "anthropic.APITimeoutError: Request timed out.",
+])
+def test_server_side_errors_are_transient(line):
+    tail = "Traceback (most recent call last):\n  File \"x.py\", line 1\n" + line + "\n"
+    assert pipeline._looks_transient(tail) is True
+
+
+@pytest.mark.parametrize("line", [
+    # A rejected token retries its way nowhere.
+    "OperationalError: HTTP status 401",
+    "OperationalError: HTTP status 403",
+    "OperationalError: no such table: listings",
+    "anthropic.AuthenticationError: Error code: 401",
+])
+def test_client_side_errors_are_not_transient(line):
+    tail = "Traceback (most recent call last):\n" + line + "\n"
+    assert pipeline._looks_transient(tail) is False
+
+
+def test_an_earlier_5xx_does_not_excuse_a_final_crash():
+    tail = (
+        "L1: OperationalError: HTTP status 502, skipped\n"
+        "Traceback (most recent call last):\n"
+        "KeyError: 'listing_id'\n"
+    )
+    assert pipeline._looks_transient(tail) is False
