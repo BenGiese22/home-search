@@ -315,6 +315,41 @@ Was a great neighborhood, had a park nearby and some trails.
 
 ---
 
+## House 8
+
+- **Listing Url:** https://www.compass.com/homedetails/1380-Bellaire-St-Broomfield-CO-80020/2197441144361142873_lid/
+- **Address:** 1380 Bellaire Street, Broomfield, CO 80020
+- **Verdict:** _not stated yet_. Feedback given 2026-09-23.
+- **Price:** $650,000
+- **Pipeline at the time:** composite 65.8, rank 39 of 85 passing filters. Outdoor 60, condition 35.6.
+
+### Gut reaction
+Positive on the outside, reservations about the interior.
+
+### Top reasons for the verdict
+1. Great curb appeal.
+2. The lot is huge.
+3. The outdoor space is one of the best we've ever seen, but it only scores 60.
+4. The condition isn't great, but we're hopeful it has great bones. A coat of
+   paint can do a lot here.
+
+### Outdoor / backyard
+One of the best seen. The photo read was a fenced yard with a deck, open
+lawn and perimeter trees: tree coverage 6/10, hosting 6/10, so 60.
+
+### Photos vs. reality
+Vision flagged likely unwatermarked virtual staging in several rooms.
+
+### Not covered by the rubric
+- **Curb appeal**: nothing scores the front of the house.
+- **Lot size**: only a pass/fail filter (at least 6,000 sqft). This lot is
+  10,585 sqft, larger than 80 of the 85 passing listings, and it earns nothing
+  for that.
+- **Cosmetic vs. structural condition**: the condition score can't tell
+  "dated but sound, needs paint" from "needs real work".
+
+---
+
 ## Cross-house patterns
 _Once all houses are filled in, anything that jumps out comparing them side by side —
 e.g. "every NO had a dated kitchen" or "outdoor space mattered more than we

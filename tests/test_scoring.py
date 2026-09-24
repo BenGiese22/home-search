@@ -7,6 +7,8 @@ from src.scoring import (
     HOA_HALF_PENALTY_AT,
     HOA_MAX_PENALTY,
     NEUTRAL_SCORE,
+    OUTDOOR_LOT_SHARE,
+    OUTDOOR_PHOTO_SHARE,
     CollectionStats,
     WEIGHT_HOA,
     WEIGHT_COMMUTE,
@@ -431,3 +433,92 @@ def test_score_listing_scores_sqft_on_finished_area_not_total():
     stats = CollectionStats(sqft_min=1000, sqft_max=3000)
     assert (score_listing(inflated, medtronic_minutes=15.0, stats=stats).sqft_score
             == score_listing(honest, medtronic_minutes=15.0, stats=stats).sqft_score)
+
+
+# 1380 Bellaire Street, 2026-09-23: "the outdoor I'd argue is one of the best
+# we've ever seen but we're only landing on a score of 60", on a lot bigger
+# than 80 of 85 passing listings. The photo score was used raw -- a scale the
+# corpus only ever fills from 20 to 80 -- and the lot counted for nothing.
+OUTDOOR_STATS = CollectionStats(
+    sqft_min=1000,
+    sqft_max=3000,
+    outdoor_photo_min=20.0,
+    outdoor_photo_max=80.0,
+    lot_min=6000,
+    lot_max=14000,
+)
+
+
+def test_weights_sum_to_one():
+    total = (
+        WEIGHT_COMMUTE + WEIGHT_SQFT + WEIGHT_CONDITION + WEIGHT_OUTDOOR
+        + WEIGHT_ROOM_COUNT + WEIGHT_PARKING + WEIGHT_HOA
+    )
+    assert total == pytest.approx(1.0)
+
+
+def test_outdoor_weighs_a_fifth_of_the_composite():
+    assert WEIGHT_OUTDOOR == pytest.approx(0.20)
+
+
+def test_the_best_yard_on_the_biggest_lot_scores_100():
+    assert score_outdoor(80.0, lot_sqft=14000, stats=OUTDOOR_STATS) == pytest.approx(100.0)
+
+
+def test_the_worst_yard_on_the_smallest_lot_scores_0():
+    assert score_outdoor(20.0, lot_sqft=6000, stats=OUTDOOR_STATS) == pytest.approx(0.0)
+
+
+def test_outdoor_blends_the_rescaled_photo_with_the_rescaled_lot():
+    # photo 60 of 20..80 -> 66.7; lot 10000 of 6000..14000 -> 50
+    expected = OUTDOOR_PHOTO_SHARE * (40 / 60 * 100) + OUTDOOR_LOT_SHARE * 50.0
+    assert score_outdoor(60.0, lot_sqft=10000, stats=OUTDOOR_STATS) == pytest.approx(expected)
+
+
+def test_a_bigger_lot_raises_outdoor_with_the_same_photo_score():
+    small = score_outdoor(60.0, lot_sqft=6500, stats=OUTDOOR_STATS)
+    big = score_outdoor(60.0, lot_sqft=13000, stats=OUTDOOR_STATS)
+    assert big > small
+
+
+def test_a_missing_photo_score_is_neutral_for_that_half_only():
+    expected = OUTDOOR_PHOTO_SHARE * NEUTRAL_SCORE + OUTDOOR_LOT_SHARE * 100.0
+    assert score_outdoor(None, lot_sqft=14000, stats=OUTDOOR_STATS) == pytest.approx(expected)
+
+
+def test_a_missing_lot_is_neutral_for_that_half_only():
+    expected = OUTDOOR_PHOTO_SHARE * 100.0 + OUTDOOR_LOT_SHARE * NEUTRAL_SCORE
+    assert score_outdoor(80.0, lot_sqft=0, stats=OUTDOOR_STATS) == pytest.approx(expected)
+
+
+def test_a_degenerate_corpus_does_not_divide_by_zero():
+    flat = CollectionStats(sqft_min=1, sqft_max=1, outdoor_photo_min=50.0,
+                           outdoor_photo_max=50.0, lot_min=7000, lot_max=7000)
+    assert 0.0 <= score_outdoor(50.0, lot_sqft=7000, stats=flat) <= 100.0
+
+
+def test_compute_collection_stats_takes_outdoor_and_lot_bounds():
+    stats = compute_collection_stats(
+        sqft_values=[1000, 2000],
+        outdoor_photo_values=[20.0, 55.0, 80.0],
+        lot_values=[6011, 13221],
+    )
+    assert (stats.outdoor_photo_min, stats.outdoor_photo_max) == (20.0, 80.0)
+    assert (stats.lot_min, stats.lot_max) == (6011, 13221)
+
+
+def test_score_listing_uses_lot_in_outdoor():
+    small = score_listing(LISTING, medtronic_minutes=18.0, stats=OUTDOOR_STATS,
+                          visual_outdoor_score=60.0)
+    big = score_listing(Listing(**{**LISTING.__dict__, "lot_sqft": 13000}),
+                        medtronic_minutes=18.0, stats=OUTDOOR_STATS,
+                        visual_outdoor_score=60.0)
+    assert big.outdoor_score > small.outdoor_score
+    assert big.composite > small.composite
+
+
+def test_a_missing_lot_flags_incomplete_data():
+    result = score_listing(Listing(**{**LISTING.__dict__, "lot_sqft": 0}),
+                           medtronic_minutes=18.0, stats=OUTDOOR_STATS,
+                           visual_condition_score=60.0, visual_outdoor_score=60.0)
+    assert result.has_incomplete_data

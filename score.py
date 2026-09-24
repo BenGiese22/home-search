@@ -90,8 +90,20 @@ def main() -> int:
     room_count_values = [
         listing.beds + listing.baths for listing in listings if listing.beds
     ]
+    # The outdoor factor places both its halves within the corpus, the same
+    # way sqft does. Only photo scores that exist count: an unavailable one
+    # is not a zero, and letting it in would drag the floor down.
+    outdoor_photo_values = [
+        row["outdoor_photo_score"]
+        for row in visual_by_id.values()
+        if not row["photo_score_unavailable"] and row["outdoor_photo_score"] is not None
+    ]
+    lot_values = [listing.lot_sqft for listing in listings if listing.lot_sqft]
     stats = compute_collection_stats(
-        sqft_values=sqft_values, room_count_values=room_count_values
+        sqft_values=sqft_values,
+        room_count_values=room_count_values,
+        outdoor_photo_values=outdoor_photo_values,
+        lot_values=lot_values,
     )
 
     ranked = []

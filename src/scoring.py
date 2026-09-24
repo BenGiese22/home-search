@@ -8,10 +8,16 @@ NEUTRAL_SCORE = 50.0
 # All six pre-HOA weights scaled by (1 - WEIGHT_HOA) = 0.955, which
 # preserves their importance relative to each other instead of taking the
 # whole cost out of one arbitrary donor factor.
+#
+# 2026-09-23: outdoor raised from 0.14325 to 0.20, the whole difference taken
+# from sqft. 1380 Bellaire Street -- a yard Ben called "one of the best we've
+# ever seen", on a lot bigger than 80 of 85 passing listings -- is why.
+# Outdoor mattered more to him than the rubric allowed. Commute was left
+# alone: it is Megan's drive, and it was deliberately rebuilt on 2026-09-05.
 WEIGHT_COMMUTE = 0.2865
-WEIGHT_SQFT = 0.191
+WEIGHT_SQFT = 0.13425
 WEIGHT_CONDITION = 0.191
-WEIGHT_OUTDOOR = 0.14325
+WEIGHT_OUTDOOR = 0.20
 WEIGHT_ROOM_COUNT = 0.0955
 WEIGHT_PARKING = 0.04775
 WEIGHT_HOA = 0.045
@@ -29,6 +35,12 @@ YEAR_BUILT_MAX = 2005
 # Named for the keyword path it used to weight, which is now retired.
 CONDITION_PHOTO_WEIGHT = 0.8
 CONDITION_YEAR_WEIGHT = 0.2
+
+# How the outdoor factor divides between what the photos show and how big
+# the lot is. Photos cannot show how much ground a house sits on, and a
+# fenced yard reads the same at 6,000 sqft as at 13,000.
+OUTDOOR_PHOTO_SHARE = 0.7
+OUTDOOR_LOT_SHARE = 0.3
 
 MIN_BATHS = 2.0
 MIN_LOT_SQFT = 6000
@@ -109,8 +121,29 @@ def score_condition(year_built: int, visual_condition_score: float | None = None
     return CONDITION_PHOTO_WEIGHT * condition_component + CONDITION_YEAR_WEIGHT * year_score
 
 
-def score_outdoor(visual_outdoor_score: float | None = None) -> float:
+def _rescale(value, low, high) -> float:
+    """Where `value` sits between the corpus's low and high, as 0-100.
+    Neutral when there is no value, or no spread to place it in."""
+    if value is None or not value or high <= low:
+        return NEUTRAL_SCORE
+    return _clamp((value - low) / (high - low) * 100.0)
+
+
+def score_outdoor(
+    visual_outdoor_score: float | None = None,
+    *,
+    lot_sqft: int | None = None,
+    stats: "CollectionStats | None" = None,
+) -> float:
     """The photo assessment of the outdoor space, or a neutral score.
+
+    With `stats`, the photo score is rescaled to where it sits in the corpus
+    and blended with the lot size, rescaled the same way. The raw photo
+    score only ever spans 20-80, so the best yard in the corpus scored 80
+    while sqft's best scored 100, and a big lot counted for nothing. 1380
+    Bellaire Street scored 60 for a yard Ben called "one of the best we've
+    ever seen". Either half that is missing is neutral on its own, so a
+    missing photo does not also throw the lot away.
 
     The keyword fallback this replaces read the seller's own marketing copy
     and returned 100 for the word "backyard". That is not a weak signal, it
@@ -133,9 +166,20 @@ def score_outdoor(visual_outdoor_score: float | None = None) -> float:
     So a missing photo score is now treated the way a missing commute is:
     neutral, and flagged via has_incomplete_data. Unknown says unknown.
     """
-    if visual_outdoor_score is not None:
-        return visual_outdoor_score
-    return NEUTRAL_SCORE
+    if stats is None:
+        if visual_outdoor_score is not None:
+            return visual_outdoor_score
+        return NEUTRAL_SCORE
+    if visual_outdoor_score is None:
+        photo = NEUTRAL_SCORE
+    elif stats.outdoor_photo_max <= stats.outdoor_photo_min:
+        # No spread to place it in (no bounds given, or a one-listing
+        # corpus): the raw score is still an answer, and neutral is not.
+        photo = visual_outdoor_score
+    else:
+        photo = _rescale(visual_outdoor_score, stats.outdoor_photo_min, stats.outdoor_photo_max)
+    lot = _rescale(lot_sqft, stats.lot_min, stats.lot_max)
+    return OUTDOOR_PHOTO_SHARE * photo + OUTDOOR_LOT_SHARE * lot
 
 
 def score_room_count(beds: int, baths: float, room_count_min: float, room_count_max: float) -> float:
@@ -222,19 +266,31 @@ class CollectionStats:
     sqft_max: int
     room_count_min: float = 0.0
     room_count_max: float = 0.0
+    outdoor_photo_min: float = 0.0
+    outdoor_photo_max: float = 0.0
+    lot_min: int = 0
+    lot_max: int = 0
 
 
 def compute_collection_stats(
     *,
     sqft_values: list[int],
     room_count_values: list[float] | None = None,
+    outdoor_photo_values: list[float] | None = None,
+    lot_values: list[int] | None = None,
 ) -> CollectionStats:
     room_count_values = room_count_values or []
+    outdoor_photo_values = outdoor_photo_values or []
+    lot_values = lot_values or []
     return CollectionStats(
         sqft_min=min(sqft_values) if sqft_values else 0,
         sqft_max=max(sqft_values) if sqft_values else 0,
         room_count_min=min(room_count_values) if room_count_values else 0.0,
         room_count_max=max(room_count_values) if room_count_values else 0.0,
+        outdoor_photo_min=min(outdoor_photo_values) if outdoor_photo_values else 0.0,
+        outdoor_photo_max=max(outdoor_photo_values) if outdoor_photo_values else 0.0,
+        lot_min=min(lot_values) if lot_values else 0,
+        lot_max=max(lot_values) if lot_values else 0,
     )
 
 
@@ -263,7 +319,7 @@ def score_listing(
     commute_score = score_commute(medtronic_minutes)
     sqft_score = score_sqft(finished_sqft(listing), stats.sqft_min, stats.sqft_max)
     condition_score = score_condition(listing.year_built, visual_condition_score)
-    outdoor_score = score_outdoor(visual_outdoor_score)
+    outdoor_score = score_outdoor(visual_outdoor_score, lot_sqft=listing.lot_sqft, stats=stats)
     room_count_score = score_room_count(
         listing.beds, listing.baths, stats.room_count_min, stats.room_count_max
     )
@@ -289,6 +345,8 @@ def score_listing(
         # the silent-wrongness this rubric keeps producing.
         or visual_condition_score is None
         or visual_outdoor_score is None
+        # The lot is half of outdoor now, so an unknown one is a guess too.
+        or not listing.lot_sqft
         # denver_minutes is deliberately absent: it no longer feeds any
         # score, so a missing one is a gap in what is displayed, not a
         # listing that was ranked on a guess.
