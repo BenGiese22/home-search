@@ -170,3 +170,18 @@ def test_no_topic_is_a_silent_no_op(monkeypatch):
     monkeypatch.setattr(pipeline, "load_env", lambda: {})
 
     assert pipeline._default_notify("title", "message") is False
+
+
+def test_the_email_subject_names_the_home_once(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(pipeline, "this_home", lambda: "bengi-linux-G757")
+    monkeypatch.setattr(pipeline, "load_env", lambda: {"RESEND_API_KEY": "k", "DIGEST_EMAIL_TO": "t"})
+    monkeypatch.setattr(pipeline, "send_email", lambda key, to, subject, body, **kw: sent.setdefault("s", subject) and True)
+    monkeypatch.setattr(pipeline, "notify", lambda *a, **k: False)
+    pipeline._default_notify("home-search: score failed", "body")
+    assert sent["s"] == "home-search [bengi-linux-G757]: score failed"
+
+
+def test_a_title_without_the_prefix_is_left_alone(monkeypatch):
+    monkeypatch.setattr(pipeline, "this_home", lambda: "sandbox")
+    assert pipeline._email_subject("lost the lease") == "home-search [sandbox]: lost the lease"

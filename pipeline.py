@@ -274,7 +274,7 @@ def _default_notify(
     emailed = send_email(
         env.get("RESEND_API_KEY", ""),
         env.get("DIGEST_EMAIL_TO", ""),
-        f"home-search: {title}",
+        _email_subject(title),
         message,
         sender=env.get("RESEND_FROM", "home-search <onboarding@resend.dev>"),
     )
@@ -286,6 +286,21 @@ def _default_notify(
         tags=tuple(tags),
     )
     return emailed or pushed
+
+
+def _email_subject(title: str) -> str:
+    """`home-search [<home>]: <what happened>`.
+
+    The home is in the subject because it is the first question: on
+    2026-09-23 a burst of "score failed" emails from test runs on the desktop
+    read as production failures until the body was opened. Callers already
+    pass titles starting "home-search: ", which is why subjects read
+    "home-search: home-search: ..."; the duplicate is dropped here.
+    """
+    prefix = "home-search: "
+    if title.startswith(prefix):
+        title = title[len(prefix):]
+    return f"home-search [{this_home()}]: {title}"
 
 
 # How much of a failed stage's own log to carry into the alert. Both caps
